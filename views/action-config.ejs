@@ -1,0 +1,337 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="utf-8">
+    <meta http-equiv="X-UA-Compatible" content="IE=edge">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+
+    <title>TransmitSMS: Configure Action Service</title>
+
+    <link href="/eloqua-service/assets/css/bootstrap.min.css" rel="stylesheet">
+    <link href="/eloqua-service/assets/css/main.css" rel="stylesheet">
+    <link rel="stylesheet" href="https://unpkg.com/vue-select@3.0.0/dist/vue-select.css">
+  </head>
+  <body>
+
+  <div class="disabler"></div>
+  <div id="sendsmsaction" class="container" style="width: 600px;">
+      <form method="post">
+        <h4 style="font-size: 20px; font-weight: bold; text-align: center;">
+          📱 Create your Text Message
+        </h4>
+        <br/>
+        <div v-if="status.success || status.error" v-bind:class="{ 'alert-success': status.success, 'alert-danger': status.error, 'in': fade }" class="alert alert-dismissible fade" role="alert">
+          {{ status.success || status.error }}
+        </div>
+
+        <div class="container-fluid">
+          <div class="row">
+            <div class="col-md-6" style="display: inline-block;width: 280px;vertical-align: top;">
+              <div class="form-group">
+                <label for="message">Sender ID</label><br>
+                <select v-model="instance.caller_id" style="width: 280px; height: 35px;" class="form-control">
+                  <option value="">Default</option>
+                  <option v-for="number in sender_ids['Virtual Number']" v-bind:value="number">{{ number }}</option>
+                  <option v-for="number in sender_ids['Business Name']" v-bind:value="number">{{ number }}</option>
+                  <option v-for="field in fields" v-bind:value="'##' + field.internalName">{{ field.name }}</option>
+                </select>
+              </div>
+            </div>
+            <div class="col-md-6" style="width: 280px;float: right;">
+              <div class="form-group">
+                <label for="message">Recipient Field</label><br/>
+                <select v-model="instance.recipient_field" style="width: 280px;" class="form-control">
+                  <option v-for="field in fields" v-bind:value="field.id ? field.id + '__' + field.internalName : field.internalName">{{ field.name }}</option>
+                </select>
+              </div>
+            </div>
+          </div>
+
+          <div class="row">
+            <div class="col-md-6" style="display: inline-block;width: 280px;vertical-align: top;">
+              <div class="form-group">
+                <label for="message">Custom Object Mapping</label><br>
+                <v-select
+                  label="name"
+                  style="width: 280px; height: 35px;"
+                  v-model="instance.custom_object_id"
+                  :reduce="element => element.id"
+                  :options="comap"
+                  @search="fetchOptionsmap"
+                  @input="getFields()">
+                </v-select>
+              </div>
+            </div>
+            <div class="col-md-6" style="width: 280px;float: right;">
+              <div class="form-group">
+                <label for="country_field">Country Field</label><br/>
+                <select v-model="instance.country_field" style="width: 280px; height: 35px;" class="form-control">
+                  <option value="">Contact Country</option>
+                  <option v-for="field in fields" v-bind:value="field.id ? field.id + '__' + field.internalName : field.internalName">{{ field.name }}</option>
+                </select>
+              </div>
+            </div>
+          </div>
+
+          <div class="row" v-if="instance.custom_object_id">
+            <div class="col-md-6" style="display: inline-block;width: 280px;vertical-align: top;">
+              <div class="form-group">
+                <label for="message">Map Contact Mobile To</label><br/>
+                <select v-model="instance.mobile_field" style="width:280px;" class="form-control">
+                  <option value="">-- Select --</option>
+                  <option v-for="field in cdofields" v-bind:value="field.internalName">{{ field.name }}</option>
+                </select>
+              </div>
+            </div>
+            <div class="col-md-6" style="width: 280px;float: right;">
+              <div class="form-group">
+                <label for="message">Map Contact Email To *</label><br/>
+                <select v-model="instance.email_field" style="width:280px;" class="form-control">
+                  <option value="">-- Select --</option>
+                  <option v-for="field in cdofields" v-bind:value="field.internalName">{{ field.name }}</option>
+                </select>
+              </div>
+            </div>
+          </div>
+
+          <div class="row" v-if="instance.custom_object_id">
+            <div class="col-md-6" style="display: inline-block;width: 280px;vertical-align: top;">
+              <div class="form-group">
+                <label for="message">Map Campaign Title To</label><br/>
+                <select v-model="instance.title_field" style="width:280px;" class="form-control">
+                  <option value="">-- Select --</option>
+                  <option v-for="field in cdofields" v-bind:value="field.internalName">{{ field.name }}</option>
+                </select>
+              </div>
+            </div>
+            <div class="col-md-6" style="width: 280px;float: right;">
+              <div class="form-group">
+                <label for="message">Map Notification To</label><br/>
+                <select v-model="instance.notification_field" style="width:280px;" class="form-control">
+                  <option value="">-- Select --</option>
+                  <option v-for="field in cdofields" v-bind:value="field.internalName">{{ field.name }}</option>
+                </select>
+              </div>
+            </div>
+          </div>
+
+          <div class="row" v-if="instance.custom_object_id">
+            <div class="col-md-6" style="display: inline-block;width: 280px;vertical-align: top;">
+              <div class="form-group">
+                <label for="message">Map Outgoing Message To</label><br/>
+                <select v-model="instance.outgoing_field" style="width:280px;" class="form-control">
+                  <option value="">-- Select --</option>
+                  <option v-for="field in cdofields" v-bind:value="field.internalName">{{ field.name }}</option>
+                </select>
+              </div>
+            </div>
+            <div class="col-md-6" style="width: 280px;float: right;">
+              <div class="form-group">
+                <label for="message">Map Virtual Number To</label><br/>
+                <select v-model="instance.vn_field" style="width:280px;" class="form-control">
+                  <option value="">-- Select --</option>
+                  <option v-for="field in cdofields" v-bind:value="field.internalName">{{ field.name }}</option>
+                </select>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="form-group">
+          <label for="message">Message</label>
+          <textarea v-model="instance.message" class="form-control" rows="6" placeholder="Enter your text message here. You can use merge fields like [C_FirstName]"></textarea>
+          <p style="font-size: 11px; margin-top: 5px;">
+            Characters: {{ instance.message ? instance.message.length : 0 }} | 
+            Segments: {{ calculateSegments(instance.message) }}
+          </p>
+        </div>
+
+        <div class="form-group">
+          <label for="tracked_link">Tracked Link URL (optional)</label>
+          <input type="text" v-model="instance.tracked_link" class="form-control" placeholder="https://example.com/page">
+          <p style="font-size: 11px; margin-top: 5px;">Add [tracked-link] to your message to use this URL</p>
+        </div>
+
+        <div class="form-group">
+          <label for="message_expiry">Message Expiry</label><br/>
+          <select style="width:100px; display:inline;" v-model="instance.message_expiry" class="form-control">
+            <option value="YES">YES</option>
+            <option value="NO">NO</option>
+          </select>
+          <span> If undeliverable stop trying after </span>
+          <select style="width:100px; display:inline;" v-model="instance.message_validity" class="form-control">
+            <option v-for="n in 10" v-bind:value="n">{{ n }} HR</option>
+          </select>
+        </div>
+
+        <div class="form-group">
+          <label>Test SMS</label><br/>
+          <select v-model="consumer.default_country" style="width:150px; display:inline;" class="form-control">
+            <option v-for="country in countries" v-bind:value="country.name">
+              {{ country.alpha2 }} {{ country.countryCallingCodes[0] }}
+            </option>
+          </select>
+          <input type="text" v-model="instance.test_phone" placeholder="Phone number" style="width:150px; display:inline; margin-left: 5px;" class="form-control"/>
+          <button v-on:click="testSMS" type="button" class="btn btn-secondary" style="margin-left: 5px;">Test SMS</button>
+        </div>
+
+        <button id="btnSave" type="button" v-on:click="saveInstance()" class="btn btn-default" style="margin: 0 auto; display: block;">SAVE</button>
+        <br/>
+        <div v-if="status.success || status.error" v-bind:class="{ 'alert-success': status.success, 'alert-danger': status.error, 'in': fade }" class="alert alert-dismissible fade" role="alert">
+          {{ status.success || status.error }}
+        </div>
+      </form>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/vue@2.6.11"></script>
+    <script src="/eloqua-service/assets/js/axios.min.js"></script>
+    <script src="https://unpkg.com/vue-select@3.0.0"></script>
+
+    <script type="text/javascript">
+      var instance = <%-JSON.stringify(instance)%>;
+      
+      if(!instance.send_mode) {
+        instance.send_mode = "all";
+      }
+
+      Vue.component('v-select', VueSelect.VueSelect);
+      var custom_objects = <%-JSON.stringify(custom_objects)%>;
+      var comap = JSON.parse(JSON.stringify(custom_objects.elements));
+
+      var app = new Vue({
+        el: '#sendsmsaction',
+        data: {
+          instance: instance,
+          consumer: <%-JSON.stringify(consumer)%>,
+          status: {},
+          countries: <%-JSON.stringify(countries)%>,
+          custom_objects: custom_objects,
+          comap: comap,
+          fields: <%-JSON.stringify(merge_fields)%>,
+          cdofields: [],
+          fade: false,
+          sender_ids: <%-JSON.stringify(sender_ids)%>
+        },
+        methods: {
+          fetchOptionsmap: function(search, loading) {
+            var vm = this;
+            const options = {
+              method: "GET",
+              url: "/eloqua/action/ajax/customobjects/" + this.consumer.installId + "/" + this.consumer.SiteId + "/customObject?search=" + search
+            };
+            axios(options)
+              .then(function(response) {
+                vm.comap = response.data.elements;
+              })
+              .catch(function (error) {
+                vm.comap = JSON.parse(JSON.stringify(custom_objects.elements));
+              });
+          },
+          getFields() {
+            var vm = this;
+            if(this.instance.custom_object_id) {
+              const options = {
+                method: "GET",
+                url: "/eloqua/action/ajax/customobject/" + this.consumer.installId + "/" + this.consumer.SiteId + "/" + this.instance.custom_object_id
+              };
+              axios(options)
+                .then(function(response) {
+                  vm.cdofields = response.data.fields;
+                })
+                .catch(function (error) {
+                  console.error(error);
+                });
+            }
+          },
+          calculateSegments(message) {
+            if(!message) return 0;
+            var length = message.length;
+            if(length <= 160) return 1;
+            return Math.ceil(length / 153);
+          },
+          testSMS() {
+            var vm = this;
+            if(!this.instance.test_phone || !this.instance.message) {
+              alert('Please enter phone number and message');
+              return;
+            }
+
+            var data = {
+              "message": this.instance.message,
+              "caller_id": this.instance.caller_id
+            };
+            
+            if(this.instance.tracked_link) {
+              data.tracked_link_url = this.instance.tracked_link;
+            }
+            
+            const options = {
+              method: "POST",
+              url: "/eloqua/action/ajax/testsms/" + this.consumer.installId + "/" + this.consumer.SiteId + "/" + this.consumer.default_country + "/" + this.instance.test_phone,
+              headers: { 'Content-Type': 'application/json' },
+              data: JSON.stringify(data)
+            };
+
+            axios(options)
+              .then(function(response) {
+                alert("Test SMS sent successfully!");
+              })
+              .catch(function (error) {
+                alert("Error: " + (error.response?.data?.description || error.message));
+              });
+          },
+          saveInstance() {
+            var vm = this;
+
+            if(!this.instance.message) {
+              this.status = { error: 'Message is required' };
+              this.fade = true;
+              setTimeout(() => {
+                this.fade = false;
+                this.status = {};
+              }, 3000);
+              return;
+            }
+
+            if(!this.instance.custom_object_id) {
+              this.instance.email_field = null;
+              this.instance.mobile_field = null;
+              this.instance.title_field = null;
+              this.instance.notification_field = null;
+              this.instance.outgoing_field = null;
+              this.instance.vn_field = null;
+            }
+
+            const options = {
+              method: "POST",
+              url: location.pathname + location.search,
+              headers: { 'Content-Type': 'application/json' },
+              data: JSON.stringify({"instance": vm.instance})
+            };
+            
+            axios(options)
+              .then(function(response) {
+                vm.fade = true;
+                vm.status = { success: 'Configuration successfully saved' };
+                setTimeout(() => {
+                  vm.fade = false;
+                  vm.status = {};
+                }, 3000);
+              })
+              .catch(function (error) {
+                vm.fade = true;
+                vm.status = { error: 'Failed to save configuration' };
+                setTimeout(() => {
+                  vm.fade = false;
+                  vm.status = {};
+                }, 3000);
+              });
+          }
+        },
+        mounted: function () {
+          this.getFields();
+        }
+      });
+    </script>
+  </body>
+</html>

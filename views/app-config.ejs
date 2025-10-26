@@ -1,0 +1,301 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="utf-8">
+    <meta http-equiv="X-UA-Compatible" content="IE=edge">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+
+    <title>TransmitSMS: Application Configuration</title>
+    <link href="/eloqua-service/assets/css/bootstrap.min.css" rel="stylesheet">
+    <link href="/eloqua-service/assets/css/main.css" rel="stylesheet">
+    <link rel="stylesheet" href="https://unpkg.com/vue-select@3.0.0/dist/vue-select.css">
+  </head>
+  <body>
+    <div class="disabler"></div>
+    <div id="consumer" class="container" style="width: 900px; text-align: center; padding-top: 40px">
+            <img src="/eloqua-service/assets/eloqua-connect_thumb.png" alt="Connect to Burst SMS" style="max-width: 300px;">
+            <br/><br/>
+            <div v-if="status.success || status.error" v-bind:class="{ 'alert-success': status.success, 'alert-danger': status.error, 'in': fade }" class="alert alert-dismissible fade" role="alert">
+                {{ status.success || status.error }}
+            </div>
+            <div class="container" style="width: 47%;float: left;text-align:left;margin-left:25px;border-right: 2px solid #ccc;height: 600px;">
+                <h4 style="font-size: 20px; font-weight: bold; text-align: left;">
+                    Connection
+                </h4>
+                <br/>
+                <div class="form-group">
+                    <label for="transmitsms_api_key" style="width:320px; text-align:left;">Burst SMS API Key</label>
+                    <input type="text" style="width:320px; text-align:left;" class="form-control" v-model="consumer.transmitsms_api_key"/>
+                </div>
+                <div class="form-group">
+                    <label for="transmitsms_api_secret" style="width:320px; text-align:left;">Burst SMS API Secret</label>
+                    <input type="text" style="width:320px; text-align:left;" class="form-control" v-model="consumer.transmitsms_api_secret"/>
+                </div>
+                <div class="form-group">
+                    <label for="default_country" style="width:320px; text-align:left;">Default Country for Number Formatting</label>
+                    <select v-model="consumer.default_country" style="width:320px; text-align:left;" class="form-control">
+                        <option v-for="country in countries" v-bind:value="country.name">
+                            {{ country.name }}
+                        </option>
+                    </select>
+                    <p style="width:320px; text-align:left; font-size:11px;"><i>Number will be formatted for delivery to this country if contact has no country defined.</i></p>
+                </div>
+                <div class="form-group">
+                    <label for="dlr_callback" style="width:320px; text-align:left;">Delivery Callback URL</label>
+                    <input type="text" style="width:320px; text-align:left;" class="form-control" v-model="consumer.dlr_callback" readonly></input>
+                </div>
+                <div class="form-group">
+                    <label for="reply_callback" style="width:320px; text-align:left;">Reply Callback URL</label>
+                    <input type="text" style="width:320px; text-align:left;" class="form-control" v-model="consumer.reply_callback" readonly></input>
+                </div>
+                <div class="form-group">
+                    <label for="link_hits_callback" style="width:320px; text-align:left;">Link Hits Callback URL</label>
+                    <input type="text" style="width:320px; text-align:left;" class="form-control" v-model="consumer.link_hits_callback" readonly></input>
+                </div>
+                <p style="font-size: 12px;">Your Burst SMS API Key and secret can be found here: <a target="_blank" href="https://burst.transmitsms.com/profile">https://burst.transmitsms.com/profile</a></p>
+                <p style="font-size: 12px;">No Account? Register here: <a target="_blank" href="https://go.burstsms.com">https://go.burstsms.com</a></p>
+                
+            </div>
+            <div class="container" style="width: 47%; float:right; text-align:left; padding-left:40px;">
+                <h4 style="font-size: 20px; font-weight: bold; text-align: left;">
+                    Custom Object Mapping
+                </h4>
+                <div class="form-group">
+                    <label for="actionidx" style="width:320px; text-align:left;">Action Type</label>
+                    <select v-on:change="getFields()" v-model="actionidx" style="width:320px; text-align:left;" class="form-control">
+                        <option value="sendsms">Send SMS</option>
+                        <option value="receivesms">Received SMS</option>
+                        <option value="incomingsms">Incoming SMS</option>
+                        <option value="tracked_link">SMS Link Hit</option>
+                    </select>
+                    <p style="width:320px; text-align:left; font-size:11px;"><i>You can map custom object fields per each option.</i></p>
+                </div>
+                <div class="form-group">
+                    <label for="consumer.actions" style="width:320px; text-align:left;">Custom Object</label>
+                    <v-select  
+                        label="name"
+                        style="width:320px; text-align:left;" 
+                        v-model="consumer.actions[actionidx].custom_object_id" 
+                        :reduce="element => element.id" 
+                        :options="comap" 
+                        @search="fetchOptionsmap" 
+                        @input="getFields()" >
+                    </v-select>
+                    
+                </div>
+                <div class="form-group">
+                    <label for="reply_callback" style="width:320px; text-align:left;">Map mobile to:</label>
+                    <select v-model="consumer.actions[actionidx].mobile_field" style="width:320px; text-align:left;" class="form-control">
+                        <option value="">-- Select Field --</option>
+                        <option v-for="field in fields[actionidx]" v-bind:value="field.internalName">
+                            {{ field.name }}
+                        </option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label for="reply_callback" style="width:320px; text-align:left;">Map virtual number to:</label>
+                    <select v-model="consumer.actions[actionidx].vn_field" style="width:320px; text-align:left;" class="form-control">
+                        <option value="">-- Select Field --</option>
+                        <option v-for="field in fields[actionidx]" v-bind:value="field.internalName">
+                            {{ field.name }}
+                        </option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label for="reply_callback" style="width:320px; text-align:left;">Map email to:</label>
+                    <select v-model="consumer.actions[actionidx].email_field" style="width:320px; text-align:left;" class="form-control">
+                        <option value="">-- Select Field --</option>
+                        <option v-for="field in fields[actionidx]" v-bind:value="field.internalName">
+                            {{ field.name }}
+                        </option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label for="reply_callback" style="width:320px; text-align:left;">Map campaign title to:</label>
+                    <select v-model="consumer.actions[actionidx].title_field" style="width:320px; text-align:left;" class="form-control">
+                        <option value="">-- Select Field --</option>
+                        <option v-for="field in fields[actionidx]" v-bind:value="field.internalName">
+                            {{ field.name }}
+                        </option>
+                    </select>
+                </div>
+                <div class="form-group" v-if="actionidx == 'sendsms'">
+                    <label for="reply_callback" style="width:320px; text-align:left;">Map notification to:</label>
+                    <select v-model="consumer.actions[actionidx].notification_field" style="width:320px; text-align:left;" class="form-control">
+                        <option value="">-- Select Field --</option>
+                        <option v-for="field in fields[actionidx]" v-bind:value="field.internalName">
+                            {{ field.name }}
+                        </option>
+                    </select>
+                </div>
+                <div class="form-group" v-if="actionidx == 'sendsms'">
+                    <label for="reply_callback" style="width:320px; text-align:left;">Map outgoing message to:</label>
+                    <select v-model="consumer.actions[actionidx].outgoing_field" style="width:320px; text-align:left;" class="form-control">
+                        <option value="">-- Select Field --</option>
+                        <option v-for="field in fields[actionidx]" v-bind:value="field.internalName">
+                            {{ field.name }}
+                        </option>
+                    </select>
+                </div>
+                <div class="form-group" v-if="actionidx != 'sendsms' && actionidx != 'tracked_link'">
+                    <label for="reply_callback" style="width:320px; text-align:left;">Map incoming message to:</label>
+                    <select v-model="consumer.actions[actionidx].response_field" style="width:320px; text-align:left;" class="form-control">
+                        <option value="">-- Select Field --</option>
+                        <option v-for="field in fields[actionidx]" v-bind:value="field.internalName">
+                            {{ field.name }}
+                        </option>
+                    </select>
+                </div>
+                <div class="form-group" v-if="actionidx == 'tracked_link'">
+                    <label for="reply_callback" style="width:320px; text-align:left;">Map Link Hit count to:</label>
+                    <select v-model="consumer.actions[actionidx].link_hits" style="width:320px; text-align:left;" class="form-control">
+                        <option value="">-- Select Field --</option>
+                        <option v-for="field in fields[actionidx]" v-bind:value="field.internalName">
+                            {{ field.name }}
+                        </option>
+                    </select>
+                </div>
+                <div class="form-group" v-if="actionidx == 'tracked_link'">
+                    <label for="reply_callback" style="width:320px; text-align:left;">Map URL to:</label>
+                    <select v-model="consumer.actions[actionidx].url_field" style="width:320px; text-align:left;" class="form-control">
+                        <option value="">-- Select Field --</option>
+                        <option v-for="field in fields[actionidx]" v-bind:value="field.internalName">
+                            {{ field.name }}
+                        </option>
+                    </select>
+                </div>
+                <div class="form-group" v-if="actionidx == 'tracked_link'">
+                    <label for="reply_callback" style="width:320px; text-align:left;">Map Original URL to:</label>
+                    <select v-model="consumer.actions[actionidx].originalurl_field" style="width:320px; text-align:left;" class="form-control">
+                        <option value="">-- Select Field --</option>
+                        <option v-for="field in fields[actionidx]" v-bind:value="field.internalName">
+                            {{ field.name }}
+                        </option>
+                    </select>
+                </div>
+            </div>
+            <br/>
+
+            <div class="container" style="width: 100%; margin-top:630px;">
+                <button id="btnSave" type="button" v-on:click="saveConsumer()" class="btn btn-default">Update</button>
+            </div>
+            <div v-if="status.success || status.error" v-bind:class="{ 'alert-success': status.success, 'alert-danger': status.error, 'in': fade }" class="alert alert-dismissible fade" role="alert">
+                {{ status.success || status.error }}
+            </div>
+
+    </div>
+    
+    <script src="https://cdn.jsdelivr.net/npm/vue@2.6.11"></script>
+    <script src="/eloqua-service/assets/js/axios.min.js"></script>
+    <script src="https://unpkg.com/vue-select@3.0.0"></script>
+    <script type="text/javascript">
+
+        var custom_objects = <%-JSON.stringify(custom_objects)%>;
+        var comap = JSON.parse(JSON.stringify(custom_objects.elements));
+        Vue.component('v-select', VueSelect.VueSelect);
+        
+        var app = new Vue({
+            el: '#consumer',
+            data: {
+                consumer: <%-JSON.stringify(consumer)%>,
+                status: {},
+                countries: <%-JSON.stringify(countries)%>,
+                custom_objects: <%-JSON.stringify(custom_objects)%>,
+                actionidx: 'sendsms',
+                comap: comap,
+                fields: {
+                    'sendsms': [],
+                    'receivesms': [],
+                    'incomingsms': [],
+                    'tracked_link': []
+                },
+                fade: false
+            },
+            methods: {
+                fetchOptionsmap: function(search, loading) {
+                    var vm = this;
+            
+                    const options = {
+                        method: "GET",
+                        url: "/eloqua/action/ajax/customobjects/" + app.consumer.installId + "/" + app.consumer.SiteId + "/customObject?search=" + search
+                    };
+                    axios(options)
+                        .then(function(response) {
+                            console.log("Custom objects fetched", response);
+                            vm.comap = response.data.elements;
+                        })
+                        .catch(function (error) {
+                            console.error("Error fetching custom objects", error);
+                            vm.comap = JSON.parse(JSON.stringify(custom_objects.elements)); 
+                        });
+                },
+                getFields() {
+                    var vm = this;
+                    if(this.consumer.actions[this.actionidx] && this.consumer.actions[this.actionidx].custom_object_id) {
+                        const options = {
+                            method: "GET",
+                            url: "/eloqua/action/ajax/customobject/" + this.consumer.installId + "/" + this.consumer.SiteId + "/" + this.consumer.actions[this.actionidx].custom_object_id
+                        };
+                        axios(options)
+                            .then(function(response) {
+                                vm.fields[vm.actionidx] = response.data.fields;
+                            })
+                            .catch(function (error) {
+                                console.error("Error fetching fields", error);
+                            });
+                    }
+                },
+                saveConsumer() {
+                    var vm = this;
+
+                    if(this.consumer.transmitsms_api_key && this.consumer.transmitsms_api_secret) {
+                        const options = {
+                            method: "POST",
+                            url: location.pathname + location.search,
+                            headers: { 'Content-Type': 'application/json' },
+                            data: JSON.stringify({"consumer": vm.consumer})
+                        };
+                        axios(options)
+                            .then(function(response) {
+                                vm.fade = true;
+                                console.log("Configuration saved", response);
+                                vm.status = {
+                                    success: 'Configuration successfully updated'
+                                };
+
+                                setTimeout(() => {
+                                    vm.fade = false;
+                                    vm.status = {};
+                                }, 5000);
+                            })
+                            .catch(function (error) {
+                                vm.fade = true;
+                                console.error("Error saving configuration", error);
+                                vm.status = {
+                                    error: 'Failed to update configuration'
+                                };
+
+                                setTimeout(() => {
+                                    vm.fade = false;
+                                    vm.status = {};
+                                }, 5000);
+                            });
+                    } else {
+                        vm.status = {
+                            error: 'API Key and Secret are required'
+                        };
+                        vm.fade = true;
+                        setTimeout(() => {
+                            vm.fade = false;
+                            vm.status = {};
+                        }, 5000);
+                    }
+                }
+            },
+            mounted: function () {
+                this.getFields();
+            }
+        });
+    </script>
+  </body>
+</html>

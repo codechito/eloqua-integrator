@@ -1,0 +1,46 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="utf-8">
+    <meta http-equiv="X-UA-Compatible" content="IE=edge">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+
+    <title>SMS Link Hits Configuration</title>
+
+    <link href="/eloqua-service/assets/css/bootstrap.min.css" rel="stylesheet">
+    <link href="/eloqua-service/assets/css/main.css" rel="stylesheet">
+  </head>
+  <body>
+  <div class="disabler"></div>
+  <div class="container" id="linkhit" style="width: 600px; margin: 40px auto;">
+    <br/>
+    <h4 style="font-size: 20px; font-weight: bold; text-align: center;">
+      🔗 SMS Link Hits
+    </h4>
+    <br/>
+    <div style="padding: 20px; text-align: center;">
+      <p style="text-align: left; line-height: 1.6;">
+        No configuration needed for this node. Using this node type will allow any link hit to trigger this automation.
+      </p>
+      <br/>
+      <p style="text-align: left; line-height: 1.6;">
+        If you wish to trigger using a hit on a specific link, add link hits records to your custom object.
+      </p>
+      <br/>
+      <p style="text-align: left; line-height: 1.6;">
+        Go to <strong>Settings</strong> → <strong>Apps</strong> → click <strong>Burst SMS</strong> → <strong>Configure</strong> and choose <strong>SMS Link Hit</strong> in the Action Type.
+      </p>
+      <br/>
+      <div style="background-color: #f8f9fa; padding: 15px; border-radius: 4px; text-align: left;">
+        <strong>How it works:</strong>
+        <ul style="margin-top: 10px;">
+          <li>Link hits are automatically tracked when recipients click SMS links</li>
+          <li>This feeder will retrieve unprocessed link hits</li>
+          <li>Data can be mapped to custom objects via the main app configuration</li>
+          <li>Each hit includes: mobile number, URL, timestamp, device info</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+  </body>
+</html>
