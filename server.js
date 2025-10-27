@@ -69,7 +69,8 @@ app.use(helmet({
     contentSecurityPolicy: false,
     crossOriginEmbedderPolicy: false,
     crossOriginResourcePolicy: { policy: "cross-origin" },
-    crossOriginOpenerPolicy: false
+    crossOriginOpenerPolicy: false,
+    frameguard: false
 }));
 
 // Request logging

@@ -282,226 +282,43 @@ class AppController {
     });
 
     /**
-     * OAuth callback
+     * OAuth callback - Simple redirect version
      * GET /eloqua/app/oauth/callback
-     * This is called after user authorizes the app in Eloqua
      */
     static oauthCallback = asyncHandler(async (req, res) => {
-        const { code, state, error, error_description } = req.query;
+        const { code, state } = req.query;
         
-        // Check for OAuth errors
-        if (error) {
-            logger.error('OAuth authorization failed', { 
-                error, 
-                description: error_description 
-            });
-            
-            return res.send(`
-                <!DOCTYPE html>
-                <html>
-                <head>
-                    <title>Authorization Failed</title>
-                    <style>
-                        body {
-                            font-family: Arial, sans-serif;
-                            display: flex;
-                            justify-content: center;
-                            align-items: center;
-                            height: 100vh;
-                            margin: 0;
-                            background: #f5f5f5;
-                        }
-                        .container {
-                            text-align: center;
-                            background: white;
-                            padding: 40px;
-                            border-radius: 8px;
-                            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
-                            max-width: 500px;
-                        }
-                        .error {
-                            color: #f44336;
-                            font-size: 48px;
-                            margin-bottom: 20px;
-                        }
-                        .message {
-                            color: #333;
-                            font-size: 18px;
-                            margin-bottom: 10px;
-                        }
-                        .description {
-                            color: #666;
-                            font-size: 14px;
-                        }
-                    </style>
-                </head>
-                <body>
-                    <div class="container">
-                        <div class="error">✗</div>
-                        <div class="message">Authorization Failed</div>
-                        <div class="description">
-                            ${error_description || error || 'An error occurred during authorization'}
-                        </div>
-                        <p style="margin-top: 20px; font-size: 14px;">
-                            Please try installing the app again.
-                        </p>
-                    </div>
-                </body>
-                </html>
-            `);
-        }
-
-        // Check for authorization code
         if (!code) {
             logger.error('OAuth callback: missing authorization code');
-            return res.status(400).send(`
-                <!DOCTYPE html>
-                <html>
-                <head>
-                    <title>Error</title>
-                    <style>
-                        body {
-                            font-family: Arial, sans-serif;
-                            text-align: center;
-                            padding: 50px;
-                            background: #f5f5f5;
-                        }
-                    </style>
-                </head>
-                <body>
-                    <h2>Authorization Error</h2>
-                    <p>Authorization code not provided</p>
-                </body>
-                </html>
-            `);
+            return res.redirect(`/eloqua/app/install?installId=${state}&error=missing_code`);
         }
 
-        const installId = state; // state contains the installId
+        const installId = state;
 
-        logger.info('OAuth callback received', { installId, hasCode: !!code });
+        logger.info('OAuth callback received', { installId, hasCode: true });
 
         try {
-            // Exchange authorization code for access token
+            // Exchange code for token
             const tokenData = await OAuthService.exchangeCodeForToken(code);
             
-            logger.info('OAuth token exchange successful', { 
-                installId,
-                expiresIn: tokenData.expires_in 
-            });
-            
-            // Save tokens to consumer record
-            await OAuthService.saveTokens(installId, tokenData);
+            // Save tokens
+            const consumer = await OAuthService.saveTokens(installId, tokenData);
 
             logger.info('OAuth authorization successful', { installId });
 
-            // Return success page with auto-close
-            res.send(`
-                <!DOCTYPE html>
-                <html>
-                <head>
-                    <title>Authorization Successful</title>
-                    <style>
-                        body {
-                            font-family: Arial, sans-serif;
-                            display: flex;
-                            justify-content: center;
-                            align-items: center;
-                            height: 100vh;
-                            margin: 0;
-                            background: #f5f5f5;
-                        }
-                        .container {
-                            text-align: center;
-                            background: white;
-                            padding: 40px;
-                            border-radius: 8px;
-                            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
-                        }
-                        .success {
-                            color: #4CAF50;
-                            font-size: 64px;
-                            margin-bottom: 20px;
-                        }
-                        .message {
-                            color: #333;
-                            font-size: 20px;
-                            margin-bottom: 10px;
-                        }
-                        .sub-message {
-                            color: #666;
-                            font-size: 14px;
-                        }
-                    </style>
-                </head>
-                <body>
-                    <div class="container">
-                        <div class="success">✓</div>
-                        <div class="message">Authorization Successful!</div>
-                        <div class="sub-message">
-                            TransmitSMS has been successfully installed and authorized.
-                        </div>
-                        <div class="sub-message" style="margin-top: 20px;">
-                            You can now close this window and return to Eloqua.
-                        </div>
-                    </div>
-                    <script>
-                        // Attempt to close window after 3 seconds
-                        setTimeout(function() {
-                            window.close();
-                        }, 3000);
-                    </script>
-                </body>
-                </html>
-            `);
+            // Redirect directly to configuration page
+            const configureUrl = `/eloqua/app/configure?installId=${installId}&siteId=${consumer.SiteId}`;
+            
+            res.redirect(configureUrl);
+            
         } catch (error) {
             logger.error('OAuth authorization failed', { 
                 error: error.message,
-                stack: error.stack,
                 installId 
             });
             
-            res.status(500).send(`
-                <!DOCTYPE html>
-                <html>
-                <head>
-                    <title>Authorization Failed</title>
-                    <style>
-                        body {
-                            font-family: Arial, sans-serif;
-                            display: flex;
-                            justify-content: center;
-                            align-items: center;
-                            height: 100vh;
-                            margin: 0;
-                            background: #f5f5f5;
-                        }
-                        .container {
-                            text-align: center;
-                            background: white;
-                            padding: 40px;
-                            border-radius: 8px;
-                            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
-                            max-width: 500px;
-                        }
-                        .error {
-                            color: #f44336;
-                            font-size: 48px;
-                            margin-bottom: 20px;
-                        }
-                    </style>
-                </head>
-                <body>
-                    <div class="container">
-                        <div class="error">✗</div>
-                        <h2>Authorization Failed</h2>
-                        <p>${error.message}</p>
-                        <p style="font-size: 12px; color: #666; margin-top: 20px;">
-                            Please contact support if this problem persists.
-                        </p>
-                    </div>
-                </body>
-                </html>
-            `);
+            // Redirect back to install with error
+            res.redirect(`/eloqua/app/install?installId=${installId}&error=auth_failed`);
         }
     });
 
