@@ -87,7 +87,12 @@ app.set('view engine', 'ejs');
 app.set('views', path.join(__dirname, 'views'));
 
 // Static files
-app.use('/eloqua-service/assets', express.static(path.join(__dirname, 'public/assets')));
+app.use('/eloqua-service/assets', express.static(path.join(__dirname, 'public/assets'), {
+  setHeaders: (res, path) => {
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    res.setHeader('Content-Type', 'image/png'); // or appropriate type
+  }
+}));
 
 // Basic routes
 app.get('/', (req, res) => {
