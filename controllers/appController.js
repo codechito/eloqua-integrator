@@ -7,94 +7,72 @@ class AppController {
     /**
      * Install app
      * GET /eloqua/app/install
-     * Creates consumer record and redirects to OAuth authorization
      */
     static install = asyncHandler(async (req, res) => {
-        const { installId, siteId, siteName } = req.query;
+        const { 
+            installId, 
+            siteId, 
+            siteName,
+            callback,
+            oauth_consumer_key,
+            oauth_nonce,
+            oauth_signature_method,
+            oauth_version,
+            oauth_signature,
+            UserName,
+            UserId,
+            SiteId,
+            SiteName
+        } = req.query;
 
-        if (!installId || !siteId) {
-            return res.status(400).json({ 
-                error: 'Missing required parameters',
-                message: 'installId and siteId are required'
-            });
-        }
+        logger.info('App installation started', { 
+            installId, 
+            siteId: siteId || SiteId, 
+            siteName: siteName || SiteName,
+            userName: UserName,
+            userId: UserId,
+            callback
+        });
 
-        logger.info('App installation initiated', { installId, siteId, siteName });
+        // Use either naming convention
+        const finalSiteId = siteId || SiteId;
+        const finalSiteName = siteName || SiteName;
 
         // Check if already installed
         let consumer = await Consumer.findOne({ installId });
 
         if (!consumer) {
-            // Create new consumer record
             consumer = new Consumer({
                 installId,
-                SiteId: siteId,
-                siteName: siteName || 'Unknown Site',
+                SiteId: finalSiteId,
+                siteName: finalSiteName || 'Unknown Site',
                 actions: {
                     sendsms: {},
                     receivesms: {},
                     incomingsms: {},
                     tracked_link: {}
-                },
-                isActive: true
+                }
             });
             await consumer.save();
 
-            logger.info('Consumer record created', { 
+            logger.info('App installed successfully', { 
                 installId, 
                 consumerId: consumer._id 
             });
         } else {
-            // Update existing consumer (in case of reinstall)
-            consumer.siteName = siteName || consumer.siteName;
-            consumer.SiteId = siteId;
-            consumer.isActive = true;
-            await consumer.save();
-
-            logger.info('Consumer record updated', { installId });
+            logger.info('App already installed', { installId });
         }
 
-        // Get OAuth authorization URL and redirect
+        // Generate OAuth authorization URL
         const authUrl = OAuthService.getAuthorizationUrl(installId, installId);
-        
-        logger.info('Redirecting to OAuth authorization', { 
-            installId,
+
+        logger.info('Redirecting to OAuth', { 
+            installId, 
             authUrl 
         });
 
-        // Direct redirect to Eloqua OAuth
-        res.send(`
-            <!DOCTYPE html>
-            <html>
-            <head>
-                <meta http-equiv="refresh" content="0;url=${authUrl}">
-                <title>Redirecting...</title>
-                <style>
-                    body {
-                        font-family: Arial, sans-serif;
-                        display: flex;
-                        justify-content: center;
-                        align-items: center;
-                        height: 100vh;
-                        margin: 0;
-                        background: #f5f5f5;
-                    }
-                    .container {
-                        text-align: center;
-                    }
-                </style>
-            </head>
-            <body>
-                <div class="container">
-                    <h2>Redirecting to Eloqua...</h2>
-                    <p>If you are not redirected automatically, <a href="${authUrl}">click here</a>.</p>
-                </div>
-                <script>
-                    window.location.href = "${authUrl}";
-                </script>
-            </body>
-            </html>
-        `);
+        // Simple server-side redirect (like your old app)
+        res.redirect(authUrl);
     });
 
     /**
