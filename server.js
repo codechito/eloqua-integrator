@@ -41,9 +41,20 @@ const PORT = process.env.PORT || 3000;
 // Connect to Database
 connectDB();
 
-// Security Middleware
+// CORS Configuration - MUST BE BEFORE HELMET
+app.use(cors({
+    origin: '*', // Allow all origins (Eloqua needs this)
+    credentials: true,
+    methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+    allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With']
+}));
+
+// Security Middleware with relaxed policies for Eloqua
 app.use(helmet({
-    contentSecurityPolicy: false
+    contentSecurityPolicy: false,
+    crossOriginEmbedderPolicy: false,
+    crossOriginResourcePolicy: { policy: "cross-origin" }, // This is the key fix!
+    crossOriginOpenerPolicy: false
 }));
 
 // Request logging
@@ -53,9 +64,6 @@ app.use(requestLogger);
 if (process.env.NODE_ENV === 'development') {
     app.use(morgan('dev'));
 }
-
-// CORS
-app.use(cors());
 
 // Body parsing middleware
 app.use(bodyParser.json({ limit: '10mb' }));
@@ -75,24 +83,51 @@ app.use(session({
     cookie: { 
         secure: process.env.NODE_ENV === 'production',
         maxAge: 24 * 60 * 60 * 1000,
-        httpOnly: true
+        httpOnly: true,
+        sameSite: 'none' // Important for cross-domain cookies
     }
 }));
 
 // Rate limiting
-app.use(rateLimit(100, 60000)); // 100 requests per minute
+app.use(rateLimit(100, 60000));
 
 // View engine setup
 app.set('view engine', 'ejs');
 app.set('views', path.join(__dirname, 'views'));
 
-// Static files
-app.use('/eloqua-service/assets', express.static(path.join(__dirname, 'public/assets'), {
-  setHeaders: (res, path) => {
+// Static files middleware with proper headers
+app.use('/eloqua-service/assets', (req, res, next) => {
+    // Set CORS headers for static files
     res.setHeader('Access-Control-Allow-Origin', '*');
-    res.setHeader('Content-Type', 'image/png'); // or appropriate type
-  }
+    res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+    res.setHeader('Cross-Origin-Resource-Policy', 'cross-origin');
+    
+    // Set appropriate content types
+    const ext = path.extname(req.url).toLowerCase();
+    const contentTypes = {
+        '.png': 'image/png',
+        '.jpg': 'image/jpeg',
+        '.jpeg': 'image/jpeg',
+        '.gif': 'image/gif',
+        '.svg': 'image/svg+xml',
+        '.css': 'text/css',
+        '.js': 'application/javascript',
+        '.json': 'application/json'
+    };
+    
+    if (contentTypes[ext]) {
+        res.setHeader('Content-Type', contentTypes[ext]);
+    }
+    
+    next();
+}, express.static(path.join(__dirname, 'public/assets'), {
+    maxAge: '1d',
+    etag: true
 }));
+
+// Handle OPTIONS requests for CORS preflight
+app.options('*', cors());
 
 // Basic routes
 app.get('/', (req, res) => {
@@ -104,7 +139,6 @@ app.get('/', (req, res) => {
         environment: process.env.NODE_ENV || 'development',
         endpoints: {
             health: '/health',
-            docs: '/api-docs',
             app: {
                 install: 'GET /eloqua/app/install',
                 configure: 'GET /eloqua/app/configure',
@@ -158,10 +192,10 @@ app.use('/eloqua/decision', decisionRoutes);
 app.use('/eloqua/feeder', feederRoutes);
 app.use('/webhooks', webhookRoutes);
 
-// 404 handler (must be after all routes)
+// 404 handler
 app.use(notFoundHandler);
 
-// Error handler (must be last)
+// Error handler
 app.use(errorHandler);
 
 // Start server
@@ -179,7 +213,6 @@ const server = app.listen(PORT, () => {
     console.log(`  ✓ Environment: ${process.env.NODE_ENV || 'development'}`);
     console.log(`  ✓ URL: http://localhost:${PORT}`);
     console.log(`  ✓ Health: http://localhost:${PORT}/health`);
-    console.log(`  ✓ API Docs: http://localhost:${PORT}`);
     console.log('========================================');
 });
 
