@@ -39,33 +39,44 @@ class OAuthService {
         try {
             logger.info('Exchanging authorization code for token');
 
+            // Create Basic Auth header
+            const credentials = Buffer.from(
+                `${process.env.ELOQUA_CLIENT_ID}:${process.env.ELOQUA_CLIENT_SECRET}`
+            ).toString('base64');
+
+            // Use URLSearchParams for form-encoded body
+            const params = new URLSearchParams({
+                grant_type: 'authorization_code',
+                code: code,
+                redirect_uri: process.env.ELOQUA_REDIRECT_URI
+            });
+
             const response = await axios.post(
                 eloquaConfig.oauth.tokenUrl,
-                {
-                    grant_type: 'authorization_code',
-                    code,
-                    client_id: process.env.ELOQUA_CLIENT_ID,
-                    client_secret: process.env.ELOQUA_CLIENT_SECRET,
-                    redirect_uri: process.env.ELOQUA_REDIRECT_URI
-                },
+                params.toString(), // Send as URL-encoded string
                 {
                     headers: {
-                        'Content-Type': 'application/json'
+                        'Authorization': `Basic ${credentials}`,
+                        'Content-Type': 'application/x-www-form-urlencoded'
                     }
                 }
             );
 
             logger.info('Successfully exchanged code for token', {
-                expiresIn: response.data.expires_in
+                expiresIn: response.data.expires_in,
+                tokenType: response.data.token_type
             });
 
             return response.data;
         } catch (error) {
-            const errorMessage = error.response?.data?.error_description || error.message;
+            const errorMessage = error.response?.data?.error_description || 
+                                error.response?.data?.error || 
+                                error.message;
             
             logger.error('OAuth token exchange failed', {
                 error: errorMessage,
-                statusCode: error.response?.status
+                statusCode: error.response?.status,
+                details: error.response?.data
             });
 
             throw new Error(`OAuth token exchange failed: ${errorMessage}`);
@@ -81,17 +92,24 @@ class OAuthService {
         try {
             logger.info('Refreshing access token');
 
+            // Create Basic Auth header
+            const credentials = Buffer.from(
+                `${process.env.ELOQUA_CLIENT_ID}:${process.env.ELOQUA_CLIENT_SECRET}`
+            ).toString('base64');
+
+            // Use URLSearchParams for form-encoded body
+            const params = new URLSearchParams({
+                grant_type: 'refresh_token',
+                refresh_token: refreshToken
+            });
+
             const response = await axios.post(
                 eloquaConfig.oauth.tokenUrl,
-                {
-                    grant_type: 'refresh_token',
-                    refresh_token: refreshToken,
-                    client_id: process.env.ELOQUA_CLIENT_ID,
-                    client_secret: process.env.ELOQUA_CLIENT_SECRET
-                },
+                params.toString(),
                 {
                     headers: {
-                        'Content-Type': 'application/json'
+                        'Authorization': `Basic ${credentials}`,
+                        'Content-Type': 'application/x-www-form-urlencoded'
                     }
                 }
             );
@@ -102,7 +120,9 @@ class OAuthService {
 
             return response.data;
         } catch (error) {
-            const errorMessage = error.response?.data?.error_description || error.message;
+            const errorMessage = error.response?.data?.error_description || 
+                                error.response?.data?.error || 
+                                error.message;
             
             logger.error('Token refresh failed', {
                 error: errorMessage,
