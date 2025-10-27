@@ -42,18 +42,33 @@ const PORT = process.env.PORT || 3000;
 connectDB();
 
 // CORS Configuration - MUST BE BEFORE HELMET
-app.use(cors({
+const corsOptions = {
     origin: '*', // Allow all origins (Eloqua needs this)
     credentials: true,
     methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-    allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With']
-}));
+    allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With'],
+    optionsSuccessStatus: 200
+};
+
+app.use(cors(corsOptions));
+
+// Handle preflight requests for all routes
+app.use((req, res, next) => {
+    if (req.method === 'OPTIONS') {
+        res.setHeader('Access-Control-Allow-Origin', '*');
+        res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
+        res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Requested-With');
+        res.setHeader('Access-Control-Max-Age', '86400'); // 24 hours
+        return res.status(200).end();
+    }
+    next();
+});
 
 // Security Middleware with relaxed policies for Eloqua
 app.use(helmet({
     contentSecurityPolicy: false,
     crossOriginEmbedderPolicy: false,
-    crossOriginResourcePolicy: { policy: "cross-origin" }, // This is the key fix!
+    crossOriginResourcePolicy: { policy: "cross-origin" },
     crossOriginOpenerPolicy: false
 }));
 
@@ -84,7 +99,7 @@ app.use(session({
         secure: process.env.NODE_ENV === 'production',
         maxAge: 24 * 60 * 60 * 1000,
         httpOnly: true,
-        sameSite: 'none' // Important for cross-domain cookies
+        sameSite: process.env.NODE_ENV === 'production' ? 'none' : 'lax'
     }
 }));
 
@@ -125,9 +140,6 @@ app.use('/eloqua-service/assets', (req, res, next) => {
     maxAge: '1d',
     etag: true
 }));
-
-// Handle OPTIONS requests for CORS preflight
-app.options('*', cors());
 
 // Basic routes
 app.get('/', (req, res) => {
