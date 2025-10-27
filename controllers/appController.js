@@ -1,13 +1,13 @@
 const Consumer = require('../models/Consumer');
 const { EloquaService, OAuthService } = require('../services');
-const { logger, generateId } = require('../utils');
+const { logger } = require('../utils');
 const { asyncHandler } = require('../middleware');
 
 class AppController {
     /**
      * Install app
      * GET /eloqua/app/install
-     * This should redirect to OAuth authorization
+     * Creates consumer record and redirects to OAuth authorization
      */
     static install = asyncHandler(async (req, res) => {
         const { installId, siteId, siteName } = req.query;
@@ -45,7 +45,7 @@ class AppController {
                 consumerId: consumer._id 
             });
         } else {
-            // Update existing consumer
+            // Update existing consumer (in case of reinstall)
             consumer.siteName = siteName || consumer.siteName;
             consumer.SiteId = siteId;
             consumer.isActive = true;
@@ -54,7 +54,7 @@ class AppController {
             logger.info('Consumer record updated', { installId });
         }
 
-        // Redirect to OAuth authorization
+        // Get OAuth authorization URL and redirect
         const authUrl = OAuthService.getAuthorizationUrl(installId, installId);
         
         logger.info('Redirecting to OAuth authorization', { 
@@ -62,12 +62,13 @@ class AppController {
             authUrl 
         });
 
-        // Return HTML with auto-redirect
+        // Direct redirect to Eloqua OAuth
         res.send(`
             <!DOCTYPE html>
             <html>
             <head>
-                <title>Installing TransmitSMS</title>
+                <meta http-equiv="refresh" content="0;url=${authUrl}">
+                <title>Redirecting...</title>
                 <style>
                     body {
                         font-family: Arial, sans-serif;
@@ -80,243 +81,20 @@ class AppController {
                     }
                     .container {
                         text-align: center;
-                        background: white;
-                        padding: 40px;
-                        border-radius: 8px;
-                        box-shadow: 0 2px 10px rgba(0,0,0,0.1);
-                    }
-                    .spinner {
-                        border: 4px solid #f3f3f3;
-                        border-top: 4px solid #4CAF50;
-                        border-radius: 50%;
-                        width: 40px;
-                        height: 40px;
-                        animation: spin 1s linear infinite;
-                        margin: 20px auto;
-                    }
-                    @keyframes spin {
-                        0% { transform: rotate(0deg); }
-                        100% { transform: rotate(360deg); }
                     }
                 </style>
             </head>
             <body>
                 <div class="container">
-                    <h2>Installing TransmitSMS...</h2>
-                    <div class="spinner"></div>
-                    <p>Redirecting to Eloqua for authorization...</p>
-                    <p style="font-size: 12px; color: #666;">
-                        If you are not redirected automatically, 
-                        <a href="${authUrl}">click here</a>.
-                    </p>
+                    <h2>Redirecting to Eloqua...</h2>
+                    <p>If you are not redirected automatically, <a href="${authUrl}">click here</a>.</p>
                 </div>
                 <script>
-                    // Redirect after 2 seconds
-                    setTimeout(function() {
-                        window.location.href = "${authUrl}";
-                    }, 2000);
+                    window.location.href = "${authUrl}";
                 </script>
             </body>
             </html>
         `);
-    });
-
-    /**
-     * OAuth callback
-     * GET /eloqua/app/oauth/callback
-     * This is called after user authorizes the app
-     */
-    static oauthCallback = asyncHandler(async (req, res) => {
-        const { code, state, error, error_description } = req.query;
-        
-        // Check for OAuth errors
-        if (error) {
-            logger.error('OAuth authorization failed', { 
-                error, 
-                description: error_description 
-            });
-            
-            return res.send(`
-                <!DOCTYPE html>
-                <html>
-                <head>
-                    <title>Authorization Failed</title>
-                    <style>
-                        body {
-                            font-family: Arial, sans-serif;
-                            display: flex;
-                            justify-content: center;
-                            align-items: center;
-                            height: 100vh;
-                            margin: 0;
-                            background: #f5f5f5;
-                        }
-                        .container {
-                            text-align: center;
-                            background: white;
-                            padding: 40px;
-                            border-radius: 8px;
-                            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
-                            max-width: 500px;
-                        }
-                        .error {
-                            color: #f44336;
-                            font-size: 24px;
-                            margin-bottom: 20px;
-                        }
-                        .message {
-                            color: #666;
-                            margin-bottom: 20px;
-                        }
-                        .btn {
-                            display: inline-block;
-                            padding: 10px 20px;
-                            background: #4CAF50;
-                            color: white;
-                            text-decoration: none;
-                            border-radius: 4px;
-                            margin-top: 20px;
-                        }
-                    </style>
-                </head>
-                <body>
-                    <div class="container">
-                        <div class="error">✗ Authorization Failed</div>
-                        <div class="message">
-                            ${error_description || error || 'An error occurred during authorization'}
-                        </div>
-                        <p>Please try installing the app again.</p>
-                        <a href="#" onclick="window.close()" class="btn">Close Window</a>
-                    </div>
-                </body>
-                </html>
-            `);
-        }
-
-        if (!code) {
-            logger.error('OAuth callback: missing authorization code');
-            return res.status(400).send('Authorization code not provided');
-        }
-
-        const installId = state; // state contains the installId
-
-        logger.info('OAuth callback received', { installId, hasCode: !!code });
-
-        try {
-            // Exchange code for tokens
-            const tokenData = await OAuthService.exchangeCodeForToken(code);
-            
-            // Save tokens to consumer
-            await OAuthService.saveTokens(installId, tokenData);
-
-            logger.info('OAuth authorization successful', { installId });
-
-            // Return success page
-            res.send(`
-                <!DOCTYPE html>
-                <html>
-                <head>
-                    <title>Authorization Successful</title>
-                    <style>
-                        body {
-                            font-family: Arial, sans-serif;
-                            display: flex;
-                            justify-content: center;
-                            align-items: center;
-                            height: 100vh;
-                            margin: 0;
-                            background: #f5f5f5;
-                        }
-                        .container {
-                            text-align: center;
-                            background: white;
-                            padding: 40px;
-                            border-radius: 8px;
-                            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
-                        }
-                        .success {
-                            color: #4CAF50;
-                            font-size: 48px;
-                            margin-bottom: 20px;
-                        }
-                        .message {
-                            color: #333;
-                            font-size: 18px;
-                            margin-bottom: 10px;
-                        }
-                        .sub-message {
-                            color: #666;
-                            font-size: 14px;
-                        }
-                    </style>
-                </head>
-                <body>
-                    <div class="container">
-                        <div class="success">✓</div>
-                        <div class="message">Authorization Successful!</div>
-                        <div class="sub-message">
-                            TransmitSMS has been successfully installed and authorized.
-                        </div>
-                        <div class="sub-message" style="margin-top: 20px;">
-                            You can now close this window and return to Eloqua.
-                        </div>
-                    </div>
-                    <script>
-                        // Attempt to close window after 3 seconds
-                        setTimeout(function() {
-                            window.close();
-                        }, 3000);
-                    </script>
-                </body>
-                </html>
-            `);
-        } catch (error) {
-            logger.error('OAuth authorization failed', { 
-                error: error.message,
-                installId 
-            });
-            
-            res.status(500).send(`
-                <!DOCTYPE html>
-                <html>
-                <head>
-                    <title>Authorization Failed</title>
-                    <style>
-                        body {
-                            font-family: Arial, sans-serif;
-                            display: flex;
-                            justify-content: center;
-                            align-items: center;
-                            height: 100vh;
-                            margin: 0;
-                            background: #f5f5f5;
-                        }
-                        .container {
-                            text-align: center;
-                            background: white;
-                            padding: 40px;
-                            border-radius: 8px;
-                            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
-                        }
-                        .error {
-                            color: #f44336;
-                            font-size: 24px;
-                            margin-bottom: 20px;
-                        }
-                    </style>
-                </head>
-                <body>
-                    <div class="container">
-                        <div class="error">✗ Authorization Failed</div>
-                        <p>${error.message}</p>
-                        <p style="font-size: 12px; color: #666;">
-                            Please contact support if this problem persists.
-                        </p>
-                    </div>
-                </body>
-                </html>
-            `);
-        }
     });
 
     /**
@@ -331,8 +109,8 @@ class AppController {
         const consumer = await Consumer.findOne({ installId });
         
         if (consumer) {
+            // Deactivate and clear OAuth tokens
             consumer.isActive = false;
-            // Clear OAuth tokens on uninstall
             consumer.oauth_token = null;
             consumer.oauth_refresh_token = null;
             consumer.oauth_expires_at = null;
@@ -359,7 +137,36 @@ class AppController {
         const consumer = await Consumer.findOne({ installId });
         
         if (!consumer) {
-            return res.status(404).send('Consumer not found. Please install the app first.');
+            return res.status(404).send(`
+                <!DOCTYPE html>
+                <html>
+                <head>
+                    <title>Error</title>
+                    <style>
+                        body {
+                            font-family: Arial, sans-serif;
+                            text-align: center;
+                            padding: 50px;
+                            background: #f5f5f5;
+                        }
+                        .error {
+                            background: white;
+                            padding: 40px;
+                            border-radius: 8px;
+                            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+                            max-width: 500px;
+                            margin: 0 auto;
+                        }
+                    </style>
+                </head>
+                <body>
+                    <div class="error">
+                        <h2>Consumer Not Found</h2>
+                        <p>Please install the app first.</p>
+                    </div>
+                </body>
+                </html>
+            `);
         }
 
         // Check if OAuth token exists
@@ -370,48 +177,9 @@ class AppController {
             // Redirect to OAuth if not authorized
             const authUrl = OAuthService.getAuthorizationUrl(installId, installId);
             
-            return res.send(`
-                <!DOCTYPE html>
-                <html>
-                <head>
-                    <title>Authorization Required</title>
-                    <style>
-                        body {
-                            font-family: Arial, sans-serif;
-                            display: flex;
-                            justify-content: center;
-                            align-items: center;
-                            height: 100vh;
-                            margin: 0;
-                            background: #f5f5f5;
-                        }
-                        .container {
-                            text-align: center;
-                            background: white;
-                            padding: 40px;
-                            border-radius: 8px;
-                            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
-                        }
-                        .btn {
-                            display: inline-block;
-                            padding: 12px 24px;
-                            background: #4CAF50;
-                            color: white;
-                            text-decoration: none;
-                            border-radius: 4px;
-                            margin-top: 20px;
-                        }
-                    </style>
-                </head>
-                <body>
-                    <div class="container">
-                        <h2>Authorization Required</h2>
-                        <p>Please authorize this app to access Eloqua.</p>
-                        <a href="${authUrl}" class="btn">Authorize Now</a>
-                    </div>
-                </body>
-                </html>
-            `);
+            logger.info('OAuth token missing, redirecting to authorization', { installId });
+            
+            return res.redirect(authUrl);
         }
 
         // Get custom objects from Eloqua
@@ -419,6 +187,11 @@ class AppController {
         try {
             const eloquaService = new EloquaService(installId, siteId);
             custom_objects = await eloquaService.getCustomObjects('', 100);
+            
+            logger.info('Fetched custom objects', { 
+                installId, 
+                count: custom_objects.elements?.length || 0 
+            });
         } catch (error) {
             logger.warn('Could not fetch custom objects', { 
                 installId, 
@@ -440,6 +213,7 @@ class AppController {
             consumer.link_hits_callback = `${process.env.APP_BASE_URL}/webhooks/linkhit`;
         }
 
+        // Render configuration page
         res.render('app-config', {
             consumer: consumer.toObject(),
             custom_objects,
@@ -530,8 +304,233 @@ class AppController {
     });
 
     /**
-     * Initiate OAuth flow (alternative entry point)
+     * OAuth callback
+     * GET /eloqua/app/oauth/callback
+     * This is called after user authorizes the app in Eloqua
+     */
+    static oauthCallback = asyncHandler(async (req, res) => {
+        const { code, state, error, error_description } = req.query;
+        
+        // Check for OAuth errors
+        if (error) {
+            logger.error('OAuth authorization failed', { 
+                error, 
+                description: error_description 
+            });
+            
+            return res.send(`
+                <!DOCTYPE html>
+                <html>
+                <head>
+                    <title>Authorization Failed</title>
+                    <style>
+                        body {
+                            font-family: Arial, sans-serif;
+                            display: flex;
+                            justify-content: center;
+                            align-items: center;
+                            height: 100vh;
+                            margin: 0;
+                            background: #f5f5f5;
+                        }
+                        .container {
+                            text-align: center;
+                            background: white;
+                            padding: 40px;
+                            border-radius: 8px;
+                            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+                            max-width: 500px;
+                        }
+                        .error {
+                            color: #f44336;
+                            font-size: 48px;
+                            margin-bottom: 20px;
+                        }
+                        .message {
+                            color: #333;
+                            font-size: 18px;
+                            margin-bottom: 10px;
+                        }
+                        .description {
+                            color: #666;
+                            font-size: 14px;
+                        }
+                    </style>
+                </head>
+                <body>
+                    <div class="container">
+                        <div class="error">✗</div>
+                        <div class="message">Authorization Failed</div>
+                        <div class="description">
+                            ${error_description || error || 'An error occurred during authorization'}
+                        </div>
+                        <p style="margin-top: 20px; font-size: 14px;">
+                            Please try installing the app again.
+                        </p>
+                    </div>
+                </body>
+                </html>
+            `);
+        }
+
+        // Check for authorization code
+        if (!code) {
+            logger.error('OAuth callback: missing authorization code');
+            return res.status(400).send(`
+                <!DOCTYPE html>
+                <html>
+                <head>
+                    <title>Error</title>
+                    <style>
+                        body {
+                            font-family: Arial, sans-serif;
+                            text-align: center;
+                            padding: 50px;
+                            background: #f5f5f5;
+                        }
+                    </style>
+                </head>
+                <body>
+                    <h2>Authorization Error</h2>
+                    <p>Authorization code not provided</p>
+                </body>
+                </html>
+            `);
+        }
+
+        const installId = state; // state contains the installId
+
+        logger.info('OAuth callback received', { installId, hasCode: !!code });
+
+        try {
+            // Exchange authorization code for access token
+            const tokenData = await OAuthService.exchangeCodeForToken(code);
+            
+            logger.info('OAuth token exchange successful', { 
+                installId,
+                expiresIn: tokenData.expires_in 
+            });
+            
+            // Save tokens to consumer record
+            await OAuthService.saveTokens(installId, tokenData);
+
+            logger.info('OAuth authorization successful', { installId });
+
+            // Return success page with auto-close
+            res.send(`
+                <!DOCTYPE html>
+                <html>
+                <head>
+                    <title>Authorization Successful</title>
+                    <style>
+                        body {
+                            font-family: Arial, sans-serif;
+                            display: flex;
+                            justify-content: center;
+                            align-items: center;
+                            height: 100vh;
+                            margin: 0;
+                            background: #f5f5f5;
+                        }
+                        .container {
+                            text-align: center;
+                            background: white;
+                            padding: 40px;
+                            border-radius: 8px;
+                            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+                        }
+                        .success {
+                            color: #4CAF50;
+                            font-size: 64px;
+                            margin-bottom: 20px;
+                        }
+                        .message {
+                            color: #333;
+                            font-size: 20px;
+                            margin-bottom: 10px;
+                        }
+                        .sub-message {
+                            color: #666;
+                            font-size: 14px;
+                        }
+                    </style>
+                </head>
+                <body>
+                    <div class="container">
+                        <div class="success">✓</div>
+                        <div class="message">Authorization Successful!</div>
+                        <div class="sub-message">
+                            TransmitSMS has been successfully installed and authorized.
+                        </div>
+                        <div class="sub-message" style="margin-top: 20px;">
+                            You can now close this window and return to Eloqua.
+                        </div>
+                    </div>
+                    <script>
+                        // Attempt to close window after 3 seconds
+                        setTimeout(function() {
+                            window.close();
+                        }, 3000);
+                    </script>
+                </body>
+                </html>
+            `);
+        } catch (error) {
+            logger.error('OAuth authorization failed', { 
+                error: error.message,
+                stack: error.stack,
+                installId 
+            });
+            
+            res.status(500).send(`
+                <!DOCTYPE html>
+                <html>
+                <head>
+                    <title>Authorization Failed</title>
+                    <style>
+                        body {
+                            font-family: Arial, sans-serif;
+                            display: flex;
+                            justify-content: center;
+                            align-items: center;
+                            height: 100vh;
+                            margin: 0;
+                            background: #f5f5f5;
+                        }
+                        .container {
+                            text-align: center;
+                            background: white;
+                            padding: 40px;
+                            border-radius: 8px;
+                            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+                            max-width: 500px;
+                        }
+                        .error {
+                            color: #f44336;
+                            font-size: 48px;
+                            margin-bottom: 20px;
+                        }
+                    </style>
+                </head>
+                <body>
+                    <div class="container">
+                        <div class="error">✗</div>
+                        <h2>Authorization Failed</h2>
+                        <p>${error.message}</p>
+                        <p style="font-size: 12px; color: #666; margin-top: 20px;">
+                            Please contact support if this problem persists.
+                        </p>
+                    </div>
+                </body>
+                </html>
+            `);
+        }
+    });
+
+    /**
+     * Initiate OAuth flow
      * GET /eloqua/app/authorize
+     * Alternative entry point for OAuth authorization
      */
     static authorize = asyncHandler(async (req, res) => {
         const { installId } = req.query;
