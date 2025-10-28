@@ -115,8 +115,14 @@
                     <p style="width:320px; text-align:left; font-size:11px;"><i>You can map custom object fields per each option.</i></p>
                 </div>
                 <div class="form-group">
-                    <label for="custom_object" style="width:320px; text-align:left;">Custom Object</label>
+                    <label for="custom_object" style="width:320px; text-align:left;">
+                        Custom Object 
+                        <span v-if="consumer.actions[actionidx].custom_object_id" style="font-size: 10px; color: #666;">
+                            (ID: {{ consumer.actions[actionidx].custom_object_id }})
+                        </span>
+                    </label>
                     <v-select  
+                        :key="actionidx + '-' + (consumer.actions[actionidx].custom_object_id || 'none')"
                         label="name"
                         style="width:320px; text-align:left;" 
                         v-model="consumer.actions[actionidx].custom_object_id" 
@@ -238,7 +244,12 @@
                 </div>
                 <div v-else style="padding: 20px; background: #f5f5f5; border-radius: 4px; margin-top: 10px;">
                     <p style="margin: 0; color: #666; font-size: 14px;">
-                        Select a custom object to map fields
+                        <span v-if="consumer.actions[actionidx].custom_object_id">
+                            Loading fields for custom object...
+                        </span>
+                        <span v-else>
+                            Select a custom object to map fields
+                        </span>
                     </p>
                 </div>
             </div>
@@ -335,7 +346,7 @@
                 fieldsCache: {},
                 actionidx: 'sendsms',
                 currentFields: [],
-                previousCustomObjectIds: {  // Track per action type
+                previousCustomObjectIds: {
                     sendsms: null,
                     receivesms: null,
                     incomingsms: null,
@@ -345,6 +356,15 @@
                 saving: false,
                 loadingCustomObjects: false,
                 loadingFields: false
+            },
+            watch: {
+                // Watch for changes in the custom_object_id for current action type
+                'consumer.actions': {
+                    handler: function(newVal, oldVal) {
+                        console.log('Consumer actions changed');
+                    },
+                    deep: true
+                }
             },
             methods: {
                 fetchCustomObjects: function(search, loading) {
@@ -387,15 +407,20 @@
                 },
                 
                 switchActionType: function() {
-                    console.log('Switching to action type:', this.actionidx);
-                    console.log('Current action has custom object:', this.consumer.actions[this.actionidx]?.custom_object_id);
+                    var vm = this;
+                    console.log('=== Switching Action Type ===');
+                    console.log('New action type:', vm.actionidx);
+                    console.log('Custom object for this action:', vm.consumer.actions[vm.actionidx]?.custom_object_id);
+                    console.log('Stored fields:', vm.allFields[vm.actionidx]?.length || 0);
                     
-                    // Don't clear anything - just switch to view the new action type
-                    // Update the tracking for the current action type
-                    this.previousCustomObjectIds[this.actionidx] = this.consumer.actions[this.actionidx]?.custom_object_id || null;
+                    // Update tracking
+                    vm.previousCustomObjectIds[vm.actionidx] = vm.consumer.actions[vm.actionidx]?.custom_object_id || null;
                     
-                    // Load fields for the current action type (if custom object is already selected)
-                    this.loadFieldsForCurrentAction();
+                    // Force Vue to re-render the v-select by using nextTick
+                    vm.$nextTick(function() {
+                        // Load fields for this action type
+                        vm.loadFieldsForCurrentAction();
+                    });
                 },
                 
                 onCustomObjectChange: function(customObjectId) {
@@ -403,76 +428,54 @@
                     var currentActionType = vm.actionidx;
                     var previousId = vm.previousCustomObjectIds[currentActionType];
                     
-                    console.log('[' + currentActionType + '] Custom object changed from', previousId, 'to', customObjectId);
+                    console.log('=== Custom Object Change ===');
+                    console.log('[' + currentActionType + '] Changed from', previousId, 'to', customObjectId);
                     
-                    // If customObjectId is null/undefined (clear button clicked)
+                    // If clearing (X button clicked)
                     if (!customObjectId) {
-                        console.log('[' + currentActionType + '] Custom object cleared - resetting fields for THIS action type only');
-                        
-                        // Clear field mappings for CURRENT action type only
+                        console.log('[' + currentActionType + '] Clearing custom object and fields');
                         vm.clearFieldMappingsForActionType(currentActionType);
-                        
-                        // Clear current fields display
                         vm.currentFields = [];
-                        
-                        // Update tracking for this action type
                         vm.previousCustomObjectIds[currentActionType] = null;
-                        
-                        // Clear from allFields cache for this action type only
                         vm.allFields[currentActionType] = [];
-                        
                         return;
                     }
                     
-                    // Check if actually changed (not just re-selecting the same one)
+                    // If changed to different custom object
                     if (customObjectId !== previousId) {
-                        console.log('[' + currentActionType + '] Different custom object selected - clearing previous mappings for THIS action type only');
-                        
-                        // Clear field mappings for CURRENT action type only
+                        console.log('[' + currentActionType + '] New custom object selected - clearing field mappings');
                         vm.clearFieldMappingsForActionType(currentActionType);
-                        
-                        // Clear current fields immediately to show loading state
                         vm.currentFields = [];
-                        
-                        // Update tracking for this action type
                         vm.previousCustomObjectIds[currentActionType] = customObjectId;
                     }
                     
-                    // Load fields for the new custom object
+                    // Load fields
                     vm.loadFieldsForCurrentAction();
                 },
                 
                 clearFieldMappingsForActionType: function(actionType) {
-                    console.log('Clearing field mappings for action type:', actionType);
+                    console.log('Clearing field mappings for:', actionType);
                     
-                    // Clear field mappings for the SPECIFIED action type only
                     if (this.consumer.actions[actionType]) {
-                        this.consumer.actions[actionType].mobile_field = '';
-                        this.consumer.actions[actionType].vn_field = '';
-                        this.consumer.actions[actionType].email_field = '';
-                        this.consumer.actions[actionType].title_field = '';
+                        // Use Vue.set to ensure reactivity
+                        this.$set(this.consumer.actions[actionType], 'mobile_field', '');
+                        this.$set(this.consumer.actions[actionType], 'vn_field', '');
+                        this.$set(this.consumer.actions[actionType], 'email_field', '');
+                        this.$set(this.consumer.actions[actionType], 'title_field', '');
                         
-                        // Clear action-specific fields based on type
                         if (actionType === 'sendsms') {
-                            this.consumer.actions[actionType].notification_field = '';
-                            this.consumer.actions[actionType].outgoing_field = '';
+                            this.$set(this.consumer.actions[actionType], 'notification_field', '');
+                            this.$set(this.consumer.actions[actionType], 'outgoing_field', '');
                         } else if (actionType === 'receivesms' || actionType === 'incomingsms') {
-                            this.consumer.actions[actionType].response_field = '';
+                            this.$set(this.consumer.actions[actionType], 'response_field', '');
                         } else if (actionType === 'tracked_link') {
-                            this.consumer.actions[actionType].link_hits = '';
-                            this.consumer.actions[actionType].url_field = '';
-                            this.consumer.actions[actionType].originalurl_field = '';
+                            this.$set(this.consumer.actions[actionType], 'link_hits', '');
+                            this.$set(this.consumer.actions[actionType], 'url_field', '');
+                            this.$set(this.consumer.actions[actionType], 'originalurl_field', '');
                         }
                     }
                     
                     console.log('Field mappings cleared for', actionType);
-                    console.log('Other action types remain unchanged');
-                },
-                
-                clearFieldMappings: function() {
-                    // Deprecated - use clearFieldMappingsForActionType instead
-                    // Keeping for backward compatibility
-                    this.clearFieldMappingsForActionType(this.actionidx);
                 },
                 
                 loadFieldsForCurrentAction: function() {
@@ -480,49 +483,44 @@
                     var currentActionType = vm.actionidx;
                     var customObjectId = vm.consumer.actions[currentActionType]?.custom_object_id;
                     
-                    console.log('[' + currentActionType + '] loadFieldsForCurrentAction called with custom object:', customObjectId);
+                    console.log('=== Loading Fields ===');
+                    console.log('[' + currentActionType + '] Custom object:', customObjectId);
                     
                     if (!customObjectId) {
-                        console.log('[' + currentActionType + '] No custom object selected, clearing fields display');
+                        console.log('[' + currentActionType + '] No custom object, clearing fields');
                         vm.currentFields = [];
                         return;
                     }
                     
-                    // Check if we have pre-loaded fields for this specific custom object and action type
-                    var previousId = vm.previousCustomObjectIds[currentActionType];
+                    // Check if we already have these fields loaded
                     if (vm.allFields[currentActionType] && 
                         vm.allFields[currentActionType].length > 0 && 
-                        previousId === customObjectId) {
-                        console.log('[' + currentActionType + '] Using pre-loaded fields');
+                        vm.previousCustomObjectIds[currentActionType] === customObjectId) {
+                        console.log('[' + currentActionType + '] Using stored fields:', vm.allFields[currentActionType].length);
                         vm.currentFields = vm.allFields[currentActionType];
                         return;
                     }
                     
                     // Check cache by custom object ID
                     if (vm.fieldsCache[customObjectId]) {
-                        console.log('[' + currentActionType + '] Using cached fields for custom object', customObjectId);
+                        console.log('[' + currentActionType + '] Using cached fields:', vm.fieldsCache[customObjectId].length);
                         vm.currentFields = vm.fieldsCache[customObjectId];
                         vm.allFields[currentActionType] = vm.currentFields;
                         return;
                     }
                     
-                    // Fetch fields from API
+                    // Fetch from API
                     vm.loadingFields = true;
-                    console.log('[' + currentActionType + '] Fetching fields from API for custom object', customObjectId);
+                    console.log('[' + currentActionType + '] Fetching fields from API...');
                     
                     axios.get('/eloqua/action/ajax/customobject/' + vm.consumer.installId + '/' + vm.consumer.SiteId + '/' + customObjectId)
                         .then(function(response) {
-                            console.log('[' + currentActionType + '] Fields fetched successfully:', response.data.fields?.length || 0, 'fields');
+                            var fields = response.data.fields || [];
+                            console.log('[' + currentActionType + '] Fields fetched:', fields.length);
                             
-                            // Update current fields
-                            vm.currentFields = response.data.fields || [];
-                            
-                            // Cache by custom object ID (shared across action types)
-                            vm.fieldsCache[customObjectId] = vm.currentFields;
-                            
-                            // Also store in allFields for this action type
-                            vm.allFields[currentActionType] = vm.currentFields;
-                            
+                            vm.currentFields = fields;
+                            vm.fieldsCache[customObjectId] = fields;
+                            vm.allFields[currentActionType] = fields;
                             vm.loadingFields = false;
                         })
                         .catch(function(error) {
@@ -557,7 +555,8 @@
 
                     vm.saving = true;
                     
-                    console.log('Saving consumer configuration:', vm.consumer);
+                    console.log('Saving consumer configuration...');
+                    console.log('Actions:', JSON.stringify(vm.consumer.actions, null, 2));
                     
                     axios.post(location.pathname + location.search, {
                         consumer: vm.consumer
@@ -565,7 +564,7 @@
                     .then(function(response) {
                         vm.saving = false;
                         vm.fade = true;
-                        console.log("Configuration saved successfully", response);
+                        console.log("Configuration saved successfully");
                         vm.status = {
                             success: 'Configuration successfully updated'
                         };
@@ -593,23 +592,21 @@
             
             mounted: function () {
                 var vm = this;
-                console.log('=== App Configuration Loaded ===');
+                console.log('=== App Configuration Mounted ===');
                 console.log('Consumer ID:', vm.consumer.installId);
                 console.log('Site ID:', vm.consumer.SiteId);
-                console.log('Pre-loaded fields:', Object.keys(vm.allFields).filter(function(k) { 
-                    return vm.allFields[k] && vm.allFields[k].length > 0; 
-                }));
                 
-                // Initialize previous custom object IDs for ALL action types
+                // Initialize tracking for all action types
                 ['sendsms', 'receivesms', 'incomingsms', 'tracked_link'].forEach(function(actionType) {
-                    vm.previousCustomObjectIds[actionType] = vm.consumer.actions[actionType]?.custom_object_id || null;
-                    console.log('[' + actionType + '] Initialized with custom object:', vm.previousCustomObjectIds[actionType]);
+                    var coId = vm.consumer.actions[actionType]?.custom_object_id || null;
+                    vm.previousCustomObjectIds[actionType] = coId;
+                    console.log('[' + actionType + '] Initialized - Custom Object:', coId, '- Fields:', vm.allFields[actionType]?.length || 0);
                 });
                 
-                // Load fields for current action
+                // Load fields for initial action type
                 vm.loadFieldsForCurrentAction();
                 
-                // Initial lazy load of custom objects
+                // Load custom objects
                 vm.fetchCustomObjects('', null);
             }
         });
