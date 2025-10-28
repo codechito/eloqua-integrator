@@ -6,16 +6,55 @@ class EloquaService {
     constructor(installId, siteId) {
         this.installId = installId;
         this.siteId = siteId;
-        this.baseUrl = this.getBaseUrl(siteId);
+        this.baseUrl = null; // Will be set dynamically
     }
 
     /**
-     * Get Eloqua base URL from site ID
+     * Get Eloqua base URL from site ID or discover it
      */
-    getBaseUrl(siteId) {
-        // Extract pod number from site ID (first 2 digits)
-        const podNumber = siteId.substring(0, 2);
-        return `https://secure.p${podNumber}.eloqua.com`;
+    async getBaseUrl() {
+        if (this.baseUrl) {
+            return this.baseUrl;
+        }
+
+        // Method 1: Try to get from login API (most reliable)
+        try {
+            const token = await this.getAccessToken();
+            
+            // Call the login API to get the correct base URL
+            const response = await axios.get('https://login.eloqua.com/id', {
+                headers: {
+                    'Authorization': `Bearer ${token}`
+                }
+            });
+
+            if (response.data && response.data.urls && response.data.urls.base) {
+                this.baseUrl = response.data.urls.base;
+                logger.info('Eloqua base URL discovered', { 
+                    installId: this.installId,
+                    baseUrl: this.baseUrl 
+                });
+                return this.baseUrl;
+            }
+        } catch (error) {
+            logger.warn('Could not discover base URL from login API', {
+                error: error.message
+            });
+        }
+
+        // Method 2: Fallback to constructing from siteId
+        // SiteId format is usually like "1234" where first 1-2 digits might indicate pod
+        // But this is unreliable, better to use Method 1
+        const podNumber = this.siteId ? this.siteId.substring(0, 2).padStart(2, '0') : '01';
+        this.baseUrl = `https://secure.p${podNumber}.eloqua.com`;
+        
+        logger.warn('Using fallback base URL', {
+            installId: this.installId,
+            siteId: this.siteId,
+            baseUrl: this.baseUrl
+        });
+
+        return this.baseUrl;
     }
 
     /**
@@ -23,7 +62,7 @@ class EloquaService {
      */
     async getAccessToken() {
         const consumer = await Consumer.findOne({ installId: this.installId })
-            .select('+oauth_token +oauth_refresh_token');
+            .select('+oauth_token +oauth_refresh_token +oauth_expires_at');
         
         if (!consumer || !consumer.oauth_token) {
             throw new Error('OAuth token not found. Please authenticate the app.');
@@ -45,16 +84,25 @@ class EloquaService {
         try {
             logger.info('Refreshing OAuth token', { installId: this.installId });
 
-            const response = await axios.post('https://login.eloqua.com/auth/oauth2/token', {
+            const credentials = Buffer.from(
+                `${process.env.ELOQUA_CLIENT_ID}:${process.env.ELOQUA_CLIENT_SECRET}`
+            ).toString('base64');
+
+            const params = new URLSearchParams({
                 grant_type: 'refresh_token',
-                refresh_token: consumer.oauth_refresh_token,
-                client_id: process.env.ELOQUA_CLIENT_ID,
-                client_secret: process.env.ELOQUA_CLIENT_SECRET
-            }, {
-                headers: {
-                    'Content-Type': 'application/json'
-                }
+                refresh_token: consumer.oauth_refresh_token
             });
+
+            const response = await axios.post(
+                'https://login.eloqua.com/auth/oauth2/token',
+                params.toString(),
+                {
+                    headers: {
+                        'Authorization': `Basic ${credentials}`,
+                        'Content-Type': 'application/x-www-form-urlencoded'
+                    }
+                }
+            );
 
             // Update consumer with new tokens
             consumer.oauth_token = response.data.access_token;
@@ -80,8 +128,9 @@ class EloquaService {
     async makeRequest(method, endpoint, data = null, params = {}) {
         try {
             const token = await this.getAccessToken();
+            const baseUrl = await this.getBaseUrl();
             
-            const url = `${this.baseUrl}${endpoint}`;
+            const url = `${baseUrl}${endpoint}`;
             const queryString = buildQueryString(params);
             const fullUrl = queryString ? `${url}?${queryString}` : url;
             
@@ -99,7 +148,11 @@ class EloquaService {
                 config.data = data;
             }
 
-            logger.debug(`Eloqua API ${method} ${endpoint}`, { params, hasData: !!data });
+            logger.debug(`Eloqua API ${method} ${endpoint}`, { 
+                baseUrl,
+                params, 
+                hasData: !!data 
+            });
 
             const response = await axios(config);
 
@@ -115,10 +168,11 @@ class EloquaService {
             logger.error(`Eloqua API Error: ${method} ${endpoint}`, {
                 installId: this.installId,
                 status: statusCode,
-                error: errorMessage
+                error: errorMessage,
+                baseUrl: this.baseUrl
             });
 
-            throw new Error(`Eloqua API Error (${statusCode}): ${errorMessage}`);
+            throw new Error(`Eloqua API Error (${statusCode || 'Network'}): ${errorMessage}`);
         }
     }
 
