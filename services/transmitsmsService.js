@@ -279,6 +279,55 @@ class TransmitSmsService {
             return false;
         }
     }
+    /**
+     * Get sender IDs (virtual numbers, business names, mobile numbers)
+     */
+    async getSenderIds() {
+        try {
+            logger.debug('Fetching sender IDs from TransmitSMS');
+
+            const response = await this.makeRequest('GET', '/get-sender-ids.json');
+
+            const senderIds = {
+                'Virtual Number': [],
+                'Business Name': [],
+                'Mobile Number': []
+            };
+
+            if (response.result && response.result.caller_ids) {
+                const callerIds = response.result.caller_ids;
+                
+                // Extract all types of sender IDs
+                if (callerIds['Virtual Number']) {
+                    senderIds['Virtual Number'] = callerIds['Virtual Number'];
+                }
+                
+                if (callerIds['Business Name']) {
+                    senderIds['Business Name'] = callerIds['Business Name'];
+                }
+                
+                if (callerIds['Mobile Number']) {
+                    senderIds['Mobile Number'] = callerIds['Mobile Number'];
+                }
+            }
+
+            logger.debug('Sender IDs fetched', {
+                virtualNumbers: senderIds['Virtual Number'].length,
+                businessNames: senderIds['Business Name'].length,
+                mobileNumbers: senderIds['Mobile Number'].length
+            });
+
+            return senderIds;
+        } catch (error) {
+            logger.error('Error fetching sender IDs', { error: error.message });
+            // Return empty arrays instead of failing
+            return {
+                'Virtual Number': [],
+                'Business Name': [],
+                'Mobile Number': []
+            };
+        }
+    }
 }
 
 module.exports = TransmitSmsService;

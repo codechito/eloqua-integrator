@@ -173,6 +173,28 @@
         font-weight: normal;
         margin: 0;
       }
+
+      .label-with-checkbox {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        margin-bottom: 5px;
+      }
+
+      .label-with-checkbox label {
+        margin: 0;
+      }
+
+      .label-with-checkbox .checkbox-wrapper {
+        display: flex;
+        align-items: center;
+        gap: 5px;
+      }
+
+      .label-with-checkbox .checkbox-wrapper label {
+        font-weight: normal;
+        font-size: 12px;
+      }
     </style>
   </head>
   <body>
@@ -191,11 +213,20 @@
           <div class="column-left">
             <div class="form-group">
               <label>Sender ID</label>
-              <select v-model="instance.caller_id" class="form-control">
-                <option value="">Default</option>
-                <option v-for="number in sender_ids['Virtual Number']" v-bind:value="number" :key="'vn-' + number">{{ number }}</option>
-                <option v-for="number in sender_ids['Business Name']" v-bind:value="number" :key="'bn-' + number">{{ number }}</option>
-                <option v-for="field in fields" v-bind:value="'##' + field.internalName" :key="'f-' + field.internalName">{{ field.name }}</option>
+              <select v-model="instance.caller_id" class="form-control" :disabled="loadingSenderIds">
+                <option value="">{{ loadingSenderIds ? 'Loading...' : 'Default' }}</option>
+                <optgroup v-if="sender_ids['Virtual Number'] && sender_ids['Virtual Number'].length" label="Virtual Number">
+                  <option v-for="number in sender_ids['Virtual Number']" v-bind:value="number" :key="'vn-' + number">{{ number }}</option>
+                </optgroup>
+                <optgroup v-if="sender_ids['Business Name'] && sender_ids['Business Name'].length" label="Business Name">
+                  <option v-for="number in sender_ids['Business Name']" v-bind:value="number" :key="'bn-' + number">{{ number }}</option>
+                </optgroup>
+                <optgroup v-if="sender_ids['Mobile Number'] && sender_ids['Mobile Number'].length" label="Mobile Number">
+                  <option v-for="number in sender_ids['Mobile Number']" v-bind:value="number" :key="'mn-' + number">{{ number }}</option>
+                </optgroup>
+                <optgroup label="Contact Fields">
+                  <option v-for="field in fields" v-bind:value="'##' + field.internalName" :key="'f-' + field.internalName">{{ field.name }}</option>
+                </optgroup>
               </select>
             </div>
           </div>
@@ -318,7 +349,13 @@
         <!-- Message (Full Width) -->
         <div class="full-width">
           <div class="form-group">
-            <label>Message</label>
+            <div class="label-with-checkbox">
+              <label>Message</label>
+              <div class="checkbox-wrapper">
+                <label>Merge</label>
+                <input type="checkbox" v-model="showMerge">
+              </div>
+            </div>
             
             <!-- Merge Toolbar -->
             <div v-if="showMerge" class="merge-toolbar">
@@ -355,12 +392,6 @@
                   <option value="last">Last</option>
                 </select>
               </div>
-            </div>
-            
-            <div style="margin-bottom: 5px;">
-              <label style="font-weight: normal; font-size: 12px;">
-                <input type="checkbox" v-model="showMerge"> Enable merge fields
-              </label>
             </div>
             
             <textarea 
@@ -485,7 +516,12 @@ Opt-out reply STOP"></textarea>
           saving: false,
           loadingCustomObjects: false,
           loadingFields: false,
-          sender_ids: <%-JSON.stringify(sender_ids)%>,
+          loadingSenderIds: false,
+          sender_ids: {
+            'Virtual Number': [],
+            'Business Name': [],
+            'Mobile Number': []
+          },
           selectedCustomObject: null,
           previousCustomObjectId: null,
           customObjectsCache: {},
@@ -498,6 +534,44 @@ Opt-out reply STOP"></textarea>
           cdoMergeFields: []
         },
         methods: {
+          loadSenderIds: function() {
+            var vm = this;
+            vm.loadingSenderIds = true;
+            
+            console.log('Loading sender IDs...');
+            
+            axios.get('/eloqua/action/ajax/sender-ids/' + vm.consumer.installId + '/' + vm.consumer.SiteId)
+              .then(function(response) {
+                console.log('Sender IDs response:', response.data);
+                
+                if (response.data.result && response.data.result.caller_ids) {
+                  vm.sender_ids = {
+                    'Virtual Number': response.data.result.caller_ids['Virtual Number'] || [],
+                    'Business Name': response.data.result.caller_ids['Business Name'] || [],
+                    'Mobile Number': response.data.result.caller_ids['Mobile Number'] || []
+                  };
+                  
+                  console.log('Sender IDs loaded:', vm.sender_ids);
+                } else {
+                  console.warn('No sender IDs found in response');
+                }
+                
+                vm.loadingSenderIds = false;
+              })
+              .catch(function(error) {
+                console.error('Error loading sender IDs:', error);
+                vm.loadingSenderIds = false;
+                vm.status = {
+                  error: 'Failed to load sender IDs: ' + (error.response?.data?.message || error.message)
+                };
+                vm.fade = true;
+                setTimeout(function() {
+                  vm.fade = false;
+                  vm.status = {};
+                }, 3000);
+              });
+          },
+          
           insertMerge: function(value) {
             if (!value) return;
             
@@ -794,6 +868,10 @@ Opt-out reply STOP"></textarea>
           console.log('=== Action Config Mounted ===');
           
           vm.previousCustomObjectId = vm.instance.custom_object_id || null;
+          
+          // Load sender IDs from API
+          vm.loadSenderIds();
+          
           vm.fetchOptionsmap('', null);
           
           if (vm.instance.custom_object_id) {
