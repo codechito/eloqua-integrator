@@ -9,6 +9,21 @@
     <link href="/eloqua-service/assets/css/bootstrap.min.css" rel="stylesheet">
     <link href="/eloqua-service/assets/css/main.css" rel="stylesheet">
     <link rel="stylesheet" href="https://unpkg.com/vue-select@3.0.0/dist/vue-select.css">
+    <style>
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+        .spinner {
+            border: 3px solid #f3f3f3;
+            border-top: 3px solid #4CAF50;
+            border-radius: 50%;
+            width: 40px;
+            height: 40px;
+            animation: spin 1s linear infinite;
+            margin: 0 auto;
+        }
+    </style>
   </head>
   <body>
     <div class="disabler"></div>
@@ -118,7 +133,7 @@
                 
                 <!-- Field Mappings (shown when custom object is selected and fields are loaded) -->
                 <div v-if="loadingFields" style="padding: 20px; text-align: center;">
-                    <div style="border: 3px solid #f3f3f3; border-top: 3px solid #4CAF50; border-radius: 50%; width: 40px; height: 40px; animation: spin 1s linear infinite; margin: 0 auto;"></div>
+                    <div class="spinner"></div>
                     <p style="margin-top: 10px;">Loading fields...</p>
                 </div>
                 
@@ -243,13 +258,6 @@
     <script src="/eloqua-service/assets/js/axios.min.js"></script>
     <script src="https://unpkg.com/vue-select@3.0.0"></script>
     
-    <style>
-        @keyframes spin {
-            0% { transform: rotate(0deg); }
-            100% { transform: rotate(360deg); }
-        }
-    </style>
-    
     <script type="text/javascript">
         // Parse server data with safe defaults
         var all_custom_object_fields;
@@ -320,23 +328,22 @@
                 consumer: rawConsumer,
                 status: {},
                 countries: countries,
-                customObjects: [],  // Will be loaded lazily
-                customObjectsCache: {},  // Cache loaded custom objects
+                customObjects: [],
+                customObjectsCache: {},
                 allFields: all_custom_object_fields,
-                fieldsCache: {},  // Cache loaded fields
+                fieldsCache: {},
                 actionidx: 'sendsms',
                 currentFields: [],
+                previousCustomObjectId: null, // Track previous custom object
                 fade: false,
                 saving: false,
                 loadingCustomObjects: false,
                 loadingFields: false
             },
             methods: {
-                // Lazy load custom objects with search
                 fetchCustomObjects: function(search, loading) {
                     var vm = this;
                     
-                    // Check cache first
                     var cacheKey = search || 'all';
                     if (vm.customObjectsCache[cacheKey]) {
                         vm.customObjects = vm.customObjectsCache[cacheKey];
@@ -375,22 +382,42 @@
                 
                 switchActionType: function() {
                     console.log('Switching to action type:', this.actionidx);
+                    
+                    // Reset previous custom object tracking
+                    this.previousCustomObjectId = this.consumer.actions[this.actionidx]?.custom_object_id || null;
+                    
+                    // Load fields for the new action type
                     this.loadFieldsForCurrentAction();
                 },
                 
                 onCustomObjectChange: function(customObjectId) {
-                    console.log('Custom object changed:', customObjectId);
+                    console.log('Custom object changed from', this.previousCustomObjectId, 'to', customObjectId);
                     
                     // If customObjectId is null/undefined (clear button clicked)
                     if (!customObjectId) {
-                        console.log('Custom object cleared - resetting fields');
+                        console.log('Custom object cleared - resetting everything');
                         this.clearFieldMappings();
                         this.currentFields = [];
+                        this.previousCustomObjectId = null;
+                        
+                        // Clear from allFields cache for this action type
+                        this.allFields[this.actionidx] = [];
                         return;
                     }
                     
-                    // Clear previous field mappings when changing to a different custom object
-                    this.clearFieldMappings();
+                    // Check if actually changed (not just re-selecting the same one)
+                    if (customObjectId !== this.previousCustomObjectId) {
+                        console.log('Different custom object selected - clearing previous mappings');
+                        
+                        // Clear previous field mappings
+                        this.clearFieldMappings();
+                        
+                        // Clear current fields immediately to show loading state
+                        this.currentFields = [];
+                        
+                        // Update tracking
+                        this.previousCustomObjectId = customObjectId;
+                    }
                     
                     // Load fields for the new custom object
                     this.loadFieldsForCurrentAction();
@@ -424,39 +451,52 @@
                 loadFieldsForCurrentAction: function() {
                     var vm = this;
                     
-                    // Check if fields are pre-loaded
-                    if (vm.allFields[vm.actionidx] && vm.allFields[vm.actionidx].length > 0) {
-                        vm.currentFields = vm.allFields[vm.actionidx];
-                        console.log('Using pre-loaded fields for', vm.actionidx);
-                        return;
-                    }
-                    
                     var customObjectId = vm.consumer.actions[vm.actionidx]?.custom_object_id;
                     
+                    console.log('loadFieldsForCurrentAction called for', vm.actionidx, 'with custom object:', customObjectId);
+                    
                     if (!customObjectId) {
+                        console.log('No custom object selected, clearing fields');
                         vm.currentFields = [];
                         return;
                     }
                     
-                    // Check cache
-                    if (vm.fieldsCache[customObjectId]) {
-                        vm.currentFields = vm.fieldsCache[customObjectId];
-                        vm.allFields[vm.actionidx] = vm.currentFields;
-                        console.log('Using cached fields for', customObjectId);
+                    // Check if we have pre-loaded fields for this specific custom object
+                    // Don't use allFields[actionidx] blindly - it might be from a previous custom object
+                    if (vm.allFields[vm.actionidx] && 
+                        vm.allFields[vm.actionidx].length > 0 && 
+                        vm.previousCustomObjectId === customObjectId) {
+                        console.log('Using pre-loaded fields for', vm.actionidx);
+                        vm.currentFields = vm.allFields[vm.actionidx];
                         return;
                     }
                     
-                    // Fetch fields
+                    // Check cache by custom object ID (not action type)
+                    if (vm.fieldsCache[customObjectId]) {
+                        console.log('Using cached fields for custom object', customObjectId);
+                        vm.currentFields = vm.fieldsCache[customObjectId];
+                        vm.allFields[vm.actionidx] = vm.currentFields;
+                        return;
+                    }
+                    
+                    // Fetch fields from API
                     vm.loadingFields = true;
-                    console.log('Fetching fields for', customObjectId);
+                    console.log('Fetching fields from API for custom object', customObjectId);
                     
                     axios.get('/eloqua/action/ajax/customobject/' + vm.consumer.installId + '/' + vm.consumer.SiteId + '/' + customObjectId)
                         .then(function(response) {
+                            console.log('Fields fetched successfully:', response.data.fields?.length || 0, 'fields');
+                            
+                            // Update current fields
                             vm.currentFields = response.data.fields || [];
-                            vm.allFields[vm.actionidx] = vm.currentFields;
+                            
+                            // Cache by custom object ID
                             vm.fieldsCache[customObjectId] = vm.currentFields;
+                            
+                            // Also store in allFields for this action type
+                            vm.allFields[vm.actionidx] = vm.currentFields;
+                            
                             vm.loadingFields = false;
-                            console.log('Fields loaded:', vm.currentFields.length);
                         })
                         .catch(function(error) {
                             console.error('Error fetching fields:', error);
@@ -531,10 +571,13 @@
                     return vm.allFields[k] && vm.allFields[k].length > 0; 
                 }));
                 
+                // Set initial previous custom object ID
+                vm.previousCustomObjectId = vm.consumer.actions[vm.actionidx]?.custom_object_id || null;
+                
                 // Load fields for current action
                 vm.loadFieldsForCurrentAction();
                 
-                // Initial lazy load of custom objects (will be triggered by vue-select)
+                // Initial lazy load of custom objects
                 vm.fetchCustomObjects('', null);
             }
         });
