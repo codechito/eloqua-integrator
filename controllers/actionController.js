@@ -118,7 +118,7 @@ class ActionController {
     });
 
     /**
-     * Get configure page
+     * Get action configure page
      * GET /eloqua/action/configure
      */
     static configure = asyncHandler(async (req, res) => {
@@ -131,6 +131,10 @@ class ActionController {
             return res.status(404).send('Consumer not found');
         }
 
+        // Store in session
+        req.session.installId = installId;
+        req.session.siteId = siteId;
+
         let instance = await ActionInstance.findOne({ instanceId });
         
         if (!instance) {
@@ -138,44 +142,49 @@ class ActionController {
                 instanceId,
                 installId,
                 SiteId: siteId,
-                message: '',
-                send_mode: 'all',
                 message_expiry: 'NO',
-                message_validity: 1
+                message_validity: 1,
+                send_mode: 'all'
             };
         }
 
-        // Get Eloqua data
-        const eloquaService = new EloquaService(installId, siteId);
-        
-        const custom_objects = await eloquaService.getCustomObjects('', 100);
-        const contactFieldsData = await eloquaService.getContactFields(200);
-        logger.info('Contact fields', contactFieldsData);
-        const merge_fields = contactFieldsData.elements || [];
+        // Get countries data
+        const countries = require('../data/countries.json');
 
-        // Get sender IDs from TransmitSMS
-        let sender_ids = { 'Virtual Number': [], 'Business Name': [] };
-        if (consumer.transmitsms_api_key && consumer.transmitsms_api_secret) {
-            try {
-                const smsService = new TransmitSmsService(
-                    consumer.transmitsms_api_key,
-                    consumer.transmitsms_api_secret
-                );
-                sender_ids = await smsService.getSenderIds();
-            } catch (error) {
-                logger.warn('Could not fetch sender IDs', { error: error.message });
-            }
+        // Get sender IDs
+        let sender_ids = {
+            'Virtual Number': [],
+            'Business Name': [],
+            'Mobile Number': []
+        };
+
+        try {
+            const transmitSmsService = new TransmitSmsService(
+                consumer.transmitsms_api_key,
+                consumer.transmitsms_api_secret
+            );
+            
+            sender_ids = await transmitSmsService.getSenderIds();
+        } catch (error) {
+            logger.warn('Could not fetch sender IDs', { error: error.message });
         }
 
-        const countries = require('../data/countries.json');
+        // Get custom objects
+        let custom_objects = { elements: [] };
+        try {
+            const eloquaService = new EloquaService(installId, siteId);
+            custom_objects = await eloquaService.getCustomObjects('', 100);
+        } catch (error) {
+            logger.warn('Could not fetch custom objects', { error: error.message });
+        }
 
         res.render('action-config', {
             consumer: consumer.toObject(),
             instance,
             custom_objects,
-            merge_fields,
+            countries,
             sender_ids,
-            countries
+            merge_fields: [] // Will be loaded via AJAX
         });
     });
 
@@ -668,6 +677,39 @@ class ActionController {
                 error: 'Failed to fetch fields',
                 message: error.message,
                 fields: []
+            });
+        }
+    });
+
+    /**
+     * Get contact fields (AJAX)
+     * GET /eloqua/action/ajax/contactfields/:installId/:siteId
+     */
+    static getContactFields = asyncHandler(async (req, res) => {
+        const { installId, siteId } = req.params;
+
+        logger.debug('AJAX: Fetching contact fields', { installId });
+
+        const eloquaService = new EloquaService(installId, siteId);
+        
+        try {
+            const contactFields = await eloquaService.getContactFields(1000);
+
+            logger.debug('Contact fields fetched', { 
+                count: contactFields.items?.length || 0 
+            });
+
+            res.json(contactFields);
+        } catch (error) {
+            logger.error('Error fetching contact fields', {
+                installId,
+                error: error.message
+            });
+
+            res.status(500).json({
+                error: 'Failed to fetch contact fields',
+                message: error.message,
+                items: []
             });
         }
     });

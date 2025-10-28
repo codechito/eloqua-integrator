@@ -246,8 +246,11 @@ class EloquaService {
     /**
      * Get contact fields
      */
-    async getContactFields(count = 200) {
-        const params = { count };
+    async getContactFields(limit = 1000) {
+        const params = { 
+            limit,
+            offset: 0
+        };
         return await this.makeRequest('GET', '/api/bulk/2.0/contacts/fields', null, params);
     }
 

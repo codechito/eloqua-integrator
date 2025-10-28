@@ -70,4 +70,10 @@ router.get('/ajax/sender-ids/:installId/:siteId',
     ActionController.getSenderIds
 );
 
+// Add this new route
+router.get('/ajax/contactfields/:installId/:siteId',
+    sessionAuth,
+    ActionController.getContactFields
+);
+
 module.exports = router;
