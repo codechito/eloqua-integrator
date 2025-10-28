@@ -136,10 +136,11 @@
         </div>
         
         <div class="container-fluid">
+          <!-- Row 1: Sender ID (Left) and Recipient Field (Right) -->
           <div class="row">
             <div class="col-md-6" style="display: inline-block;width: 240px;vertical-align: top;margin-left: -10px;">
               <div class="form-group">
-                <label for="message">Sender ID</label><br>
+                <label for="sender_id">Sender ID</label><br>
                 <select v-model="instance.caller_id" style="width: 240px; height: 35px;" class="form-control">
                   <option value="">Default</option>
                   <option v-for="number in sender_ids['Virtual Number']" v-bind:value="number" :key="'vn-' + number">{{ number }}</option>
@@ -150,7 +151,7 @@
             </div>
             <div class="col-md-6" style="width: 240px;float: right;margin-right: 20px;">
               <div class="form-group">
-                <label for="message">Recipient Field</label><br/>
+                <label for="recipient_field">Recipient Field</label><br/>
                 <select v-model="instance.recipient_field" style="width: 240px; display:inline;" class="form-control">
                   <option v-for="field in fields" v-bind:value="field.id ? field.id + '__' + field.internalName : field.internalName" :key="field.internalName">{{ field.name }}</option>
                 </select>
@@ -158,10 +159,11 @@
             </div>
           </div>
           
+          <!-- Row 2: Custom Object Mapping (Left) and Country Field (Right) -->
           <div class="row">
             <div class="col-md-6" style="display: inline-block;width: 240px;vertical-align: top;margin-left: -10px;">
               <div class="form-group">
-                <label for="message">Custom Object Mapping</label><br>
+                <label for="custom_object">Custom Object Mapping</label><br>
                 <v-select
                   :key="'co-action'"
                   label="name"
@@ -199,7 +201,7 @@
             <div class="row">
               <div class="col-md-6" style="display: inline-block;width: 240px;vertical-align: top;margin-left: -10px;">
                 <div class="form-group">
-                  <label for="message">Map Contact Mobile To</label><br/>
+                  <label for="mobile_field">Map Contact Mobile To</label><br/>
                   <select v-model="instance.mobile_field" style="width:240px; text-align:left;" class="form-control">
                     <option value="">-- Select Field --</option>
                     <option v-for="field in cdofields" v-bind:value="field.internalName" :key="field.internalName">{{ field.name }}</option>
@@ -208,7 +210,7 @@
               </div>
               <div class="col-md-6" style="width: 240px;float: right;margin-right: 20px;">
                 <div class="form-group">
-                  <label for="message">Map Contact Email To *</label><br/>
+                  <label for="email_field">Map Contact Email To *</label><br/>
                   <select v-model="instance.email_field" style="width:240px; text-align:left;" class="form-control">
                     <option value="">-- Select Field --</option>
                     <option v-for="field in cdofields" v-bind:value="field.internalName" :key="field.internalName">{{ field.name }}</option>
@@ -220,7 +222,7 @@
             <div class="row">
               <div class="col-md-6" style="display: inline-block;width: 240px;vertical-align: top;margin-left: -10px;">
                 <div class="form-group">
-                  <label for="message">Map Campaign Title To</label><br/>
+                  <label for="title_field">Map Campaign Title To</label><br/>
                   <select v-model="instance.title_field" style="width:240px; text-align:left;" class="form-control">
                     <option value="">-- Select Field --</option>
                     <option v-for="field in cdofields" v-bind:value="field.internalName" :key="field.internalName">{{ field.name }}</option>
@@ -229,7 +231,7 @@
               </div>
               <div class="col-md-6" style="width: 240px;float: right;margin-right: 20px;">
                 <div class="form-group">
-                  <label for="message">Map Notification To</label><br/>
+                  <label for="notification_field">Map Notification To</label><br/>
                   <select v-model="instance.notification_field" style="width:240px; text-align:left;" class="form-control">
                     <option value="">-- Select Field --</option>
                     <option v-for="field in cdofields" v-bind:value="field.internalName" :key="field.internalName">{{ field.name }}</option>
@@ -241,7 +243,7 @@
             <div class="row">
               <div class="col-md-6" style="display: inline-block;width: 240px;vertical-align: top;margin-left: -10px;">
                 <div class="form-group">
-                  <label for="message">Map Outgoing Message To</label><br/>
+                  <label for="outgoing_field">Map Outgoing Message To</label><br/>
                   <select v-model="instance.outgoing_field" style="width:240px; text-align:left;" class="form-control">
                     <option value="">-- Select Field --</option>
                     <option v-for="field in cdofields" v-bind:value="field.internalName" :key="field.internalName">{{ field.name }}</option>
@@ -250,7 +252,7 @@
               </div>
               <div class="col-md-6" style="width: 240px;float: right;margin-right: 20px;">
                 <div class="form-group">
-                  <label for="message">Map Virtual Number To</label><br/>
+                  <label for="vn_field">Map Virtual Number To</label><br/>
                   <select v-model="instance.vn_field" style="width:240px; text-align:left;" class="form-control">
                     <option value="">-- Select Field --</option>
                     <option v-for="field in cdofields" v-bind:value="field.internalName" :key="field.internalName">{{ field.name }}</option>
@@ -271,7 +273,7 @@
         </div>
         
         <div class="form-group">
-          <label for="message">Pending Message Expiry</label><br/>
+          <label for="message_expiry">Pending Message Expiry</label><br/>
           <select style="width:100px; display:inline;" v-model="instance.message_expiry" class="form-control">
             <option value="YES">YES</option>
             <option value="NO">NO</option>
@@ -345,7 +347,7 @@
           loadingCustomObjects: false,
           loadingFields: false,
           sender_ids: <%-JSON.stringify(sender_ids)%>,
-          selectedCustomObject: null,  // Store full object for v-select
+          selectedCustomObject: null,
           previousCustomObjectId: null,
           customObjectsCache: {},
           fieldsCache: {}
@@ -443,11 +445,9 @@
             console.log('Changed from', previousId, 'to', customObjectId);
             console.log('Selected object:', selectedObject);
             
-            // Update instance with new ID
             vm.$set(vm.instance, 'custom_object_id', customObjectId);
             vm.selectedCustomObject = selectedObject;
             
-            // If clearing
             if (!customObjectId) {
               console.log('Clearing custom object and field mappings');
               vm.clearFieldMappings();
@@ -456,7 +456,6 @@
               return;
             }
             
-            // If changed to different custom object
             if (customObjectId !== previousId) {
               console.log('Different custom object selected - clearing field mappings');
               vm.clearFieldMappings();
@@ -464,7 +463,6 @@
               vm.previousCustomObjectId = customObjectId;
             }
             
-            // Load fields
             vm.getFields();
           },
           
@@ -487,7 +485,6 @@
               return;
             }
             
-            // Check cache
             if (vm.fieldsCache[customObjectId]) {
               console.log('Using cached fields for', customObjectId);
               vm.cdofields = vm.fieldsCache[customObjectId];
@@ -651,10 +648,8 @@
           
           vm.previousCustomObjectId = vm.instance.custom_object_id || null;
           
-          // Load custom objects
           vm.fetchOptionsmap('', null);
           
-          // Load fields if custom object is already selected
           if (vm.instance.custom_object_id) {
             vm.getFields();
           }
