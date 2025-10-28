@@ -31,17 +31,17 @@ const ActionInstanceSchema = new mongoose.Schema({
     // SMS Configuration
     message: {
         type: String,
-        required: true
+        required: false
     },
     caller_id: {
         type: String,
-        trim: true
+        trim: false
     },
     
     // Field Mappings
     recipient_field: {
         type: String,
-        required: true,
+        required: false,
         trim: true
     },
     country_field: {
