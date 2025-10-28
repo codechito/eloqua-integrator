@@ -113,6 +113,7 @@ class AppController {
         });
     });
 
+
     /**
      * Get app configuration page
      * GET /eloqua/app/configure
@@ -120,7 +121,7 @@ class AppController {
     static configure = asyncHandler(async (req, res) => {
         const { installId, siteId } = req.query;
 
-        logger.info('Loading configuration page', { installId });
+        logger.info('Loading configuration page', { installId, siteId });
 
         const consumer = await Consumer.findOne({ installId });
         
@@ -129,26 +130,28 @@ class AppController {
                 <!DOCTYPE html>
                 <html>
                 <head>
-                    <title>Error</title>
+                    <title>Consumer Not Found</title>
                     <style>
                         body {
                             font-family: Arial, sans-serif;
-                            text-align: center;
-                            padding: 50px;
+                            display: flex;
+                            justify-content: center;
+                            align-items: center;
+                            height: 100vh;
+                            margin: 0;
                             background: #f5f5f5;
                         }
-                        .error {
+                        .container {
+                            text-align: center;
                             background: white;
                             padding: 40px;
                             border-radius: 8px;
                             box-shadow: 0 2px 10px rgba(0,0,0,0.1);
-                            max-width: 500px;
-                            margin: 0 auto;
                         }
                     </style>
                 </head>
                 <body>
-                    <div class="error">
+                    <div class="container">
                         <h2>Consumer Not Found</h2>
                         <p>Please install the app first.</p>
                     </div>
@@ -157,39 +160,19 @@ class AppController {
             `);
         }
 
-        // Check if OAuth token exists
-        const consumerWithToken = await Consumer.findOne({ installId })
-            .select('+oauth_token');
+        // Store in session for AJAX calls
+        req.session.installId = installId;
+        req.session.siteId = siteId || consumer.SiteId;
+        req.session.hasOAuth = !!consumer.oauth_token;
 
-        if (!consumerWithToken.oauth_token) {
-            // Redirect to OAuth if not authorized
-            const authUrl = OAuthService.getAuthorizationUrl(installId, installId);
-            
-            logger.info('OAuth token missing, redirecting to authorization', { installId });
-            
-            return res.redirect(authUrl);
-        }
-
-        // Get custom objects from Eloqua
-        let custom_objects = { elements: [] };
-        try {
-            const eloquaService = new EloquaService(installId, siteId);
-            custom_objects = await eloquaService.getCustomObjects('', 100);
-            
-            logger.info('Fetched custom objects', { 
-                installId, 
-                count: custom_objects.elements?.length || 0 
-            });
-        } catch (error) {
-            logger.warn('Could not fetch custom objects', { 
-                installId, 
-                error: error.message 
-            });
-        }
-
-        // Get countries data
-        const countries = require('../data/countries.json');
-
+        // Initialize data structures
+        let all_custom_object_fields = {
+            sendsms: [],
+            receivesms: [],
+            incomingsms: [],
+            tracked_link: []
+        };
+        
         // Set default callback URLs if not set
         if (!consumer.dlr_callback) {
             consumer.dlr_callback = `${process.env.APP_BASE_URL}/webhooks/dlr`;
@@ -201,10 +184,61 @@ class AppController {
             consumer.link_hits_callback = `${process.env.APP_BASE_URL}/webhooks/linkhit`;
         }
 
-        // Render configuration page
+        try {
+            const eloquaService = new EloquaService(installId, siteId);
+            
+            // Only pre-fetch fields for ALREADY CONFIGURED custom objects
+            logger.info('Pre-fetching fields for configured custom objects', { installId });
+            
+            const actionTypes = ['sendsms', 'receivesms', 'incomingsms', 'tracked_link'];
+            
+            for (const actionType of actionTypes) {
+                if (consumer.actions && 
+                    consumer.actions[actionType] && 
+                    consumer.actions[actionType].custom_object_id) {
+                    
+                    const customObjectId = consumer.actions[actionType].custom_object_id;
+                    
+                    try {
+                        const customObjectData = await eloquaService.getCustomObject(customObjectId);
+                        all_custom_object_fields[actionType] = customObjectData.fields || [];
+                        
+                        logger.info(`Pre-fetched fields for ${actionType}`, { 
+                            customObjectId,
+                            fieldCount: customObjectData.fields?.length || 0
+                        });
+                    } catch (error) {
+                        logger.warn(`Could not pre-fetch fields for ${actionType}`, { 
+                            customObjectId,
+                            error: error.message 
+                        });
+                        all_custom_object_fields[actionType] = [];
+                    }
+                }
+            }
+            
+        } catch (error) {
+            logger.error('Error pre-fetching custom object fields', { 
+                installId, 
+                error: error.message
+            });
+            
+            // Don't fail the whole page, just log the error
+            // Fields will be loaded via AJAX if needed
+        }
+
+        // Get countries data
+        const countries = require('../data/countries.json');
+
+        logger.info('Rendering configuration page', { 
+            installId,
+            preLoadedFields: Object.keys(all_custom_object_fields).filter(k => all_custom_object_fields[k].length > 0)
+        });
+
+        // Render page with all required data
         res.render('app-config', {
             consumer: consumer.toObject(),
-            custom_objects,
+            all_custom_object_fields,  // Always pass this, even if empty
             countries
         });
     });
