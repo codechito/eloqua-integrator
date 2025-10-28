@@ -12,6 +12,79 @@ const {
 const { asyncHandler } = require('../middleware');
 
 class ActionController {
+
+    /**
+     * Get sender IDs from TransmitSMS
+     * GET /eloqua/action/ajax/sender-ids/:installId/:siteId
+     */
+    static getSenderIds = asyncHandler(async (req, res) => {
+        const { installId, siteId } = req.params;
+
+        logger.info('Fetching sender IDs', { installId, siteId });
+
+        const consumer = await Consumer.findOne({ installId });
+        
+        if (!consumer) {
+            return res.status(404).json({ error: 'Consumer not found' });
+        }
+
+        if (!consumer.transmitsms_api_key || !consumer.transmitsms_api_secret) {
+            return res.status(400).json({ 
+                error: 'TransmitSMS credentials not configured',
+                result: {
+                    caller_ids: {
+                        'Virtual Number': [],
+                        'Business Name': [],
+                        'Mobile Number': []
+                    }
+                }
+            });
+        }
+
+        try {
+            const transmitSmsService = new TransmitSmsService(
+                consumer.transmitsms_api_key,
+                consumer.transmitsms_api_secret
+            );
+
+            const senderIds = await transmitSmsService.getSenderIds();
+
+            logger.info('Sender IDs fetched successfully', { 
+                installId,
+                virtualNumbers: senderIds['Virtual Number']?.length || 0,
+                businessNames: senderIds['Business Name']?.length || 0,
+                mobileNumbers: senderIds['Mobile Number']?.length || 0
+            });
+
+            res.json({
+                result: {
+                    caller_ids: senderIds
+                },
+                error: {
+                    code: 'SUCCESS',
+                    description: 'OK'
+                }
+            });
+
+        } catch (error) {
+            logger.error('Error fetching sender IDs', {
+                installId,
+                error: error.message
+            });
+
+            res.status(500).json({
+                error: 'Failed to fetch sender IDs',
+                message: error.message,
+                result: {
+                    caller_ids: {
+                        'Virtual Number': [],
+                        'Business Name': [],
+                        'Mobile Number': []
+                    }
+                }
+            });
+        }
+    });
     /**
      * Create action instance
      * GET /eloqua/action/create

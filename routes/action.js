@@ -9,8 +9,8 @@ const {
 } = require('../middleware');
 const sessionAuth = require('../middleware/sessionAuth');
 
-// Action service lifecycle routes
-router.get('/create', 
+// Action service lifecycle
+router.post('/create', 
     validateQueryParams('installId', 'siteId'),
     verifyInstallation,
     ActionController.create
@@ -51,12 +51,12 @@ router.post('/delete',
 
 // AJAX endpoints with session auth (NO verifyInstallation or verifyOAuthToken)
 router.get('/ajax/customobjects/:installId/:siteId/customObject',
-    sessionAuth,
+    sessionAuth,  // Use session-based auth instead
     ActionController.getCustomObjects
 );
 
 router.get('/ajax/customobject/:installId/:siteId/:customObjectId',
-    sessionAuth,
+    sessionAuth,  // Use session-based auth instead
     ActionController.getCustomObjectFields
 );
 
@@ -65,7 +65,6 @@ router.post('/ajax/testsms/:installId/:siteId/:country/:phone',
     ActionController.testSms
 );
 
-// Get sender IDs from TransmitSMS
 router.get('/ajax/sender-ids/:installId/:siteId',
     sessionAuth,
     ActionController.getSenderIds
