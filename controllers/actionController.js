@@ -522,17 +522,43 @@ class ActionController {
     });
 
     /**
-     * Get custom objects (AJAX)
+     * Get custom objects (AJAX) with pagination and search
      * GET /eloqua/action/ajax/customobjects/:installId/:siteId/customObject
      */
     static getCustomObjects = asyncHandler(async (req, res) => {
         const { installId, siteId } = req.params;
-        const { search } = req.query;
+        const { search = '', page = 1, count = 50 } = req.query;
 
+        logger.debug('AJAX: Fetching custom objects', { 
+            installId, 
+            search, 
+            page, 
+            count 
+        });
+
+        // Use auth from session middleware
         const eloquaService = new EloquaService(installId, siteId);
-        const customObjects = await eloquaService.getCustomObjects(search || '', 100);
+        
+        try {
+            const customObjects = await eloquaService.getCustomObjects(search, count);
 
-        res.json(customObjects);
+            logger.debug('Custom objects fetched', { 
+                count: customObjects.elements?.length || 0 
+            });
+
+            res.json(customObjects);
+        } catch (error) {
+            logger.error('Error fetching custom objects', {
+                installId,
+                error: error.message
+            });
+
+            res.status(500).json({
+                error: 'Failed to fetch custom objects',
+                message: error.message,
+                elements: []
+            });
+        }
     });
 
     /**
@@ -542,10 +568,34 @@ class ActionController {
     static getCustomObjectFields = asyncHandler(async (req, res) => {
         const { installId, siteId, customObjectId } = req.params;
 
-        const eloquaService = new EloquaService(installId, siteId);
-        const customObject = await eloquaService.getCustomObject(customObjectId);
+        logger.debug('AJAX: Fetching custom object fields', { 
+            installId, 
+            customObjectId 
+        });
 
-        res.json(customObject);
+        const eloquaService = new EloquaService(installId, siteId);
+        
+        try {
+            const customObject = await eloquaService.getCustomObject(customObjectId);
+
+            logger.debug('Custom object fields fetched', { 
+                fieldCount: customObject.fields?.length || 0 
+            });
+
+            res.json(customObject);
+        } catch (error) {
+            logger.error('Error fetching custom object fields', {
+                installId,
+                customObjectId,
+                error: error.message
+            });
+
+            res.status(500).json({
+                error: 'Failed to fetch fields',
+                message: error.message,
+                fields: []
+            });
+        }
     });
 }
 

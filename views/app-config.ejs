@@ -227,178 +227,210 @@
     <script src="/eloqua-service/assets/js/axios.min.js"></script>
     <script src="https://unpkg.com/vue-select@3.0.0"></script>
     <script type="text/javascript">
-        // Parse server data
-        var custom_objects = <%-JSON.stringify(custom_objects)%>;
-        var rawConsumer = <%-JSON.stringify(consumer)%>;
-        var countries = <%-JSON.stringify(countries)%>;
+    // Parse server data
+    var all_custom_object_fields = <%-JSON.stringify(all_custom_object_fields)%>;
+    var rawConsumer = <%-JSON.stringify(consumer)%>;
+    var countries = <%-JSON.stringify(countries)%>;
 
-        // Ensure consumer has proper structure
-        if (!rawConsumer.actions) {
-            rawConsumer.actions = {
-                sendsms: {},
-                receivesms: {},
-                incomingsms: {},
-                tracked_link: {}
-            };
+    // Ensure consumer has proper structure
+    if (!rawConsumer.actions) {
+        rawConsumer.actions = {
+            sendsms: {},
+            receivesms: {},
+            incomingsms: {},
+            tracked_link: {}
+        };
+    }
+
+    ['sendsms', 'receivesms', 'incomingsms', 'tracked_link'].forEach(function(actionType) {
+        if (!rawConsumer.actions[actionType]) {
+            rawConsumer.actions[actionType] = {};
         }
+    });
 
-        // Ensure each action type exists
-        ['sendsms', 'receivesms', 'incomingsms', 'tracked_link'].forEach(function(actionType) {
-            if (!rawConsumer.actions[actionType]) {
-                rawConsumer.actions[actionType] = {};
-            }
-        });
+    if (!rawConsumer.default_country) {
+        rawConsumer.default_country = 'Australia';
+    }
 
-        // Set default values
-        if (!rawConsumer.default_country) {
-            rawConsumer.default_country = 'Australia';
-        }
-
-        var comap = custom_objects.elements ? JSON.parse(JSON.stringify(custom_objects.elements)) : [];
-        
-        Vue.component('v-select', VueSelect.VueSelect);
-        
-        var app = new Vue({
-            el: '#consumer',
-            data: {
-                consumer: rawConsumer,
-                status: {},
-                countries: countries,
-                custom_objects: custom_objects,
-                actionidx: 'sendsms',
-                comap: comap,
-                fields: {
-                    'sendsms': [],
-                    'receivesms': [],
-                    'incomingsms': [],
-                    'tracked_link': []
-                },
-                fade: false,
-                saving: false
+    Vue.component('v-select', VueSelect.VueSelect);
+    
+    var app = new Vue({
+        el: '#consumer',
+        data: {
+            consumer: rawConsumer,
+            status: {},
+            countries: countries,
+            customObjects: [],  // Will be loaded lazily
+            customObjectsCache: {},  // Cache loaded custom objects
+            allFields: all_custom_object_fields,
+            fieldsCache: {},  // Cache loaded fields
+            actionidx: 'sendsms',
+            currentFields: [],
+            fade: false,
+            saving: false,
+            loadingCustomObjects: false,
+            loadingFields: false
+        },
+        methods: {
+            // Lazy load custom objects with search
+            fetchCustomObjects: function(search, loading) {
+                var vm = this;
+                
+                // Check cache first
+                var cacheKey = search || 'all';
+                if (vm.customObjectsCache[cacheKey]) {
+                    vm.customObjects = vm.customObjectsCache[cacheKey];
+                    return;
+                }
+                
+                if (loading) loading(true);
+                vm.loadingCustomObjects = true;
+                
+                axios.get('/eloqua/action/ajax/customobjects/' + vm.consumer.installId + '/' + vm.consumer.SiteId + '/customObject', {
+                    params: { search: search || '', count: 100 }
+                })
+                .then(function(response) {
+                    vm.customObjects = response.data.elements || [];
+                    vm.customObjectsCache[cacheKey] = vm.customObjects;
+                    console.log('Custom objects loaded:', vm.customObjects.length);
+                    if (loading) loading(false);
+                    vm.loadingCustomObjects = false;
+                })
+                .catch(function(error) {
+                    console.error('Error loading custom objects:', error);
+                    vm.status = {
+                        error: 'Failed to load custom objects: ' + (error.response?.data?.message || error.message)
+                    };
+                    vm.fade = true;
+                    setTimeout(function() {
+                        vm.fade = false;
+                        vm.status = {};
+                    }, 5000);
+                    if (loading) loading(false);
+                    vm.loadingCustomObjects = false;
+                });
             },
-            methods: {
-                fetchOptionsmap: function(search, loading) {
-                    var vm = this;
-                    
-                    if (!vm.consumer.installId || !vm.consumer.SiteId) {
-                        console.warn('Missing installId or SiteId');
-                        return;
-                    }
             
-                    const options = {
-                        method: "GET",
-                        url: "/eloqua/action/ajax/customobjects/" + vm.consumer.installId + "/" + vm.consumer.SiteId + "/customObject?search=" + encodeURIComponent(search || '')
-                    };
-                    
-                    axios(options)
-                        .then(function(response) {
-                            console.log("Custom objects fetched", response.data);
-                            vm.comap = response.data.elements || [];
-                        })
-                        .catch(function (error) {
-                            console.error("Error fetching custom objects", error);
-                            vm.comap = custom_objects.elements || [];
-                        });
-                },
+            switchActionType: function() {
+                this.loadFieldsForCurrentAction();
+            },
+            
+            onCustomObjectChange: function(customObjectId) {
+                this.loadFieldsForCurrentAction();
+            },
+            
+            loadFieldsForCurrentAction: function() {
+                var vm = this;
                 
-                getFields: function() {
-                    var vm = this;
-                    
-                    if (!vm.consumer.actions[vm.actionidx]) {
-                        vm.consumer.actions[vm.actionidx] = {};
-                    }
-                    
-                    var customObjectId = vm.consumer.actions[vm.actionidx].custom_object_id;
-                    
-                    if (!customObjectId) {
-                        vm.fields[vm.actionidx] = [];
-                        return;
-                    }
-                    
-                    if (!vm.consumer.installId || !vm.consumer.SiteId) {
-                        console.warn('Missing installId or SiteId');
-                        return;
-                    }
-                    
-                    const options = {
-                        method: "GET",
-                        url: "/eloqua/action/ajax/customobject/" + vm.consumer.installId + "/" + vm.consumer.SiteId + "/" + customObjectId
-                    };
-                    
-                    axios(options)
-                        .then(function(response) {
-                            console.log("Fields fetched for", vm.actionidx, response.data);
-                            vm.fields[vm.actionidx] = response.data.fields || [];
-                        })
-                        .catch(function (error) {
-                            console.error("Error fetching fields", error);
-                            vm.fields[vm.actionidx] = [];
-                        });
-                },
+                // Check if fields are pre-loaded
+                if (vm.allFields[vm.actionidx] && vm.allFields[vm.actionidx].length > 0) {
+                    vm.currentFields = vm.allFields[vm.actionidx];
+                    console.log('Using pre-loaded fields for', vm.actionidx);
+                    return;
+                }
                 
-                saveConsumer: function() {
-                    var vm = this;
-
-                    if (!vm.consumer.transmitsms_api_key || !vm.consumer.transmitsms_api_secret) {
+                var customObjectId = vm.consumer.actions[vm.actionidx]?.custom_object_id;
+                
+                if (!customObjectId) {
+                    vm.currentFields = [];
+                    return;
+                }
+                
+                // Check cache
+                if (vm.fieldsCache[customObjectId]) {
+                    vm.currentFields = vm.fieldsCache[customObjectId];
+                    vm.allFields[vm.actionidx] = vm.currentFields;
+                    console.log('Using cached fields for', customObjectId);
+                    return;
+                }
+                
+                // Fetch fields
+                vm.loadingFields = true;
+                console.log('Fetching fields for', customObjectId);
+                
+                axios.get('/eloqua/action/ajax/customobject/' + vm.consumer.installId + '/' + vm.consumer.SiteId + '/' + customObjectId)
+                    .then(function(response) {
+                        vm.currentFields = response.data.fields || [];
+                        vm.allFields[vm.actionidx] = vm.currentFields;
+                        vm.fieldsCache[customObjectId] = vm.currentFields;
+                        vm.loadingFields = false;
+                        console.log('Fields loaded:', vm.currentFields.length);
+                    })
+                    .catch(function(error) {
+                        console.error('Error fetching fields:', error);
+                        vm.currentFields = [];
+                        vm.loadingFields = false;
                         vm.status = {
-                            error: 'API Key and Secret are required'
+                            error: 'Failed to load fields: ' + (error.response?.data?.message || error.message)
                         };
                         vm.fade = true;
                         setTimeout(function() {
                             vm.fade = false;
                             vm.status = {};
                         }, 5000);
-                        return;
-                    }
-
-                    vm.saving = true;
-                    
-                    const options = {
-                        method: "POST",
-                        url: location.pathname + location.search,
-                        headers: { 'Content-Type': 'application/json' },
-                        data: JSON.stringify({ "consumer": vm.consumer })
-                    };
-                    
-                    axios(options)
-                        .then(function(response) {
-                            vm.saving = false;
-                            vm.fade = true;
-                            console.log("Configuration saved", response);
-                            vm.status = {
-                                success: 'Configuration successfully updated'
-                            };
-
-                            setTimeout(function() {
-                                vm.fade = false;
-                                vm.status = {};
-                            }, 5000);
-                        })
-                        .catch(function (error) {
-                            vm.saving = false;
-                            vm.fade = true;
-                            console.error("Error saving configuration", error);
-                            vm.status = {
-                                error: error.response?.data?.message || 'Failed to update configuration'
-                            };
-
-                            setTimeout(function() {
-                                vm.fade = false;
-                                vm.status = {};
-                            }, 5000);
-                        });
-                }
+                    });
             },
             
-            mounted: function () {
+            saveConsumer: function() {
                 var vm = this;
-                console.log('Consumer data:', vm.consumer);
-                console.log('Custom objects:', vm.custom_objects);
+
+                if (!vm.consumer.transmitsms_api_key || !vm.consumer.transmitsms_api_secret) {
+                    vm.status = {
+                        error: 'API Key and Secret are required'
+                    };
+                    vm.fade = true;
+                    setTimeout(function() {
+                        vm.fade = false;
+                        vm.status = {};
+                    }, 5000);
+                    return;
+                }
+
+                vm.saving = true;
                 
-                // Load fields for current action type
-                vm.getFields();
+                axios.post(location.pathname + location.search, {
+                    consumer: vm.consumer
+                })
+                .then(function(response) {
+                    vm.saving = false;
+                    vm.fade = true;
+                    vm.status = {
+                        success: 'Configuration successfully updated'
+                    };
+
+                    setTimeout(function() {
+                        vm.fade = false;
+                        vm.status = {};
+                    }, 5000);
+                })
+                .catch(function (error) {
+                    vm.saving = false;
+                    vm.fade = true;
+                    vm.status = {
+                        error: error.response?.data?.message || 'Failed to update configuration'
+                    };
+
+                    setTimeout(function() {
+                        vm.fade = false;
+                        vm.status = {};
+                    }, 5000);
+                });
             }
-        });
-    </script>
+        },
+        
+        mounted: function () {
+            var vm = this;
+            console.log('App mounted');
+            console.log('Consumer:', vm.consumer.installId);
+            console.log('Pre-loaded fields:', Object.keys(vm.allFields));
+            
+            // Load fields for current action
+            vm.loadFieldsForCurrentAction();
+            
+            // Lazy load custom objects (will be triggered by vue-select when opened)
+            vm.fetchCustomObjects('', null);
+        }
+    });
+</script>
   </body>
 </html>
