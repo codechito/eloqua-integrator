@@ -118,8 +118,8 @@
                 
                 <!-- Field Mappings (shown when custom object is selected and fields are loaded) -->
                 <div v-if="loadingFields" style="padding: 20px; text-align: center;">
-                    <div class="spinner"></div>
-                    <p>Loading fields...</p>
+                    <div style="border: 3px solid #f3f3f3; border-top: 3px solid #4CAF50; border-radius: 50%; width: 40px; height: 40px; animation: spin 1s linear infinite; margin: 0 auto;"></div>
+                    <p style="margin-top: 10px;">Loading fields...</p>
                 </div>
                 
                 <div v-else-if="currentFields.length > 0">
@@ -242,6 +242,14 @@
     <script src="https://cdn.jsdelivr.net/npm/vue@2.6.11"></script>
     <script src="/eloqua-service/assets/js/axios.min.js"></script>
     <script src="https://unpkg.com/vue-select@3.0.0"></script>
+    
+    <style>
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+    </style>
+    
     <script type="text/javascript">
         // Parse server data with safe defaults
         var all_custom_object_fields;
@@ -366,11 +374,51 @@
                 },
                 
                 switchActionType: function() {
+                    console.log('Switching to action type:', this.actionidx);
                     this.loadFieldsForCurrentAction();
                 },
                 
                 onCustomObjectChange: function(customObjectId) {
+                    console.log('Custom object changed:', customObjectId);
+                    
+                    // If customObjectId is null/undefined (clear button clicked)
+                    if (!customObjectId) {
+                        console.log('Custom object cleared - resetting fields');
+                        this.clearFieldMappings();
+                        this.currentFields = [];
+                        return;
+                    }
+                    
+                    // Clear previous field mappings when changing to a different custom object
+                    this.clearFieldMappings();
+                    
+                    // Load fields for the new custom object
                     this.loadFieldsForCurrentAction();
+                },
+                
+                clearFieldMappings: function() {
+                    var vm = this;
+                    console.log('Clearing field mappings for', vm.actionidx);
+                    
+                    // Clear all field mappings for current action type
+                    if (vm.consumer.actions[vm.actionidx]) {
+                        vm.consumer.actions[vm.actionidx].mobile_field = '';
+                        vm.consumer.actions[vm.actionidx].vn_field = '';
+                        vm.consumer.actions[vm.actionidx].email_field = '';
+                        vm.consumer.actions[vm.actionidx].title_field = '';
+                        
+                        // Clear action-specific fields
+                        if (vm.actionidx === 'sendsms') {
+                            vm.consumer.actions[vm.actionidx].notification_field = '';
+                            vm.consumer.actions[vm.actionidx].outgoing_field = '';
+                        } else if (vm.actionidx === 'receivesms' || vm.actionidx === 'incomingsms') {
+                            vm.consumer.actions[vm.actionidx].response_field = '';
+                        } else if (vm.actionidx === 'tracked_link') {
+                            vm.consumer.actions[vm.actionidx].link_hits = '';
+                            vm.consumer.actions[vm.actionidx].url_field = '';
+                            vm.consumer.actions[vm.actionidx].originalurl_field = '';
+                        }
+                    }
                 },
                 
                 loadFieldsForCurrentAction: function() {
