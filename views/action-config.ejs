@@ -530,25 +530,63 @@ Opt-out reply STOP"></textarea>
         instance.send_mode = "all";
       }
 
-      console.log('Instance loaded:', instance);
+      console.log('=== Initial Data ===');
+      console.log('Instance:', instance);
+      console.log('Merge fields:', merge_fields);
+      console.log('Custom objects:', custom_objects);
 
       Vue.component('v-select', VueSelect.VueSelect);
       
       var comap = JSON.parse(JSON.stringify(custom_objects.elements || []));
       var comerge = JSON.parse(JSON.stringify(custom_objects.elements || []));
 
-      // Build contact fields for merge
+      // Build contact fields for merge with proper checks
       var contactFields = [
         {name: 'Tracked Link', value: '[tracked-link]'},
         {name: 'Unsub Reply Link', value: '[unsub-reply-link]'}
       ];
       
-      merge_fields.forEach(function(field){
-        contactFields.push({
-          name: field.name, 
-          value: '[C_' + field.internalName + ']'
+      // Check if merge_fields is an array and has items
+      if (Array.isArray(merge_fields)) {
+        console.log('Processing', merge_fields.length, 'merge fields');
+        merge_fields.forEach(function(field){
+          // Check if field has the required properties
+          if (field && field.name) {
+            var internalName = field.internalName || field.internal_name || field.id;
+            if (internalName) {
+              contactFields.push({
+                name: field.name, 
+                value: '[C_' + internalName + ']'
+              });
+            } else {
+              console.warn('Field missing internalName:', field);
+            }
+          } else {
+            console.warn('Invalid field structure:', field);
+          }
         });
-      });
+      } else if (merge_fields && typeof merge_fields === 'object') {
+        // If merge_fields is an object with elements property
+        console.log('merge_fields is object, checking for elements');
+        if (Array.isArray(merge_fields.elements)) {
+          merge_fields.elements.forEach(function(field){
+            if (field && field.name) {
+              var internalName = field.internalName || field.internal_name || field.id;
+              if (internalName) {
+                contactFields.push({
+                  name: field.name, 
+                  value: '[C_' + internalName + ']'
+                });
+              }
+            }
+          });
+        }
+      } else {
+        console.error('merge_fields is not in expected format:', merge_fields);
+      }
+
+      console.log('Contact fields built:', contactFields.length, 'fields');
+      console.log('Contact fields:', contactFields);
 
       var app = new Vue({
         el: '#sendsmsaction',
@@ -560,10 +598,10 @@ Opt-out reply STOP"></textarea>
           custom_objects: custom_objects,
           comap: comap,
           comerge: comerge,
-          fields: merge_fields,
+          fields: Array.isArray(merge_fields) ? merge_fields : (merge_fields.elements || []),
           cdofields: [],
-          recipientfields: merge_fields,
-          countryfields: merge_fields,
+          recipientfields: Array.isArray(merge_fields) ? merge_fields : (merge_fields.elements || []),
+          countryfields: Array.isArray(merge_fields) ? merge_fields : (merge_fields.elements || []),
           fade: false,
           saving: false,
           loadingCustomObjects: false,
@@ -592,9 +630,12 @@ Opt-out reply STOP"></textarea>
               .then(function(response) {
                 console.log('Sender IDs response:', response.data);
                 
-                if (response.data.result && response.data.result.caller_ids) {
-                  vm.sender_ids = response.data.result.caller_ids;
+                if (response.data && response.data['Virtual Number']) {
+                  vm.sender_ids = response.data;
                   console.log('Sender IDs loaded:', vm.sender_ids);
+                } else if (response.data.result && response.data.result.caller_ids) {
+                  vm.sender_ids = response.data.result.caller_ids;
+                  console.log('Sender IDs loaded from result:', vm.sender_ids);
                 }
                 
                 vm.loadingSenderIds = false;
@@ -609,8 +650,13 @@ Opt-out reply STOP"></textarea>
             if (!value) return;
             
             var textarea = this.$refs.messageTextarea;
-            var startPos = textarea.selectionStart;
-            var endPos = textarea.selectionEnd;
+            if (!textarea) {
+              console.error('Message textarea not found');
+              return;
+            }
+            
+            var startPos = textarea.selectionStart || 0;
+            var endPos = textarea.selectionEnd || 0;
             var currentText = this.instance.message || '';
             
             this.instance.message = currentText.substring(0, startPos) + value + currentText.substring(endPos);
@@ -634,18 +680,29 @@ Opt-out reply STOP"></textarea>
             }
             
             var vm = this;
+            console.log('Loading CDO fields for merge, CDO ID:', cdo.id);
+            
             axios.get('/eloqua/action/ajax/customobject/' + this.consumer.installId + '/' + this.consumer.SiteId + '/' + cdo.id)
               .then(function(response) {
+                console.log('CDO fields response:', response.data);
                 vm.cdoMergeFields = [];
-                response.data.fields.forEach(function(field) {
-                  vm.cdoMergeFields.push({
-                    name: field.name,
-                    value: '{{CustomObject<' + cdo.id + '>.Field<' + field.id + '>}}'
+                
+                if (response.data.fields && Array.isArray(response.data.fields)) {
+                  response.data.fields.forEach(function(field) {
+                    if (field && field.name && field.id) {
+                      vm.cdoMergeFields.push({
+                        name: field.name,
+                        value: '{{CustomObject<' + cdo.id + '>.Field<' + field.id + '>}}'
+                      });
+                    }
                   });
-                });
+                }
+                
+                console.log('CDO merge fields loaded:', vm.cdoMergeFields.length);
               })
               .catch(function(error) {
                 console.error('Error loading CDO fields:', error);
+                vm.cdoMergeFields = [];
               });
           },
           
@@ -897,6 +954,10 @@ Opt-out reply STOP"></textarea>
         mounted: function () {
           var vm = this;
           console.log('=== Action Config Mounted ===');
+          console.log('Consumer:', vm.consumer);
+          console.log('Instance:', vm.instance);
+          console.log('Fields:', vm.fields);
+          console.log('Contact Fields for Merge:', vm.contactFields);
           
           vm.previousCustomObjectId = vm.instance.custom_object_id || null;
           
