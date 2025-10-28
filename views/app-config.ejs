@@ -13,28 +13,43 @@
   <body>
     <div class="disabler"></div>
     <div id="consumer" class="container" style="width: 900px; text-align: center; padding-top: 40px">
-            <img src="/eloqua-service/assets/eloqua-connect_thumb.png" alt="Connect to Burst SMS" style="max-width: 300px;">
+            <img src="/eloqua-service/assets/images/eloqua-connect_thumb.png" alt="Connect to Burst SMS" style="max-width: 300px;" onerror="this.style.display='none'">
             <br/><br/>
-            <div v-if="status.success || status.error" v-bind:class="{ 'alert-success': status.success, 'alert-danger': status.error, 'in': fade }" class="alert alert-dismissible fade" role="alert">
+            
+            <!-- Status Messages -->
+            <div v-if="status.success || status.error" 
+                 v-bind:class="{ 'alert-success': status.success, 'alert-danger': status.error, 'in': fade }" 
+                 class="alert alert-dismissible fade" 
+                 role="alert">
                 {{ status.success || status.error }}
             </div>
-            <div class="container" style="width: 47%;float: left;text-align:left;margin-left:25px;border-right: 2px solid #ccc;height: 600px;">
+
+            <!-- Left Column: Connection Settings -->
+            <div class="container" style="width: 47%;float: left;text-align:left;margin-left:25px;border-right: 2px solid #ccc;min-height: 600px;">
                 <h4 style="font-size: 20px; font-weight: bold; text-align: left;">
                     Connection
                 </h4>
                 <br/>
                 <div class="form-group">
                     <label for="transmitsms_api_key" style="width:320px; text-align:left;">Burst SMS API Key</label>
-                    <input type="text" style="width:320px; text-align:left;" class="form-control" v-model="consumer.transmitsms_api_key"/>
+                    <input type="text" 
+                           style="width:320px; text-align:left;" 
+                           class="form-control" 
+                           v-model="consumer.transmitsms_api_key"
+                           placeholder="Enter your API Key"/>
                 </div>
                 <div class="form-group">
                     <label for="transmitsms_api_secret" style="width:320px; text-align:left;">Burst SMS API Secret</label>
-                    <input type="text" style="width:320px; text-align:left;" class="form-control" v-model="consumer.transmitsms_api_secret"/>
+                    <input type="text" 
+                           style="width:320px; text-align:left;" 
+                           class="form-control" 
+                           v-model="consumer.transmitsms_api_secret"
+                           placeholder="Enter your API Secret"/>
                 </div>
                 <div class="form-group">
                     <label for="default_country" style="width:320px; text-align:left;">Default Country for Number Formatting</label>
                     <select v-model="consumer.default_country" style="width:320px; text-align:left;" class="form-control">
-                        <option v-for="country in countries" v-bind:value="country.name">
+                        <option v-for="country in countries" v-bind:value="country.name" :key="country.name">
                             {{ country.name }}
                         </option>
                     </select>
@@ -42,21 +57,34 @@
                 </div>
                 <div class="form-group">
                     <label for="dlr_callback" style="width:320px; text-align:left;">Delivery Callback URL</label>
-                    <input type="text" style="width:320px; text-align:left;" class="form-control" v-model="consumer.dlr_callback" readonly></input>
+                    <input type="text" 
+                           style="width:320px; text-align:left;" 
+                           class="form-control" 
+                           v-model="consumer.dlr_callback" 
+                           readonly/>
                 </div>
                 <div class="form-group">
                     <label for="reply_callback" style="width:320px; text-align:left;">Reply Callback URL</label>
-                    <input type="text" style="width:320px; text-align:left;" class="form-control" v-model="consumer.reply_callback" readonly></input>
+                    <input type="text" 
+                           style="width:320px; text-align:left;" 
+                           class="form-control" 
+                           v-model="consumer.reply_callback" 
+                           readonly/>
                 </div>
                 <div class="form-group">
                     <label for="link_hits_callback" style="width:320px; text-align:left;">Link Hits Callback URL</label>
-                    <input type="text" style="width:320px; text-align:left;" class="form-control" v-model="consumer.link_hits_callback" readonly></input>
+                    <input type="text" 
+                           style="width:320px; text-align:left;" 
+                           class="form-control" 
+                           v-model="consumer.link_hits_callback" 
+                           readonly/>
                 </div>
                 <p style="font-size: 12px;">Your Burst SMS API Key and secret can be found here: <a target="_blank" href="https://burst.transmitsms.com/profile">https://burst.transmitsms.com/profile</a></p>
                 <p style="font-size: 12px;">No Account? Register here: <a target="_blank" href="https://go.burstsms.com">https://go.burstsms.com</a></p>
-                
             </div>
-            <div class="container" style="width: 47%; float:right; text-align:left; padding-left:40px;">
+
+            <!-- Right Column: Custom Object Mapping -->
+            <div class="container" style="width: 47%; float:right; text-align:left; padding-left:40px; min-height: 600px;">
                 <h4 style="font-size: 20px; font-weight: bold; text-align: left;">
                     Custom Object Mapping
                 </h4>
@@ -71,7 +99,7 @@
                     <p style="width:320px; text-align:left; font-size:11px;"><i>You can map custom object fields per each option.</i></p>
                 </div>
                 <div class="form-group">
-                    <label for="consumer.actions" style="width:320px; text-align:left;">Custom Object</label>
+                    <label for="custom_object" style="width:320px; text-align:left;">Custom Object</label>
                     <v-select  
                         label="name"
                         style="width:320px; text-align:left;" 
@@ -79,128 +107,164 @@
                         :reduce="element => element.id" 
                         :options="comap" 
                         @search="fetchOptionsmap" 
-                        @input="getFields()" >
+                        @input="getFields()"
+                        placeholder="Select Custom Object">
                     </v-select>
-                    
                 </div>
+                
+                <!-- Field Mappings -->
                 <div class="form-group">
-                    <label for="reply_callback" style="width:320px; text-align:left;">Map mobile to:</label>
+                    <label style="width:320px; text-align:left;">Map mobile to:</label>
                     <select v-model="consumer.actions[actionidx].mobile_field" style="width:320px; text-align:left;" class="form-control">
                         <option value="">-- Select Field --</option>
-                        <option v-for="field in fields[actionidx]" v-bind:value="field.internalName">
+                        <option v-for="field in fields[actionidx]" v-bind:value="field.internalName" :key="field.internalName">
                             {{ field.name }}
                         </option>
                     </select>
                 </div>
                 <div class="form-group">
-                    <label for="reply_callback" style="width:320px; text-align:left;">Map virtual number to:</label>
+                    <label style="width:320px; text-align:left;">Map virtual number to:</label>
                     <select v-model="consumer.actions[actionidx].vn_field" style="width:320px; text-align:left;" class="form-control">
                         <option value="">-- Select Field --</option>
-                        <option v-for="field in fields[actionidx]" v-bind:value="field.internalName">
+                        <option v-for="field in fields[actionidx]" v-bind:value="field.internalName" :key="field.internalName">
                             {{ field.name }}
                         </option>
                     </select>
                 </div>
                 <div class="form-group">
-                    <label for="reply_callback" style="width:320px; text-align:left;">Map email to:</label>
+                    <label style="width:320px; text-align:left;">Map email to:</label>
                     <select v-model="consumer.actions[actionidx].email_field" style="width:320px; text-align:left;" class="form-control">
                         <option value="">-- Select Field --</option>
-                        <option v-for="field in fields[actionidx]" v-bind:value="field.internalName">
+                        <option v-for="field in fields[actionidx]" v-bind:value="field.internalName" :key="field.internalName">
                             {{ field.name }}
                         </option>
                     </select>
                 </div>
                 <div class="form-group">
-                    <label for="reply_callback" style="width:320px; text-align:left;">Map campaign title to:</label>
+                    <label style="width:320px; text-align:left;">Map campaign title to:</label>
                     <select v-model="consumer.actions[actionidx].title_field" style="width:320px; text-align:left;" class="form-control">
                         <option value="">-- Select Field --</option>
-                        <option v-for="field in fields[actionidx]" v-bind:value="field.internalName">
+                        <option v-for="field in fields[actionidx]" v-bind:value="field.internalName" :key="field.internalName">
                             {{ field.name }}
                         </option>
                     </select>
                 </div>
+                
+                <!-- Conditional Fields for Send SMS -->
                 <div class="form-group" v-if="actionidx == 'sendsms'">
-                    <label for="reply_callback" style="width:320px; text-align:left;">Map notification to:</label>
+                    <label style="width:320px; text-align:left;">Map notification to:</label>
                     <select v-model="consumer.actions[actionidx].notification_field" style="width:320px; text-align:left;" class="form-control">
                         <option value="">-- Select Field --</option>
-                        <option v-for="field in fields[actionidx]" v-bind:value="field.internalName">
+                        <option v-for="field in fields[actionidx]" v-bind:value="field.internalName" :key="field.internalName">
                             {{ field.name }}
                         </option>
                     </select>
                 </div>
                 <div class="form-group" v-if="actionidx == 'sendsms'">
-                    <label for="reply_callback" style="width:320px; text-align:left;">Map outgoing message to:</label>
+                    <label style="width:320px; text-align:left;">Map outgoing message to:</label>
                     <select v-model="consumer.actions[actionidx].outgoing_field" style="width:320px; text-align:left;" class="form-control">
                         <option value="">-- Select Field --</option>
-                        <option v-for="field in fields[actionidx]" v-bind:value="field.internalName">
+                        <option v-for="field in fields[actionidx]" v-bind:value="field.internalName" :key="field.internalName">
                             {{ field.name }}
                         </option>
                     </select>
                 </div>
+                
+                <!-- Conditional Fields for Receive/Incoming SMS -->
                 <div class="form-group" v-if="actionidx != 'sendsms' && actionidx != 'tracked_link'">
-                    <label for="reply_callback" style="width:320px; text-align:left;">Map incoming message to:</label>
+                    <label style="width:320px; text-align:left;">Map incoming message to:</label>
                     <select v-model="consumer.actions[actionidx].response_field" style="width:320px; text-align:left;" class="form-control">
                         <option value="">-- Select Field --</option>
-                        <option v-for="field in fields[actionidx]" v-bind:value="field.internalName">
+                        <option v-for="field in fields[actionidx]" v-bind:value="field.internalName" :key="field.internalName">
                             {{ field.name }}
                         </option>
                     </select>
                 </div>
+                
+                <!-- Conditional Fields for Link Hits -->
                 <div class="form-group" v-if="actionidx == 'tracked_link'">
-                    <label for="reply_callback" style="width:320px; text-align:left;">Map Link Hit count to:</label>
+                    <label style="width:320px; text-align:left;">Map Link Hit count to:</label>
                     <select v-model="consumer.actions[actionidx].link_hits" style="width:320px; text-align:left;" class="form-control">
                         <option value="">-- Select Field --</option>
-                        <option v-for="field in fields[actionidx]" v-bind:value="field.internalName">
+                        <option v-for="field in fields[actionidx]" v-bind:value="field.internalName" :key="field.internalName">
                             {{ field.name }}
                         </option>
                     </select>
                 </div>
                 <div class="form-group" v-if="actionidx == 'tracked_link'">
-                    <label for="reply_callback" style="width:320px; text-align:left;">Map URL to:</label>
+                    <label style="width:320px; text-align:left;">Map URL to:</label>
                     <select v-model="consumer.actions[actionidx].url_field" style="width:320px; text-align:left;" class="form-control">
                         <option value="">-- Select Field --</option>
-                        <option v-for="field in fields[actionidx]" v-bind:value="field.internalName">
+                        <option v-for="field in fields[actionidx]" v-bind:value="field.internalName" :key="field.internalName">
                             {{ field.name }}
                         </option>
                     </select>
                 </div>
                 <div class="form-group" v-if="actionidx == 'tracked_link'">
-                    <label for="reply_callback" style="width:320px; text-align:left;">Map Original URL to:</label>
+                    <label style="width:320px; text-align:left;">Map Original URL to:</label>
                     <select v-model="consumer.actions[actionidx].originalurl_field" style="width:320px; text-align:left;" class="form-control">
                         <option value="">-- Select Field --</option>
-                        <option v-for="field in fields[actionidx]" v-bind:value="field.internalName">
+                        <option v-for="field in fields[actionidx]" v-bind:value="field.internalName" :key="field.internalName">
                             {{ field.name }}
                         </option>
                     </select>
                 </div>
             </div>
-            <br/>
+            
+            <!-- Clear float -->
+            <div style="clear: both;"></div>
 
-            <div class="container" style="width: 100%; margin-top:630px;">
-                <button id="btnSave" type="button" v-on:click="saveConsumer()" class="btn btn-default">Update</button>
+            <!-- Save Button -->
+            <div class="container" style="width: 100%; margin-top:30px; margin-bottom: 30px;">
+                <button id="btnSave" type="button" v-on:click="saveConsumer()" class="btn btn-default" :disabled="saving">
+                    <span v-if="!saving">Update</span>
+                    <span v-if="saving">Saving...</span>
+                </button>
             </div>
-            <div v-if="status.success || status.error" v-bind:class="{ 'alert-success': status.success, 'alert-danger': status.error, 'in': fade }" class="alert alert-dismissible fade" role="alert">
-                {{ status.success || status.error }}
-            </div>
-
     </div>
     
     <script src="https://cdn.jsdelivr.net/npm/vue@2.6.11"></script>
     <script src="/eloqua-service/assets/js/axios.min.js"></script>
     <script src="https://unpkg.com/vue-select@3.0.0"></script>
     <script type="text/javascript">
-
+        // Parse server data
         var custom_objects = <%-JSON.stringify(custom_objects)%>;
-        var comap = JSON.parse(JSON.stringify(custom_objects.elements));
+        var rawConsumer = <%-JSON.stringify(consumer)%>;
+        var countries = <%-JSON.stringify(countries)%>;
+
+        // Ensure consumer has proper structure
+        if (!rawConsumer.actions) {
+            rawConsumer.actions = {
+                sendsms: {},
+                receivesms: {},
+                incomingsms: {},
+                tracked_link: {}
+            };
+        }
+
+        // Ensure each action type exists
+        ['sendsms', 'receivesms', 'incomingsms', 'tracked_link'].forEach(function(actionType) {
+            if (!rawConsumer.actions[actionType]) {
+                rawConsumer.actions[actionType] = {};
+            }
+        });
+
+        // Set default values
+        if (!rawConsumer.default_country) {
+            rawConsumer.default_country = 'Australia';
+        }
+
+        var comap = custom_objects.elements ? JSON.parse(JSON.stringify(custom_objects.elements)) : [];
+        
         Vue.component('v-select', VueSelect.VueSelect);
         
         var app = new Vue({
             el: '#consumer',
             data: {
-                consumer: <%-JSON.stringify(consumer)%>,
+                consumer: rawConsumer,
                 status: {},
-                countries: <%-JSON.stringify(countries)%>,
-                custom_objects: <%-JSON.stringify(custom_objects)%>,
+                countries: countries,
+                custom_objects: custom_objects,
                 actionidx: 'sendsms',
                 comap: comap,
                 fields: {
@@ -209,91 +273,130 @@
                     'incomingsms': [],
                     'tracked_link': []
                 },
-                fade: false
+                fade: false,
+                saving: false
             },
             methods: {
                 fetchOptionsmap: function(search, loading) {
                     var vm = this;
+                    
+                    if (!vm.consumer.installId || !vm.consumer.SiteId) {
+                        console.warn('Missing installId or SiteId');
+                        return;
+                    }
             
                     const options = {
                         method: "GET",
-                        url: "/eloqua/action/ajax/customobjects/" + app.consumer.installId + "/" + app.consumer.SiteId + "/customObject?search=" + search
+                        url: "/eloqua/action/ajax/customobjects/" + vm.consumer.installId + "/" + vm.consumer.SiteId + "/customObject?search=" + encodeURIComponent(search || '')
                     };
+                    
                     axios(options)
                         .then(function(response) {
-                            console.log("Custom objects fetched", response);
-                            vm.comap = response.data.elements;
+                            console.log("Custom objects fetched", response.data);
+                            vm.comap = response.data.elements || [];
                         })
                         .catch(function (error) {
                             console.error("Error fetching custom objects", error);
-                            vm.comap = JSON.parse(JSON.stringify(custom_objects.elements)); 
+                            vm.comap = custom_objects.elements || [];
                         });
                 },
-                getFields() {
+                
+                getFields: function() {
                     var vm = this;
-                    if(this.consumer.actions[this.actionidx] && this.consumer.actions[this.actionidx].custom_object_id) {
-                        const options = {
-                            method: "GET",
-                            url: "/eloqua/action/ajax/customobject/" + this.consumer.installId + "/" + this.consumer.SiteId + "/" + this.consumer.actions[this.actionidx].custom_object_id
-                        };
-                        axios(options)
-                            .then(function(response) {
-                                vm.fields[vm.actionidx] = response.data.fields;
-                            })
-                            .catch(function (error) {
-                                console.error("Error fetching fields", error);
-                            });
+                    
+                    if (!vm.consumer.actions[vm.actionidx]) {
+                        vm.consumer.actions[vm.actionidx] = {};
                     }
+                    
+                    var customObjectId = vm.consumer.actions[vm.actionidx].custom_object_id;
+                    
+                    if (!customObjectId) {
+                        vm.fields[vm.actionidx] = [];
+                        return;
+                    }
+                    
+                    if (!vm.consumer.installId || !vm.consumer.SiteId) {
+                        console.warn('Missing installId or SiteId');
+                        return;
+                    }
+                    
+                    const options = {
+                        method: "GET",
+                        url: "/eloqua/action/ajax/customobject/" + vm.consumer.installId + "/" + vm.consumer.SiteId + "/" + customObjectId
+                    };
+                    
+                    axios(options)
+                        .then(function(response) {
+                            console.log("Fields fetched for", vm.actionidx, response.data);
+                            vm.fields[vm.actionidx] = response.data.fields || [];
+                        })
+                        .catch(function (error) {
+                            console.error("Error fetching fields", error);
+                            vm.fields[vm.actionidx] = [];
+                        });
                 },
-                saveConsumer() {
+                
+                saveConsumer: function() {
                     var vm = this;
 
-                    if(this.consumer.transmitsms_api_key && this.consumer.transmitsms_api_secret) {
-                        const options = {
-                            method: "POST",
-                            url: location.pathname + location.search,
-                            headers: { 'Content-Type': 'application/json' },
-                            data: JSON.stringify({"consumer": vm.consumer})
-                        };
-                        axios(options)
-                            .then(function(response) {
-                                vm.fade = true;
-                                console.log("Configuration saved", response);
-                                vm.status = {
-                                    success: 'Configuration successfully updated'
-                                };
-
-                                setTimeout(() => {
-                                    vm.fade = false;
-                                    vm.status = {};
-                                }, 5000);
-                            })
-                            .catch(function (error) {
-                                vm.fade = true;
-                                console.error("Error saving configuration", error);
-                                vm.status = {
-                                    error: 'Failed to update configuration'
-                                };
-
-                                setTimeout(() => {
-                                    vm.fade = false;
-                                    vm.status = {};
-                                }, 5000);
-                            });
-                    } else {
+                    if (!vm.consumer.transmitsms_api_key || !vm.consumer.transmitsms_api_secret) {
                         vm.status = {
                             error: 'API Key and Secret are required'
                         };
                         vm.fade = true;
-                        setTimeout(() => {
+                        setTimeout(function() {
                             vm.fade = false;
                             vm.status = {};
                         }, 5000);
+                        return;
                     }
+
+                    vm.saving = true;
+                    
+                    const options = {
+                        method: "POST",
+                        url: location.pathname + location.search,
+                        headers: { 'Content-Type': 'application/json' },
+                        data: JSON.stringify({ "consumer": vm.consumer })
+                    };
+                    
+                    axios(options)
+                        .then(function(response) {
+                            vm.saving = false;
+                            vm.fade = true;
+                            console.log("Configuration saved", response);
+                            vm.status = {
+                                success: 'Configuration successfully updated'
+                            };
+
+                            setTimeout(function() {
+                                vm.fade = false;
+                                vm.status = {};
+                            }, 5000);
+                        })
+                        .catch(function (error) {
+                            vm.saving = false;
+                            vm.fade = true;
+                            console.error("Error saving configuration", error);
+                            vm.status = {
+                                error: error.response?.data?.message || 'Failed to update configuration'
+                            };
+
+                            setTimeout(function() {
+                                vm.fade = false;
+                                vm.status = {};
+                            }, 5000);
+                        });
                 }
             },
+            
             mounted: function () {
-                this.getFields();
+                var vm = this;
+                console.log('Consumer data:', vm.consumer);
+                console.log('Custom objects:', vm.custom_objects);
+                
+                // Load fields for current action type
+                vm.getFields();
             }
         });
     </script>
