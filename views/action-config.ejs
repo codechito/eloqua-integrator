@@ -151,27 +151,74 @@
 
       .merge-toolbar {
         display: flex;
+        flex-direction: column;
         gap: 10px;
         margin-bottom: 10px;
-        align-items: center;
+        padding: 10px;
+        background: #f9f9f9;
+        border: 1px solid #ddd;
+        border-radius: 4px;
       }
 
-      .merge-toolbar .merge-section {
+      .merge-toolbar-row {
         display: flex;
-        align-items: center;
-        gap: 5px;
+        gap: 15px;
+        align-items: flex-end;
       }
 
-      .merge-toolbar select,
-      .merge-toolbar .v-select {
-        font-size: 11px;
-        height: 25px;
+      .merge-section {
+        display: flex;
+        flex-direction: column;
       }
 
-      .merge-toolbar label {
+      .merge-section label {
         font-size: 11px;
-        font-weight: normal;
+        font-weight: bold;
+        margin-bottom: 3px;
+        text-align: left;
+      }
+
+      .merge-section select,
+      .merge-section .v-select {
+        height: 27px !important;
+        font-size: 11px;
+      }
+
+      .merge-section select {
+        padding: 2px 6px;
+      }
+
+      .merge-section .v-select .vs__dropdown-toggle {
+        min-height: 27px;
+        height: 27px;
+        padding: 0 6px;
+      }
+
+      .merge-section .v-select .vs__selected-options {
+        padding: 0;
+        min-height: 25px;
+      }
+
+      .merge-section .v-select .vs__selected {
+        font-size: 11px;
+        line-height: 25px;
         margin: 0;
+        padding: 0 2px;
+      }
+
+      .merge-section .v-select .vs__search {
+        font-size: 11px;
+        line-height: 25px;
+        margin: 0;
+        padding: 0 2px;
+      }
+
+      .merge-section .v-select .vs__actions {
+        padding: 0 3px;
+      }
+
+      .merge-section .v-select input {
+        height: 25px;
       }
 
       .label-with-checkbox {
@@ -201,7 +248,7 @@
     <div id="sendsmsaction" class="container" style="width: 600px; padding: 20px;">
       <form method="post">
         <h4 style="font-size: 20px; font-weight: bold; text-align: center; margin-bottom: 20px;">
-          <img src="/eloqua-service/assets/send-sms-el-icon.png" onerror="this.style.display='none'" style="vertical-align: middle;">&nbsp;Create your Text Message
+          <img src="/eloqua-service/assets/images/send-sms-el-icon.png" onerror="this.style.display='none'" style="vertical-align: middle;">&nbsp;Create your Text Message
         </h4>
         
         <div v-if="status.success || status.error" v-bind:class="{ 'alert-success': status.success, 'alert-danger': status.error, 'in': fade }" class="alert fade" role="alert">
@@ -359,38 +406,43 @@
             
             <!-- Merge Toolbar -->
             <div v-if="showMerge" class="merge-toolbar">
-              <div class="merge-section">
-                <label>Contact:</label>
-                <select v-model="selectedContactField" @change="insertMerge(selectedContactField)" style="width: 120px;" class="form-control">
-                  <option value="">Choose field</option>
-                  <option v-for="field in contactFields" v-bind:value="field.value" :key="field.value">{{ field.name }}</option>
-                </select>
-              </div>
-              
-              <div class="merge-section">
-                <label>CDO:</label>
-                <v-select
-                  v-model="selectedMergeCDO"
-                  label="name"
-                  :options="comerge"
-                  @search="fetchOptionsmerge"
-                  @input="loadMergeCDOFields"
-                  placeholder="Object"
-                  style="width: 120px;">
-                </v-select>
-                <select v-if="selectedMergeCDO" v-model="selectedCDOField" @change="insertMerge(selectedCDOField)" style="width: 120px;" class="form-control">
-                  <option value="">Choose field</option>
-                  <option v-for="field in cdoMergeFields" v-bind:value="field.value" :key="field.value">{{ field.name }}</option>
-                </select>
-              </div>
-              
-              <div class="merge-section">
-                <label>Send Mode:</label>
-                <select v-model="instance.send_mode" style="width: 90px;" class="form-control">
-                  <option value="all">All</option>
-                  <option value="first">First</option>
-                  <option value="last">Last</option>
-                </select>
+              <div class="merge-toolbar-row">
+                <div class="merge-section" style="width: 150px;">
+                  <label>Contact Field</label>
+                  <select v-model="selectedContactField" @change="insertMerge(selectedContactField)" class="form-control">
+                    <option value="">Choose field</option>
+                    <option v-for="field in contactFields" v-bind:value="field.value" :key="field.value">{{ field.name }}</option>
+                  </select>
+                </div>
+                
+                <div class="merge-section" style="width: 150px;">
+                  <label>Custom Object</label>
+                  <v-select
+                    v-model="selectedMergeCDO"
+                    label="name"
+                    :options="comerge"
+                    @search="fetchOptionsmerge"
+                    @input="loadMergeCDOFields"
+                    placeholder="Select Object">
+                  </v-select>
+                </div>
+                
+                <div class="merge-section" style="width: 150px;" v-if="selectedMergeCDO">
+                  <label>CDO Field</label>
+                  <select v-model="selectedCDOField" @change="insertMerge(selectedCDOField)" class="form-control">
+                    <option value="">Choose field</option>
+                    <option v-for="field in cdoMergeFields" v-bind:value="field.value" :key="field.value">{{ field.name }}</option>
+                  </select>
+                </div>
+                
+                <div class="merge-section" style="width: 100px;">
+                  <label>If Multiple</label>
+                  <select v-model="instance.send_mode" class="form-control">
+                    <option value="all">All</option>
+                    <option value="first">First</option>
+                    <option value="last">Last</option>
+                  </select>
+                </div>
               </div>
             </div>
             
@@ -517,11 +569,7 @@ Opt-out reply STOP"></textarea>
           loadingCustomObjects: false,
           loadingFields: false,
           loadingSenderIds: false,
-          sender_ids: {
-            'Virtual Number': [],
-            'Business Name': [],
-            'Mobile Number': []
-          },
+          sender_ids: <%-JSON.stringify(sender_ids)%>,
           selectedCustomObject: null,
           previousCustomObjectId: null,
           customObjectsCache: {},
@@ -545,15 +593,8 @@ Opt-out reply STOP"></textarea>
                 console.log('Sender IDs response:', response.data);
                 
                 if (response.data.result && response.data.result.caller_ids) {
-                  vm.sender_ids = {
-                    'Virtual Number': response.data.result.caller_ids['Virtual Number'] || [],
-                    'Business Name': response.data.result.caller_ids['Business Name'] || [],
-                    'Mobile Number': response.data.result.caller_ids['Mobile Number'] || []
-                  };
-                  
+                  vm.sender_ids = response.data.result.caller_ids;
                   console.log('Sender IDs loaded:', vm.sender_ids);
-                } else {
-                  console.warn('No sender IDs found in response');
                 }
                 
                 vm.loadingSenderIds = false;
@@ -561,14 +602,6 @@ Opt-out reply STOP"></textarea>
               .catch(function(error) {
                 console.error('Error loading sender IDs:', error);
                 vm.loadingSenderIds = false;
-                vm.status = {
-                  error: 'Failed to load sender IDs: ' + (error.response?.data?.message || error.message)
-                };
-                vm.fade = true;
-                setTimeout(function() {
-                  vm.fade = false;
-                  vm.status = {};
-                }, 3000);
               });
           },
           
@@ -668,10 +701,8 @@ Opt-out reply STOP"></textarea>
               });
               
               if (found) {
-                console.log('Resolved custom object:', found.id, '-', found.name);
                 vm.selectedCustomObject = found;
               } else {
-                console.log('Custom object not found in list, fetching:', customObjectId);
                 vm.fetchSingleCustomObject(customObjectId);
               }
             }
