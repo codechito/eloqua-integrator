@@ -90,7 +90,7 @@
                 </h4>
                 <div class="form-group">
                     <label for="actionidx" style="width:320px; text-align:left;">Action Type</label>
-                    <select v-on:change="getFields()" v-model="actionidx" style="width:320px; text-align:left;" class="form-control">
+                    <select v-on:change="switchActionType()" v-model="actionidx" style="width:320px; text-align:left;" class="form-control">
                         <option value="sendsms">Send SMS</option>
                         <option value="receivesms">Received SMS</option>
                         <option value="incomingsms">Incoming SMS</option>
@@ -105,109 +105,125 @@
                         style="width:320px; text-align:left;" 
                         v-model="consumer.actions[actionidx].custom_object_id" 
                         :reduce="element => element.id" 
-                        :options="comap" 
-                        @search="fetchOptionsmap" 
-                        @input="getFields()"
+                        :options="customObjects" 
+                        @search="fetchCustomObjects"
+                        @input="onCustomObjectChange"
                         placeholder="Select Custom Object">
+                        <template #no-options>
+                            <span v-if="loadingCustomObjects">Loading...</span>
+                            <span v-else>Type to search custom objects</span>
+                        </template>
                     </v-select>
                 </div>
                 
-                <!-- Field Mappings -->
-                <div class="form-group">
-                    <label style="width:320px; text-align:left;">Map mobile to:</label>
-                    <select v-model="consumer.actions[actionidx].mobile_field" style="width:320px; text-align:left;" class="form-control">
-                        <option value="">-- Select Field --</option>
-                        <option v-for="field in fields[actionidx]" v-bind:value="field.internalName" :key="field.internalName">
-                            {{ field.name }}
-                        </option>
-                    </select>
-                </div>
-                <div class="form-group">
-                    <label style="width:320px; text-align:left;">Map virtual number to:</label>
-                    <select v-model="consumer.actions[actionidx].vn_field" style="width:320px; text-align:left;" class="form-control">
-                        <option value="">-- Select Field --</option>
-                        <option v-for="field in fields[actionidx]" v-bind:value="field.internalName" :key="field.internalName">
-                            {{ field.name }}
-                        </option>
-                    </select>
-                </div>
-                <div class="form-group">
-                    <label style="width:320px; text-align:left;">Map email to:</label>
-                    <select v-model="consumer.actions[actionidx].email_field" style="width:320px; text-align:left;" class="form-control">
-                        <option value="">-- Select Field --</option>
-                        <option v-for="field in fields[actionidx]" v-bind:value="field.internalName" :key="field.internalName">
-                            {{ field.name }}
-                        </option>
-                    </select>
-                </div>
-                <div class="form-group">
-                    <label style="width:320px; text-align:left;">Map campaign title to:</label>
-                    <select v-model="consumer.actions[actionidx].title_field" style="width:320px; text-align:left;" class="form-control">
-                        <option value="">-- Select Field --</option>
-                        <option v-for="field in fields[actionidx]" v-bind:value="field.internalName" :key="field.internalName">
-                            {{ field.name }}
-                        </option>
-                    </select>
+                <!-- Field Mappings (shown when custom object is selected and fields are loaded) -->
+                <div v-if="loadingFields" style="padding: 20px; text-align: center;">
+                    <div class="spinner"></div>
+                    <p>Loading fields...</p>
                 </div>
                 
-                <!-- Conditional Fields for Send SMS -->
-                <div class="form-group" v-if="actionidx == 'sendsms'">
-                    <label style="width:320px; text-align:left;">Map notification to:</label>
-                    <select v-model="consumer.actions[actionidx].notification_field" style="width:320px; text-align:left;" class="form-control">
-                        <option value="">-- Select Field --</option>
-                        <option v-for="field in fields[actionidx]" v-bind:value="field.internalName" :key="field.internalName">
-                            {{ field.name }}
-                        </option>
-                    </select>
+                <div v-else-if="currentFields.length > 0">
+                    <div class="form-group">
+                        <label style="width:320px; text-align:left;">Map mobile to:</label>
+                        <select v-model="consumer.actions[actionidx].mobile_field" style="width:320px; text-align:left;" class="form-control">
+                            <option value="">-- Select Field --</option>
+                            <option v-for="field in currentFields" v-bind:value="field.internalName" :key="field.internalName">
+                                {{ field.name }}
+                            </option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label style="width:320px; text-align:left;">Map virtual number to:</label>
+                        <select v-model="consumer.actions[actionidx].vn_field" style="width:320px; text-align:left;" class="form-control">
+                            <option value="">-- Select Field --</option>
+                            <option v-for="field in currentFields" v-bind:value="field.internalName" :key="field.internalName">
+                                {{ field.name }}
+                            </option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label style="width:320px; text-align:left;">Map email to:</label>
+                        <select v-model="consumer.actions[actionidx].email_field" style="width:320px; text-align:left;" class="form-control">
+                            <option value="">-- Select Field --</option>
+                            <option v-for="field in currentFields" v-bind:value="field.internalName" :key="field.internalName">
+                                {{ field.name }}
+                            </option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label style="width:320px; text-align:left;">Map campaign title to:</label>
+                        <select v-model="consumer.actions[actionidx].title_field" style="width:320px; text-align:left;" class="form-control">
+                            <option value="">-- Select Field --</option>
+                            <option v-for="field in currentFields" v-bind:value="field.internalName" :key="field.internalName">
+                                {{ field.name }}
+                            </option>
+                        </select>
+                    </div>
+                    
+                    <!-- Conditional Fields for Send SMS -->
+                    <div class="form-group" v-if="actionidx == 'sendsms'">
+                        <label style="width:320px; text-align:left;">Map notification to:</label>
+                        <select v-model="consumer.actions[actionidx].notification_field" style="width:320px; text-align:left;" class="form-control">
+                            <option value="">-- Select Field --</option>
+                            <option v-for="field in currentFields" v-bind:value="field.internalName" :key="field.internalName">
+                                {{ field.name }}
+                            </option>
+                        </select>
+                    </div>
+                    <div class="form-group" v-if="actionidx == 'sendsms'">
+                        <label style="width:320px; text-align:left;">Map outgoing message to:</label>
+                        <select v-model="consumer.actions[actionidx].outgoing_field" style="width:320px; text-align:left;" class="form-control">
+                            <option value="">-- Select Field --</option>
+                            <option v-for="field in currentFields" v-bind:value="field.internalName" :key="field.internalName">
+                                {{ field.name }}
+                            </option>
+                        </select>
+                    </div>
+                    
+                    <!-- Conditional Fields for Receive/Incoming SMS -->
+                    <div class="form-group" v-if="actionidx != 'sendsms' && actionidx != 'tracked_link'">
+                        <label style="width:320px; text-align:left;">Map incoming message to:</label>
+                        <select v-model="consumer.actions[actionidx].response_field" style="width:320px; text-align:left;" class="form-control">
+                            <option value="">-- Select Field --</option>
+                            <option v-for="field in currentFields" v-bind:value="field.internalName" :key="field.internalName">
+                                {{ field.name }}
+                            </option>
+                        </select>
+                    </div>
+                    
+                    <!-- Conditional Fields for Link Hits -->
+                    <div class="form-group" v-if="actionidx == 'tracked_link'">
+                        <label style="width:320px; text-align:left;">Map Link Hit count to:</label>
+                        <select v-model="consumer.actions[actionidx].link_hits" style="width:320px; text-align:left;" class="form-control">
+                            <option value="">-- Select Field --</option>
+                            <option v-for="field in currentFields" v-bind:value="field.internalName" :key="field.internalName">
+                                {{ field.name }}
+                            </option>
+                        </select>
+                    </div>
+                    <div class="form-group" v-if="actionidx == 'tracked_link'">
+                        <label style="width:320px; text-align:left;">Map URL to:</label>
+                        <select v-model="consumer.actions[actionidx].url_field" style="width:320px; text-align:left;" class="form-control">
+                            <option value="">-- Select Field --</option>
+                            <option v-for="field in currentFields" v-bind:value="field.internalName" :key="field.internalName">
+                                {{ field.name }}
+                            </option>
+                        </select>
+                    </div>
+                    <div class="form-group" v-if="actionidx == 'tracked_link'">
+                        <label style="width:320px; text-align:left;">Map Original URL to:</label>
+                        <select v-model="consumer.actions[actionidx].originalurl_field" style="width:320px; text-align:left;" class="form-control">
+                            <option value="">-- Select Field --</option>
+                            <option v-for="field in currentFields" v-bind:value="field.internalName" :key="field.internalName">
+                                {{ field.name }}
+                            </option>
+                        </select>
+                    </div>
                 </div>
-                <div class="form-group" v-if="actionidx == 'sendsms'">
-                    <label style="width:320px; text-align:left;">Map outgoing message to:</label>
-                    <select v-model="consumer.actions[actionidx].outgoing_field" style="width:320px; text-align:left;" class="form-control">
-                        <option value="">-- Select Field --</option>
-                        <option v-for="field in fields[actionidx]" v-bind:value="field.internalName" :key="field.internalName">
-                            {{ field.name }}
-                        </option>
-                    </select>
-                </div>
-                
-                <!-- Conditional Fields for Receive/Incoming SMS -->
-                <div class="form-group" v-if="actionidx != 'sendsms' && actionidx != 'tracked_link'">
-                    <label style="width:320px; text-align:left;">Map incoming message to:</label>
-                    <select v-model="consumer.actions[actionidx].response_field" style="width:320px; text-align:left;" class="form-control">
-                        <option value="">-- Select Field --</option>
-                        <option v-for="field in fields[actionidx]" v-bind:value="field.internalName" :key="field.internalName">
-                            {{ field.name }}
-                        </option>
-                    </select>
-                </div>
-                
-                <!-- Conditional Fields for Link Hits -->
-                <div class="form-group" v-if="actionidx == 'tracked_link'">
-                    <label style="width:320px; text-align:left;">Map Link Hit count to:</label>
-                    <select v-model="consumer.actions[actionidx].link_hits" style="width:320px; text-align:left;" class="form-control">
-                        <option value="">-- Select Field --</option>
-                        <option v-for="field in fields[actionidx]" v-bind:value="field.internalName" :key="field.internalName">
-                            {{ field.name }}
-                        </option>
-                    </select>
-                </div>
-                <div class="form-group" v-if="actionidx == 'tracked_link'">
-                    <label style="width:320px; text-align:left;">Map URL to:</label>
-                    <select v-model="consumer.actions[actionidx].url_field" style="width:320px; text-align:left;" class="form-control">
-                        <option value="">-- Select Field --</option>
-                        <option v-for="field in fields[actionidx]" v-bind:value="field.internalName" :key="field.internalName">
-                            {{ field.name }}
-                        </option>
-                    </select>
-                </div>
-                <div class="form-group" v-if="actionidx == 'tracked_link'">
-                    <label style="width:320px; text-align:left;">Map Original URL to:</label>
-                    <select v-model="consumer.actions[actionidx].originalurl_field" style="width:320px; text-align:left;" class="form-control">
-                        <option value="">-- Select Field --</option>
-                        <option v-for="field in fields[actionidx]" v-bind:value="field.internalName" :key="field.internalName">
-                            {{ field.name }}
-                        </option>
-                    </select>
+                <div v-else style="padding: 20px; background: #f5f5f5; border-radius: 4px; margin-top: 10px;">
+                    <p style="margin: 0; color: #666; font-size: 14px;">
+                        Select a custom object to map fields
+                    </p>
                 </div>
             </div>
             
@@ -227,210 +243,253 @@
     <script src="/eloqua-service/assets/js/axios.min.js"></script>
     <script src="https://unpkg.com/vue-select@3.0.0"></script>
     <script type="text/javascript">
-    // Parse server data
-    var all_custom_object_fields = <%-JSON.stringify(all_custom_object_fields)%>;
-    var rawConsumer = <%-JSON.stringify(consumer)%>;
-    var countries = <%-JSON.stringify(countries)%>;
+        // Parse server data with safe defaults
+        var all_custom_object_fields;
+        var rawConsumer;
+        var countries;
 
-    // Ensure consumer has proper structure
-    if (!rawConsumer.actions) {
-        rawConsumer.actions = {
-            sendsms: {},
-            receivesms: {},
-            incomingsms: {},
-            tracked_link: {}
-        };
-    }
-
-    ['sendsms', 'receivesms', 'incomingsms', 'tracked_link'].forEach(function(actionType) {
-        if (!rawConsumer.actions[actionType]) {
-            rawConsumer.actions[actionType] = {};
+        try {
+            all_custom_object_fields = <%-JSON.stringify(all_custom_object_fields || {sendsms:[],receivesms:[],incomingsms:[],tracked_link:[]})%>;
+        } catch(e) {
+            console.error('Error parsing all_custom_object_fields:', e);
+            all_custom_object_fields = {
+                sendsms: [],
+                receivesms: [],
+                incomingsms: [],
+                tracked_link: []
+            };
         }
-    });
 
-    if (!rawConsumer.default_country) {
-        rawConsumer.default_country = 'Australia';
-    }
+        try {
+            rawConsumer = <%-JSON.stringify(consumer)%>;
+        } catch(e) {
+            console.error('Error parsing consumer:', e);
+            alert('Error loading configuration data');
+            rawConsumer = { actions: {} };
+        }
 
-    Vue.component('v-select', VueSelect.VueSelect);
-    
-    var app = new Vue({
-        el: '#consumer',
-        data: {
-            consumer: rawConsumer,
-            status: {},
-            countries: countries,
-            customObjects: [],  // Will be loaded lazily
-            customObjectsCache: {},  // Cache loaded custom objects
-            allFields: all_custom_object_fields,
-            fieldsCache: {},  // Cache loaded fields
-            actionidx: 'sendsms',
-            currentFields: [],
-            fade: false,
-            saving: false,
-            loadingCustomObjects: false,
-            loadingFields: false
-        },
-        methods: {
-            // Lazy load custom objects with search
-            fetchCustomObjects: function(search, loading) {
-                var vm = this;
-                
-                // Check cache first
-                var cacheKey = search || 'all';
-                if (vm.customObjectsCache[cacheKey]) {
-                    vm.customObjects = vm.customObjectsCache[cacheKey];
-                    return;
-                }
-                
-                if (loading) loading(true);
-                vm.loadingCustomObjects = true;
-                
-                axios.get('/eloqua/action/ajax/customobjects/' + vm.consumer.installId + '/' + vm.consumer.SiteId + '/customObject', {
-                    params: { search: search || '', count: 100 }
-                })
-                .then(function(response) {
-                    vm.customObjects = response.data.elements || [];
-                    vm.customObjectsCache[cacheKey] = vm.customObjects;
-                    console.log('Custom objects loaded:', vm.customObjects.length);
-                    if (loading) loading(false);
-                    vm.loadingCustomObjects = false;
-                })
-                .catch(function(error) {
-                    console.error('Error loading custom objects:', error);
-                    vm.status = {
-                        error: 'Failed to load custom objects: ' + (error.response?.data?.message || error.message)
-                    };
-                    vm.fade = true;
-                    setTimeout(function() {
-                        vm.fade = false;
-                        vm.status = {};
-                    }, 5000);
-                    if (loading) loading(false);
-                    vm.loadingCustomObjects = false;
-                });
+        try {
+            countries = <%-JSON.stringify(countries)%>;
+        } catch(e) {
+            console.error('Error parsing countries:', e);
+            countries = [];
+        }
+
+        // Ensure consumer has proper structure
+        if (!rawConsumer.actions) {
+            rawConsumer.actions = {
+                sendsms: {},
+                receivesms: {},
+                incomingsms: {},
+                tracked_link: {}
+            };
+        }
+
+        // Ensure each action type exists
+        ['sendsms', 'receivesms', 'incomingsms', 'tracked_link'].forEach(function(actionType) {
+            if (!rawConsumer.actions[actionType]) {
+                rawConsumer.actions[actionType] = {};
+            }
+        });
+
+        // Ensure all_custom_object_fields has all action types
+        ['sendsms', 'receivesms', 'incomingsms', 'tracked_link'].forEach(function(actionType) {
+            if (!all_custom_object_fields[actionType]) {
+                all_custom_object_fields[actionType] = [];
+            }
+        });
+
+        // Set default values
+        if (!rawConsumer.default_country) {
+            rawConsumer.default_country = 'Australia';
+        }
+
+        Vue.component('v-select', VueSelect.VueSelect);
+        
+        var app = new Vue({
+            el: '#consumer',
+            data: {
+                consumer: rawConsumer,
+                status: {},
+                countries: countries,
+                customObjects: [],  // Will be loaded lazily
+                customObjectsCache: {},  // Cache loaded custom objects
+                allFields: all_custom_object_fields,
+                fieldsCache: {},  // Cache loaded fields
+                actionidx: 'sendsms',
+                currentFields: [],
+                fade: false,
+                saving: false,
+                loadingCustomObjects: false,
+                loadingFields: false
             },
-            
-            switchActionType: function() {
-                this.loadFieldsForCurrentAction();
-            },
-            
-            onCustomObjectChange: function(customObjectId) {
-                this.loadFieldsForCurrentAction();
-            },
-            
-            loadFieldsForCurrentAction: function() {
-                var vm = this;
-                
-                // Check if fields are pre-loaded
-                if (vm.allFields[vm.actionidx] && vm.allFields[vm.actionidx].length > 0) {
-                    vm.currentFields = vm.allFields[vm.actionidx];
-                    console.log('Using pre-loaded fields for', vm.actionidx);
-                    return;
-                }
-                
-                var customObjectId = vm.consumer.actions[vm.actionidx]?.custom_object_id;
-                
-                if (!customObjectId) {
-                    vm.currentFields = [];
-                    return;
-                }
-                
-                // Check cache
-                if (vm.fieldsCache[customObjectId]) {
-                    vm.currentFields = vm.fieldsCache[customObjectId];
-                    vm.allFields[vm.actionidx] = vm.currentFields;
-                    console.log('Using cached fields for', customObjectId);
-                    return;
-                }
-                
-                // Fetch fields
-                vm.loadingFields = true;
-                console.log('Fetching fields for', customObjectId);
-                
-                axios.get('/eloqua/action/ajax/customobject/' + vm.consumer.installId + '/' + vm.consumer.SiteId + '/' + customObjectId)
+            methods: {
+                // Lazy load custom objects with search
+                fetchCustomObjects: function(search, loading) {
+                    var vm = this;
+                    
+                    // Check cache first
+                    var cacheKey = search || 'all';
+                    if (vm.customObjectsCache[cacheKey]) {
+                        vm.customObjects = vm.customObjectsCache[cacheKey];
+                        if (loading) loading(false);
+                        return;
+                    }
+                    
+                    if (loading) loading(true);
+                    vm.loadingCustomObjects = true;
+                    
+                    axios.get('/eloqua/action/ajax/customobjects/' + vm.consumer.installId + '/' + vm.consumer.SiteId + '/customObject', {
+                        params: { search: search || '', count: 100 }
+                    })
                     .then(function(response) {
-                        vm.currentFields = response.data.fields || [];
-                        vm.allFields[vm.actionidx] = vm.currentFields;
-                        vm.fieldsCache[customObjectId] = vm.currentFields;
-                        vm.loadingFields = false;
-                        console.log('Fields loaded:', vm.currentFields.length);
+                        vm.customObjects = response.data.elements || [];
+                        vm.customObjectsCache[cacheKey] = vm.customObjects;
+                        console.log('Custom objects loaded:', vm.customObjects.length);
+                        if (loading) loading(false);
+                        vm.loadingCustomObjects = false;
                     })
                     .catch(function(error) {
-                        console.error('Error fetching fields:', error);
-                        vm.currentFields = [];
-                        vm.loadingFields = false;
+                        console.error('Error loading custom objects:', error);
+                        vm.customObjects = [];
                         vm.status = {
-                            error: 'Failed to load fields: ' + (error.response?.data?.message || error.message)
+                            error: 'Failed to load custom objects: ' + (error.response?.data?.message || error.message)
                         };
                         vm.fade = true;
                         setTimeout(function() {
                             vm.fade = false;
                             vm.status = {};
                         }, 5000);
+                        if (loading) loading(false);
+                        vm.loadingCustomObjects = false;
                     });
+                },
+                
+                switchActionType: function() {
+                    this.loadFieldsForCurrentAction();
+                },
+                
+                onCustomObjectChange: function(customObjectId) {
+                    this.loadFieldsForCurrentAction();
+                },
+                
+                loadFieldsForCurrentAction: function() {
+                    var vm = this;
+                    
+                    // Check if fields are pre-loaded
+                    if (vm.allFields[vm.actionidx] && vm.allFields[vm.actionidx].length > 0) {
+                        vm.currentFields = vm.allFields[vm.actionidx];
+                        console.log('Using pre-loaded fields for', vm.actionidx);
+                        return;
+                    }
+                    
+                    var customObjectId = vm.consumer.actions[vm.actionidx]?.custom_object_id;
+                    
+                    if (!customObjectId) {
+                        vm.currentFields = [];
+                        return;
+                    }
+                    
+                    // Check cache
+                    if (vm.fieldsCache[customObjectId]) {
+                        vm.currentFields = vm.fieldsCache[customObjectId];
+                        vm.allFields[vm.actionidx] = vm.currentFields;
+                        console.log('Using cached fields for', customObjectId);
+                        return;
+                    }
+                    
+                    // Fetch fields
+                    vm.loadingFields = true;
+                    console.log('Fetching fields for', customObjectId);
+                    
+                    axios.get('/eloqua/action/ajax/customobject/' + vm.consumer.installId + '/' + vm.consumer.SiteId + '/' + customObjectId)
+                        .then(function(response) {
+                            vm.currentFields = response.data.fields || [];
+                            vm.allFields[vm.actionidx] = vm.currentFields;
+                            vm.fieldsCache[customObjectId] = vm.currentFields;
+                            vm.loadingFields = false;
+                            console.log('Fields loaded:', vm.currentFields.length);
+                        })
+                        .catch(function(error) {
+                            console.error('Error fetching fields:', error);
+                            vm.currentFields = [];
+                            vm.loadingFields = false;
+                            vm.status = {
+                                error: 'Failed to load fields: ' + (error.response?.data?.message || error.message)
+                            };
+                            vm.fade = true;
+                            setTimeout(function() {
+                                vm.fade = false;
+                                vm.status = {};
+                            }, 5000);
+                        });
+                },
+                
+                saveConsumer: function() {
+                    var vm = this;
+
+                    if (!vm.consumer.transmitsms_api_key || !vm.consumer.transmitsms_api_secret) {
+                        vm.status = {
+                            error: 'API Key and Secret are required'
+                        };
+                        vm.fade = true;
+                        setTimeout(function() {
+                            vm.fade = false;
+                            vm.status = {};
+                        }, 5000);
+                        return;
+                    }
+
+                    vm.saving = true;
+                    
+                    axios.post(location.pathname + location.search, {
+                        consumer: vm.consumer
+                    })
+                    .then(function(response) {
+                        vm.saving = false;
+                        vm.fade = true;
+                        console.log("Configuration saved", response);
+                        vm.status = {
+                            success: 'Configuration successfully updated'
+                        };
+
+                        setTimeout(function() {
+                            vm.fade = false;
+                            vm.status = {};
+                        }, 5000);
+                    })
+                    .catch(function (error) {
+                        vm.saving = false;
+                        vm.fade = true;
+                        console.error("Error saving configuration", error);
+                        vm.status = {
+                            error: error.response?.data?.message || 'Failed to update configuration'
+                        };
+
+                        setTimeout(function() {
+                            vm.fade = false;
+                            vm.status = {};
+                        }, 5000);
+                    });
+                }
             },
             
-            saveConsumer: function() {
+            mounted: function () {
                 var vm = this;
-
-                if (!vm.consumer.transmitsms_api_key || !vm.consumer.transmitsms_api_secret) {
-                    vm.status = {
-                        error: 'API Key and Secret are required'
-                    };
-                    vm.fade = true;
-                    setTimeout(function() {
-                        vm.fade = false;
-                        vm.status = {};
-                    }, 5000);
-                    return;
-                }
-
-                vm.saving = true;
+                console.log('=== App Configuration Loaded ===');
+                console.log('Consumer ID:', vm.consumer.installId);
+                console.log('Site ID:', vm.consumer.SiteId);
+                console.log('Pre-loaded fields:', Object.keys(vm.allFields).filter(function(k) { 
+                    return vm.allFields[k] && vm.allFields[k].length > 0; 
+                }));
                 
-                axios.post(location.pathname + location.search, {
-                    consumer: vm.consumer
-                })
-                .then(function(response) {
-                    vm.saving = false;
-                    vm.fade = true;
-                    vm.status = {
-                        success: 'Configuration successfully updated'
-                    };
-
-                    setTimeout(function() {
-                        vm.fade = false;
-                        vm.status = {};
-                    }, 5000);
-                })
-                .catch(function (error) {
-                    vm.saving = false;
-                    vm.fade = true;
-                    vm.status = {
-                        error: error.response?.data?.message || 'Failed to update configuration'
-                    };
-
-                    setTimeout(function() {
-                        vm.fade = false;
-                        vm.status = {};
-                    }, 5000);
-                });
+                // Load fields for current action
+                vm.loadFieldsForCurrentAction();
+                
+                // Initial lazy load of custom objects (will be triggered by vue-select)
+                vm.fetchCustomObjects('', null);
             }
-        },
-        
-        mounted: function () {
-            var vm = this;
-            console.log('App mounted');
-            console.log('Consumer:', vm.consumer.installId);
-            console.log('Pre-loaded fields:', Object.keys(vm.allFields));
-            
-            // Load fields for current action
-            vm.loadFieldsForCurrentAction();
-            
-            // Lazy load custom objects (will be triggered by vue-select when opened)
-            vm.fetchCustomObjects('', null);
-        }
-    });
-</script>
+        });
+    </script>
   </body>
 </html>
