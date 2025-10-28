@@ -29,6 +29,12 @@ router.post('/configure',
     ActionController.saveConfiguration
 );
 
+// Get sender IDs
+router.get('/ajax/sender-ids/:installId/:siteId',
+    sessionAuth,
+    ActionController.getSenderIds
+);
+
 router.post('/notify', 
     validateQueryParams('instanceId'),
     verifyInstallation,
