@@ -19,6 +19,22 @@ const ConsumerSchema = new mongoose.Schema({
         default: 'Unknown Site'
     },
     
+    // Eloqua Callback URL (NEW)
+    eloqua_callback_url: {
+        type: String,
+        trim: true
+    },
+    
+    // Eloqua User Info (NEW - Optional but useful)
+    eloqua_user_name: {
+        type: String,
+        trim: true
+    },
+    eloqua_user_id: {
+        type: String,
+        trim: true
+    },
+    
     // TransmitSMS Credentials
     transmitsms_api_key: {
         type: String,

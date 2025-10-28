@@ -4,39 +4,37 @@ const { logger } = require('../utils');
 const { asyncHandler } = require('../middleware');
 
 class AppController {
+
     /**
      * Install app
      * GET /eloqua/app/install
      */
     static install = asyncHandler(async (req, res) => {
         const { 
+            appId,
             installId, 
-            siteId, 
-            siteName,
             callback,
-            oauth_consumer_key,
-            oauth_nonce,
-            oauth_signature_method,
-            oauth_version,
-            oauth_signature,
             UserName,
             UserId,
+            siteId,
+            siteName,
             SiteId,
             SiteName
         } = req.query;
 
-        logger.info('App installation started', { 
-            installId, 
-            siteId: siteId || SiteId, 
-            siteName: siteName || SiteName,
-            userName: UserName,
-            userId: UserId,
-            callback
-        });
-
         // Use either naming convention
         const finalSiteId = siteId || SiteId;
         const finalSiteName = siteName || SiteName;
+
+        logger.info('App installation started', { 
+            appId,
+            installId, 
+            siteId: finalSiteId, 
+            siteName: finalSiteName,
+            userName: UserName,
+            userId: UserId,
+            hasCallback: !!callback
+        });
 
         // Check if already installed
         let consumer = await Consumer.findOne({ installId });
@@ -46,6 +44,9 @@ class AppController {
                 installId,
                 SiteId: finalSiteId,
                 siteName: finalSiteName || 'Unknown Site',
+                eloqua_callback_url: callback,  // Save callback URL
+                eloqua_user_name: UserName,
+                eloqua_user_id: UserId,
                 actions: {
                     sendsms: {},
                     receivesms: {},
@@ -57,21 +58,94 @@ class AppController {
 
             logger.info('App installed successfully', { 
                 installId, 
-                consumerId: consumer._id 
+                consumerId: consumer._id,
+                callbackUrl: callback
             });
         } else {
-            logger.info('App already installed', { installId });
+            // Update callback URL in case it changed
+            consumer.eloqua_callback_url = callback;
+            consumer.eloqua_user_name = UserName;
+            consumer.eloqua_user_id = UserId;
+            consumer.SiteId = finalSiteId;
+            consumer.siteName = finalSiteName || consumer.siteName;
+            await consumer.save();
+
+            logger.info('App already installed, updated callback URL', { 
+                installId,
+                callbackUrl: callback
+            });
         }
 
-        // Generate OAuth authorization URL
+        // Check if OAuth 2.0 is already complete
+        const consumerWithToken = await Consumer.findOne({ installId })
+            .select('+oauth_token +oauth_expires_at');
+
+        if (consumerWithToken && consumerWithToken.oauth_token) {
+            const isExpired = consumerWithToken.oauth_expires_at && 
+                            new Date() >= consumerWithToken.oauth_expires_at;
+            
+            if (!isExpired) {
+                logger.info('OAuth already valid, redirecting to callback', { 
+                    installId,
+                    callbackUrl: callback
+                });
+                
+                // OAuth already done, redirect to callback
+                if (callback) {
+                    return res.redirect(callback);
+                }
+                
+                // Fallback: show success message
+                return res.send(`
+                    <!DOCTYPE html>
+                    <html>
+                    <head>
+                        <title>Already Authorized</title>
+                        <style>
+                            body {
+                                font-family: Arial, sans-serif;
+                                display: flex;
+                                justify-content: center;
+                                align-items: center;
+                                height: 100vh;
+                                margin: 0;
+                                background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+                            }
+                            .container {
+                                text-align: center;
+                                background: white;
+                                padding: 40px;
+                                border-radius: 10px;
+                                box-shadow: 0 10px 40px rgba(0,0,0,0.2);
+                            }
+                            .success {
+                                color: #4CAF50;
+                                font-size: 64px;
+                            }
+                        </style>
+                    </head>
+                    <body>
+                        <div class="container">
+                            <div class="success">✓</div>
+                            <h2>Already Authorized</h2>
+                            <p>This app is already connected to your Eloqua account.</p>
+                            <p style="color: #666; font-size: 14px;">You can close this window.</p>
+                        </div>
+                        <script>
+                            setTimeout(() => window.close(), 3000);
+                        </script>
+                    </body>
+                    </html>
+                `);
+            }
+        }
+
+        // Generate OAuth 2.0 authorization URL
         const authUrl = OAuthService.getAuthorizationUrl(installId, installId);
 
-        logger.info('Redirecting to OAuth', { 
-            installId, 
-            authUrl 
-        });
+        logger.info('Redirecting to OAuth', { installId, authUrl });
 
-        // Simple server-side redirect (like your old app)
+        // Redirect to OAuth
         res.redirect(authUrl);
     });
 
@@ -282,7 +356,7 @@ class AppController {
     });
 
     /**
-     * OAuth callback - Simple redirect version
+     * OAuth callback
      * GET /eloqua/app/oauth/callback
      */
     static oauthCallback = asyncHandler(async (req, res) => {
@@ -290,10 +364,48 @@ class AppController {
         
         if (!code) {
             logger.error('OAuth callback: missing authorization code');
-            return res.redirect(`/eloqua/app/install?installId=${state}&error=missing_code`);
+            return res.status(400).send(`
+                <!DOCTYPE html>
+                <html>
+                <head>
+                    <title>Authorization Error</title>
+                    <style>
+                        body {
+                            font-family: Arial, sans-serif;
+                            display: flex;
+                            justify-content: center;
+                            align-items: center;
+                            height: 100vh;
+                            margin: 0;
+                            background: #f5f5f5;
+                        }
+                        .container {
+                            text-align: center;
+                            background: white;
+                            padding: 40px;
+                            border-radius: 8px;
+                            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+                            max-width: 500px;
+                        }
+                        .error {
+                            color: #f44336;
+                            font-size: 24px;
+                            margin-bottom: 20px;
+                        }
+                    </style>
+                </head>
+                <body>
+                    <div class="container">
+                        <div class="error">✗ Authorization Failed</div>
+                        <p>Authorization code was not provided.</p>
+                        <p>Please try installing the app again.</p>
+                    </div>
+                </body>
+                </html>
+            `);
         }
 
-        const installId = state;
+        const installId = state; // state contains the installId
 
         logger.info('OAuth callback received', { installId, hasCode: true });
 
@@ -306,10 +418,96 @@ class AppController {
 
             logger.info('OAuth authorization successful', { installId });
 
-            // Redirect directly to configuration page
-            const configureUrl = `/eloqua/app/configure?installId=${installId}&siteId=${consumer.SiteId}`;
-            
-            res.redirect(configureUrl);
+            // Get the callback URL from the consumer
+            const callbackUrl = consumer.eloqua_callback_url;
+
+            if (callbackUrl) {
+                logger.info('Redirecting to Eloqua callback URL', { 
+                    installId,
+                    callbackUrl
+                });
+
+                // Redirect to Eloqua's callback URL
+                return res.redirect(callbackUrl);
+            }
+
+            // Fallback: If no callback URL, show success message
+            logger.warn('No callback URL found, showing success message', { installId });
+
+            res.send(`
+                <!DOCTYPE html>
+                <html>
+                <head>
+                    <title>Authorization Successful</title>
+                    <style>
+                        body {
+                            font-family: Arial, sans-serif;
+                            display: flex;
+                            justify-content: center;
+                            align-items: center;
+                            height: 100vh;
+                            margin: 0;
+                            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+                        }
+                        .container {
+                            text-align: center;
+                            background: white;
+                            padding: 40px;
+                            border-radius: 10px;
+                            box-shadow: 0 10px 40px rgba(0,0,0,0.2);
+                            max-width: 500px;
+                        }
+                        .success {
+                            color: #4CAF50;
+                            font-size: 64px;
+                            margin-bottom: 20px;
+                            animation: scaleIn 0.5s ease-out;
+                        }
+                        @keyframes scaleIn {
+                            from { transform: scale(0); }
+                            to { transform: scale(1); }
+                        }
+                        h2 {
+                            color: #333;
+                            margin-bottom: 10px;
+                        }
+                        p {
+                            color: #666;
+                            margin: 10px 0;
+                        }
+                        .info {
+                            background: #e3f2fd;
+                            padding: 15px;
+                            border-radius: 5px;
+                            margin-top: 20px;
+                            font-size: 14px;
+                            color: #1565c0;
+                        }
+                    </style>
+                </head>
+                <body>
+                    <div class="container">
+                        <div class="success">✓</div>
+                        <h2>Authorization Successful!</h2>
+                        <p>Your Eloqua account has been connected to TransmitSMS.</p>
+                        <div class="info">
+                            <strong>You can close this window.</strong><br>
+                            Return to Eloqua to continue the setup.
+                        </div>
+                    </div>
+                    <script>
+                        // Try to close the window after 3 seconds
+                        setTimeout(function() {
+                            try {
+                                window.close();
+                            } catch (e) {
+                                console.log('Cannot close window automatically');
+                            }
+                        }, 3000);
+                    </script>
+                </body>
+                </html>
+            `);
             
         } catch (error) {
             logger.error('OAuth authorization failed', { 
@@ -317,8 +515,64 @@ class AppController {
                 installId 
             });
             
-            // Redirect back to install with error
-            res.redirect(`/eloqua/app/install?installId=${installId}&error=auth_failed`);
+            res.status(500).send(`
+                <!DOCTYPE html>
+                <html>
+                <head>
+                    <title>Authorization Failed</title>
+                    <style>
+                        body {
+                            font-family: Arial, sans-serif;
+                            display: flex;
+                            justify-content: center;
+                            align-items: center;
+                            height: 100vh;
+                            margin: 0;
+                            background: #f5f5f5;
+                        }
+                        .container {
+                            text-align: center;
+                            background: white;
+                            padding: 40px;
+                            border-radius: 8px;
+                            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+                            max-width: 500px;
+                        }
+                        .error {
+                            color: #f44336;
+                            font-size: 48px;
+                            margin-bottom: 20px;
+                        }
+                        h2 {
+                            color: #333;
+                            margin-bottom: 10px;
+                        }
+                        .details {
+                            background: #fff3cd;
+                            border: 1px solid #ffeaa7;
+                            color: #856404;
+                            padding: 15px;
+                            border-radius: 4px;
+                            margin: 20px 0;
+                            text-align: left;
+                            font-size: 14px;
+                        }
+                    </style>
+                </head>
+                <body>
+                    <div class="container">
+                        <div class="error">✗</div>
+                        <h2>Authorization Failed</h2>
+                        <div class="details">
+                            <strong>Error:</strong><br>
+                            ${error.message}
+                        </div>
+                        <p>Please check your credentials and try again.</p>
+                        <p style="font-size: 14px; color: #666;">You can close this window.</p>
+                    </div>
+                </body>
+                </html>
+            `);
         }
     });
 
