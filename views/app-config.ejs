@@ -14,6 +14,7 @@
             0% { transform: rotate(0deg); }
             100% { transform: rotate(360deg); }
         }
+        
         .spinner {
             border: 3px solid #f3f3f3;
             border-top: 3px solid #4CAF50;
@@ -334,7 +335,12 @@
                 fieldsCache: {},
                 actionidx: 'sendsms',
                 currentFields: [],
-                previousCustomObjectId: null, // Track previous custom object
+                previousCustomObjectIds: {  // Track per action type
+                    sendsms: null,
+                    receivesms: null,
+                    incomingsms: null,
+                    tracked_link: null
+                },
                 fade: false,
                 saving: false,
                 loadingCustomObjects: false,
@@ -382,124 +388,145 @@
                 
                 switchActionType: function() {
                     console.log('Switching to action type:', this.actionidx);
+                    console.log('Current action has custom object:', this.consumer.actions[this.actionidx]?.custom_object_id);
                     
-                    // Reset previous custom object tracking
-                    this.previousCustomObjectId = this.consumer.actions[this.actionidx]?.custom_object_id || null;
+                    // Don't clear anything - just switch to view the new action type
+                    // Update the tracking for the current action type
+                    this.previousCustomObjectIds[this.actionidx] = this.consumer.actions[this.actionidx]?.custom_object_id || null;
                     
-                    // Load fields for the new action type
+                    // Load fields for the current action type (if custom object is already selected)
                     this.loadFieldsForCurrentAction();
                 },
                 
                 onCustomObjectChange: function(customObjectId) {
-                    console.log('Custom object changed from', this.previousCustomObjectId, 'to', customObjectId);
+                    var vm = this;
+                    var currentActionType = vm.actionidx;
+                    var previousId = vm.previousCustomObjectIds[currentActionType];
+                    
+                    console.log('[' + currentActionType + '] Custom object changed from', previousId, 'to', customObjectId);
                     
                     // If customObjectId is null/undefined (clear button clicked)
                     if (!customObjectId) {
-                        console.log('Custom object cleared - resetting everything');
-                        this.clearFieldMappings();
-                        this.currentFields = [];
-                        this.previousCustomObjectId = null;
+                        console.log('[' + currentActionType + '] Custom object cleared - resetting fields for THIS action type only');
                         
-                        // Clear from allFields cache for this action type
-                        this.allFields[this.actionidx] = [];
+                        // Clear field mappings for CURRENT action type only
+                        vm.clearFieldMappingsForActionType(currentActionType);
+                        
+                        // Clear current fields display
+                        vm.currentFields = [];
+                        
+                        // Update tracking for this action type
+                        vm.previousCustomObjectIds[currentActionType] = null;
+                        
+                        // Clear from allFields cache for this action type only
+                        vm.allFields[currentActionType] = [];
+                        
                         return;
                     }
                     
                     // Check if actually changed (not just re-selecting the same one)
-                    if (customObjectId !== this.previousCustomObjectId) {
-                        console.log('Different custom object selected - clearing previous mappings');
+                    if (customObjectId !== previousId) {
+                        console.log('[' + currentActionType + '] Different custom object selected - clearing previous mappings for THIS action type only');
                         
-                        // Clear previous field mappings
-                        this.clearFieldMappings();
+                        // Clear field mappings for CURRENT action type only
+                        vm.clearFieldMappingsForActionType(currentActionType);
                         
                         // Clear current fields immediately to show loading state
-                        this.currentFields = [];
+                        vm.currentFields = [];
                         
-                        // Update tracking
-                        this.previousCustomObjectId = customObjectId;
+                        // Update tracking for this action type
+                        vm.previousCustomObjectIds[currentActionType] = customObjectId;
                     }
                     
                     // Load fields for the new custom object
-                    this.loadFieldsForCurrentAction();
+                    vm.loadFieldsForCurrentAction();
+                },
+                
+                clearFieldMappingsForActionType: function(actionType) {
+                    console.log('Clearing field mappings for action type:', actionType);
+                    
+                    // Clear field mappings for the SPECIFIED action type only
+                    if (this.consumer.actions[actionType]) {
+                        this.consumer.actions[actionType].mobile_field = '';
+                        this.consumer.actions[actionType].vn_field = '';
+                        this.consumer.actions[actionType].email_field = '';
+                        this.consumer.actions[actionType].title_field = '';
+                        
+                        // Clear action-specific fields based on type
+                        if (actionType === 'sendsms') {
+                            this.consumer.actions[actionType].notification_field = '';
+                            this.consumer.actions[actionType].outgoing_field = '';
+                        } else if (actionType === 'receivesms' || actionType === 'incomingsms') {
+                            this.consumer.actions[actionType].response_field = '';
+                        } else if (actionType === 'tracked_link') {
+                            this.consumer.actions[actionType].link_hits = '';
+                            this.consumer.actions[actionType].url_field = '';
+                            this.consumer.actions[actionType].originalurl_field = '';
+                        }
+                    }
+                    
+                    console.log('Field mappings cleared for', actionType);
+                    console.log('Other action types remain unchanged');
                 },
                 
                 clearFieldMappings: function() {
-                    var vm = this;
-                    console.log('Clearing field mappings for', vm.actionidx);
-                    
-                    // Clear all field mappings for current action type
-                    if (vm.consumer.actions[vm.actionidx]) {
-                        vm.consumer.actions[vm.actionidx].mobile_field = '';
-                        vm.consumer.actions[vm.actionidx].vn_field = '';
-                        vm.consumer.actions[vm.actionidx].email_field = '';
-                        vm.consumer.actions[vm.actionidx].title_field = '';
-                        
-                        // Clear action-specific fields
-                        if (vm.actionidx === 'sendsms') {
-                            vm.consumer.actions[vm.actionidx].notification_field = '';
-                            vm.consumer.actions[vm.actionidx].outgoing_field = '';
-                        } else if (vm.actionidx === 'receivesms' || vm.actionidx === 'incomingsms') {
-                            vm.consumer.actions[vm.actionidx].response_field = '';
-                        } else if (vm.actionidx === 'tracked_link') {
-                            vm.consumer.actions[vm.actionidx].link_hits = '';
-                            vm.consumer.actions[vm.actionidx].url_field = '';
-                            vm.consumer.actions[vm.actionidx].originalurl_field = '';
-                        }
-                    }
+                    // Deprecated - use clearFieldMappingsForActionType instead
+                    // Keeping for backward compatibility
+                    this.clearFieldMappingsForActionType(this.actionidx);
                 },
                 
                 loadFieldsForCurrentAction: function() {
                     var vm = this;
+                    var currentActionType = vm.actionidx;
+                    var customObjectId = vm.consumer.actions[currentActionType]?.custom_object_id;
                     
-                    var customObjectId = vm.consumer.actions[vm.actionidx]?.custom_object_id;
-                    
-                    console.log('loadFieldsForCurrentAction called for', vm.actionidx, 'with custom object:', customObjectId);
+                    console.log('[' + currentActionType + '] loadFieldsForCurrentAction called with custom object:', customObjectId);
                     
                     if (!customObjectId) {
-                        console.log('No custom object selected, clearing fields');
+                        console.log('[' + currentActionType + '] No custom object selected, clearing fields display');
                         vm.currentFields = [];
                         return;
                     }
                     
-                    // Check if we have pre-loaded fields for this specific custom object
-                    // Don't use allFields[actionidx] blindly - it might be from a previous custom object
-                    if (vm.allFields[vm.actionidx] && 
-                        vm.allFields[vm.actionidx].length > 0 && 
-                        vm.previousCustomObjectId === customObjectId) {
-                        console.log('Using pre-loaded fields for', vm.actionidx);
-                        vm.currentFields = vm.allFields[vm.actionidx];
+                    // Check if we have pre-loaded fields for this specific custom object and action type
+                    var previousId = vm.previousCustomObjectIds[currentActionType];
+                    if (vm.allFields[currentActionType] && 
+                        vm.allFields[currentActionType].length > 0 && 
+                        previousId === customObjectId) {
+                        console.log('[' + currentActionType + '] Using pre-loaded fields');
+                        vm.currentFields = vm.allFields[currentActionType];
                         return;
                     }
                     
-                    // Check cache by custom object ID (not action type)
+                    // Check cache by custom object ID
                     if (vm.fieldsCache[customObjectId]) {
-                        console.log('Using cached fields for custom object', customObjectId);
+                        console.log('[' + currentActionType + '] Using cached fields for custom object', customObjectId);
                         vm.currentFields = vm.fieldsCache[customObjectId];
-                        vm.allFields[vm.actionidx] = vm.currentFields;
+                        vm.allFields[currentActionType] = vm.currentFields;
                         return;
                     }
                     
                     // Fetch fields from API
                     vm.loadingFields = true;
-                    console.log('Fetching fields from API for custom object', customObjectId);
+                    console.log('[' + currentActionType + '] Fetching fields from API for custom object', customObjectId);
                     
                     axios.get('/eloqua/action/ajax/customobject/' + vm.consumer.installId + '/' + vm.consumer.SiteId + '/' + customObjectId)
                         .then(function(response) {
-                            console.log('Fields fetched successfully:', response.data.fields?.length || 0, 'fields');
+                            console.log('[' + currentActionType + '] Fields fetched successfully:', response.data.fields?.length || 0, 'fields');
                             
                             // Update current fields
                             vm.currentFields = response.data.fields || [];
                             
-                            // Cache by custom object ID
+                            // Cache by custom object ID (shared across action types)
                             vm.fieldsCache[customObjectId] = vm.currentFields;
                             
                             // Also store in allFields for this action type
-                            vm.allFields[vm.actionidx] = vm.currentFields;
+                            vm.allFields[currentActionType] = vm.currentFields;
                             
                             vm.loadingFields = false;
                         })
                         .catch(function(error) {
-                            console.error('Error fetching fields:', error);
+                            console.error('[' + currentActionType + '] Error fetching fields:', error);
                             vm.currentFields = [];
                             vm.loadingFields = false;
                             vm.status = {
@@ -530,13 +557,15 @@
 
                     vm.saving = true;
                     
+                    console.log('Saving consumer configuration:', vm.consumer);
+                    
                     axios.post(location.pathname + location.search, {
                         consumer: vm.consumer
                     })
                     .then(function(response) {
                         vm.saving = false;
                         vm.fade = true;
-                        console.log("Configuration saved", response);
+                        console.log("Configuration saved successfully", response);
                         vm.status = {
                             success: 'Configuration successfully updated'
                         };
@@ -571,8 +600,11 @@
                     return vm.allFields[k] && vm.allFields[k].length > 0; 
                 }));
                 
-                // Set initial previous custom object ID
-                vm.previousCustomObjectId = vm.consumer.actions[vm.actionidx]?.custom_object_id || null;
+                // Initialize previous custom object IDs for ALL action types
+                ['sendsms', 'receivesms', 'incomingsms', 'tracked_link'].forEach(function(actionType) {
+                    vm.previousCustomObjectIds[actionType] = vm.consumer.actions[actionType]?.custom_object_id || null;
+                    console.log('[' + actionType + '] Initialized with custom object:', vm.previousCustomObjectIds[actionType]);
+                });
                 
                 // Load fields for current action
                 vm.loadFieldsForCurrentAction();
