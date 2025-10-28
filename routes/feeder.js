@@ -7,7 +7,7 @@ const {
 } = require('../middleware');
 
 // Feeder service lifecycle
-router.get('/create', 
+router.post('/create', 
     validateQueryParams('installId', 'siteId'),
     verifyInstallation,
     FeederController.create

@@ -10,7 +10,7 @@ const {
 const sessionAuth = require('../middleware/sessionAuth');
 
 // Action service lifecycle
-router.get('/create', 
+router.post('/create', 
     validateQueryParams('installId', 'siteId'),
     verifyInstallation,
     ActionController.create

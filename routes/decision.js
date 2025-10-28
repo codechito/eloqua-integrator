@@ -8,7 +8,7 @@ const {
 } = require('../middleware');
 
 // Decision service lifecycle
-router.get('/create', 
+router.post('/create', 
     validateQueryParams('installId', 'siteId'),
     verifyInstallation,
     DecisionController.create
