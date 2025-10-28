@@ -115,18 +115,12 @@
                     <p style="width:320px; text-align:left; font-size:11px;"><i>You can map custom object fields per each option.</i></p>
                 </div>
                 <div class="form-group">
-                    <label for="custom_object" style="width:320px; text-align:left;">
-                        Custom Object 
-                        <span v-if="consumer.actions[actionidx].custom_object_id" style="font-size: 10px; color: #666;">
-                            (ID: {{ consumer.actions[actionidx].custom_object_id }})
-                        </span>
-                    </label>
+                    <label for="custom_object" style="width:320px; text-align:left;">Custom Object</label>
                     <v-select  
-                        :key="actionidx + '-' + (consumer.actions[actionidx].custom_object_id || 'none')"
+                        :key="'co-' + actionidx"
                         label="name"
                         style="width:320px; text-align:left;" 
-                        v-model="consumer.actions[actionidx].custom_object_id" 
-                        :reduce="element => element.id" 
+                        v-model="selectedCustomObjects[actionidx]" 
                         :options="customObjects" 
                         @search="fetchCustomObjects"
                         @input="onCustomObjectChange"
@@ -346,6 +340,12 @@
                 fieldsCache: {},
                 actionidx: 'sendsms',
                 currentFields: [],
+                selectedCustomObjects: {  // Store full objects for v-select
+                    sendsms: null,
+                    receivesms: null,
+                    incomingsms: null,
+                    tracked_link: null
+                },
                 previousCustomObjectIds: {
                     sendsms: null,
                     receivesms: null,
@@ -357,15 +357,6 @@
                 loadingCustomObjects: false,
                 loadingFields: false
             },
-            watch: {
-                // Watch for changes in the custom_object_id for current action type
-                'consumer.actions': {
-                    handler: function(newVal, oldVal) {
-                        console.log('Consumer actions changed');
-                    },
-                    deep: true
-                }
-            },
             methods: {
                 fetchCustomObjects: function(search, loading) {
                     var vm = this;
@@ -374,6 +365,9 @@
                     if (vm.customObjectsCache[cacheKey]) {
                         vm.customObjects = vm.customObjectsCache[cacheKey];
                         if (loading) loading(false);
+                        
+                        // Try to resolve selected objects from the loaded list
+                        vm.resolveSelectedObjects();
                         return;
                     }
                     
@@ -387,6 +381,10 @@
                         vm.customObjects = response.data.elements || [];
                         vm.customObjectsCache[cacheKey] = vm.customObjects;
                         console.log('Custom objects loaded:', vm.customObjects.length);
+                        
+                        // Resolve selected objects after loading
+                        vm.resolveSelectedObjects();
+                        
                         if (loading) loading(false);
                         vm.loadingCustomObjects = false;
                     })
@@ -406,32 +404,98 @@
                     });
                 },
                 
+                resolveSelectedObjects: function() {
+                    var vm = this;
+                    console.log('Resolving selected objects from custom objects list');
+                    
+                    ['sendsms', 'receivesms', 'incomingsms', 'tracked_link'].forEach(function(actionType) {
+                        var customObjectId = vm.consumer.actions[actionType]?.custom_object_id;
+                        
+                        if (customObjectId && !vm.selectedCustomObjects[actionType]) {
+                            // Find the custom object in the list
+                            var found = vm.customObjects.find(function(co) {
+                                return co.id == customObjectId;
+                            });
+                            
+                            if (found) {
+                                console.log('[' + actionType + '] Resolved custom object:', found.id, '-', found.name);
+                                vm.$set(vm.selectedCustomObjects, actionType, found);
+                            } else {
+                                console.log('[' + actionType + '] Custom object not found in list, will fetch:', customObjectId);
+                                // Fetch this specific custom object
+                                vm.fetchSingleCustomObject(customObjectId, actionType);
+                            }
+                        }
+                    });
+                },
+                
+                fetchSingleCustomObject: function(customObjectId, actionType) {
+                    var vm = this;
+                    
+                    axios.get('/eloqua/action/ajax/customobject/' + vm.consumer.installId + '/' + vm.consumer.SiteId + '/' + customObjectId)
+                        .then(function(response) {
+                            var customObject = {
+                                id: response.data.id,
+                                name: response.data.name
+                            };
+                            
+                            console.log('[' + actionType + '] Fetched single custom object:', customObject.id, '-', customObject.name);
+                            
+                            // Set the selected object
+                            vm.$set(vm.selectedCustomObjects, actionType, customObject);
+                            
+                            // Add to custom objects list if not already there
+                            var exists = vm.customObjects.find(function(co) {
+                                return co.id == customObject.id;
+                            });
+                            
+                            if (!exists) {
+                                vm.customObjects.push(customObject);
+                            }
+                        })
+                        .catch(function(error) {
+                            console.error('[' + actionType + '] Error fetching single custom object:', error);
+                        });
+                },
+                
                 switchActionType: function() {
                     var vm = this;
                     console.log('=== Switching Action Type ===');
                     console.log('New action type:', vm.actionidx);
-                    console.log('Custom object for this action:', vm.consumer.actions[vm.actionidx]?.custom_object_id);
-                    console.log('Stored fields:', vm.allFields[vm.actionidx]?.length || 0);
+                    console.log('Custom object ID:', vm.consumer.actions[vm.actionidx]?.custom_object_id);
+                    console.log('Selected object:', vm.selectedCustomObjects[vm.actionidx]);
                     
                     // Update tracking
                     vm.previousCustomObjectIds[vm.actionidx] = vm.consumer.actions[vm.actionidx]?.custom_object_id || null;
                     
-                    // Force Vue to re-render the v-select by using nextTick
+                    // If we have a custom object ID but no selected object, try to resolve it
+                    if (vm.consumer.actions[vm.actionidx]?.custom_object_id && !vm.selectedCustomObjects[vm.actionidx]) {
+                        vm.resolveSelectedObjects();
+                    }
+                    
+                    // Load fields
                     vm.$nextTick(function() {
-                        // Load fields for this action type
                         vm.loadFieldsForCurrentAction();
                     });
                 },
                 
-                onCustomObjectChange: function(customObjectId) {
+                onCustomObjectChange: function(selectedObject) {
                     var vm = this;
                     var currentActionType = vm.actionidx;
+                    var customObjectId = selectedObject ? selectedObject.id : null;
                     var previousId = vm.previousCustomObjectIds[currentActionType];
                     
                     console.log('=== Custom Object Change ===');
                     console.log('[' + currentActionType + '] Changed from', previousId, 'to', customObjectId);
+                    console.log('Selected object:', selectedObject);
                     
-                    // If clearing (X button clicked)
+                    // Update the consumer data with the ID
+                    vm.$set(vm.consumer.actions[currentActionType], 'custom_object_id', customObjectId);
+                    
+                    // Update selected object
+                    vm.$set(vm.selectedCustomObjects, currentActionType, selectedObject);
+                    
+                    // If clearing
                     if (!customObjectId) {
                         console.log('[' + currentActionType + '] Clearing custom object and fields');
                         vm.clearFieldMappingsForActionType(currentActionType);
@@ -457,7 +521,6 @@
                     console.log('Clearing field mappings for:', actionType);
                     
                     if (this.consumer.actions[actionType]) {
-                        // Use Vue.set to ensure reactivity
                         this.$set(this.consumer.actions[actionType], 'mobile_field', '');
                         this.$set(this.consumer.actions[actionType], 'vn_field', '');
                         this.$set(this.consumer.actions[actionType], 'email_field', '');
@@ -556,7 +619,6 @@
                     vm.saving = true;
                     
                     console.log('Saving consumer configuration...');
-                    console.log('Actions:', JSON.stringify(vm.consumer.actions, null, 2));
                     
                     axios.post(location.pathname + location.search, {
                         consumer: vm.consumer
@@ -600,14 +662,16 @@
                 ['sendsms', 'receivesms', 'incomingsms', 'tracked_link'].forEach(function(actionType) {
                     var coId = vm.consumer.actions[actionType]?.custom_object_id || null;
                     vm.previousCustomObjectIds[actionType] = coId;
-                    console.log('[' + actionType + '] Initialized - Custom Object:', coId, '- Fields:', vm.allFields[actionType]?.length || 0);
+                    console.log('[' + actionType + '] Initialized - Custom Object ID:', coId);
                 });
                 
-                // Load fields for initial action type
-                vm.loadFieldsForCurrentAction();
-                
-                // Load custom objects
+                // Load custom objects first
                 vm.fetchCustomObjects('', null);
+                
+                // Load fields for initial action type
+                vm.$nextTick(function() {
+                    vm.loadFieldsForCurrentAction();
+                });
             }
         });
     </script>
