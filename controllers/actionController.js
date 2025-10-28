@@ -150,6 +150,7 @@ class ActionController {
         
         const custom_objects = await eloquaService.getCustomObjects('', 100);
         const contactFieldsData = await eloquaService.getContactFields(200);
+        logger.info('Contact fields', contactFieldsData);
         const merge_fields = contactFieldsData.elements || [];
 
         // Get sender IDs from TransmitSMS
