@@ -1084,14 +1084,14 @@ Opt-out reply STOP"></textarea>
                   vm.status = { success: 'Configuration successfully updated' };
                   
                   window.scrollTo({ bottom: 0, behavior: 'smooth' });
-                  
+                  vm.saving = false;
                   
                 })
                 .catch(function (error) {
                   vm.status = { error: error.response?.data?.message || 'Failed to update instance!' };
                   
                   window.scrollTo({ bottom: 0, behavior: 'smooth' });
-                  
+                  vm.saving = false;
                  
                 });
             }
