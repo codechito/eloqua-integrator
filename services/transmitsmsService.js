@@ -220,37 +220,6 @@ class TransmitSmsService {
     }
 
     /**
-     * Add tracked link
-     * @param {string} url - URL to track
-     * @param {string} title - Link title
-     */
-    async addTrackedLink(url, title = '') {
-        try {
-            const payload = {
-                url,
-                title: title || 'SMS Campaign Link'
-            };
-
-            logger.debug('Adding tracked link', { url, title });
-
-            const response = await this.makeRequest('POST', '/add-link.json', payload);
-
-            logger.debug('Tracked link created', {
-                shortUrl: response.short_url,
-                originalUrl: url
-            });
-
-            return response;
-        } catch (error) {
-            logger.error('Error adding tracked link', {
-                url,
-                error: error.message
-            });
-            throw error;
-        }
-    }
-
-    /**
      * Get account info
      */
     async getAccountInfo() {

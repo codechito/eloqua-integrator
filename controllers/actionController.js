@@ -187,6 +187,7 @@ class ActionController {
         try {
             const eloquaService = new EloquaService(installId, siteId);
             const contactFieldsResponse = await eloquaService.getContactFields(200);
+            logger.info('contactFieldsResponse', contactFieldsResponse);
             merge_fields = contactFieldsResponse.elements || [];
         } catch (error) {
             logger.warn('Could not fetch contact fields', { error: error.message });
