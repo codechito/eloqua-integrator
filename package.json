@@ -22,7 +22,9 @@
   "type": "commonjs",
   "main": "server.js",
   "scripts": {
-    "start": "node server.js",
+    "start": "node server.js workers/index.js",
+    "worker": "node workers/index.js",
+    "dev:worker": "nodemon workers/index.js",
     "dev": "nodemon server.js",
     "test": "npm run test:setup && npm run test:models",
     "test:setup": "node test-setup.js",
@@ -48,6 +50,7 @@
     "moment": "^2.30.1",
     "mongoose": "^8.19.2",
     "morgan": "^1.10.1",
+    "node-cron": "^4.2.1",
     "uuid": "^13.0.0"
   },
   "devDependencies": {

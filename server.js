@@ -17,7 +17,8 @@ const {
     notFoundHandler,
     requestLogger,
     rateLimit,
-    sanitizeInput
+    sanitizeInput,
+    handleReauth
 } = require('./middleware');
 
 // Import routes
@@ -31,6 +32,9 @@ const {
 
 // Import logger
 const { logger } = require('./utils');
+
+// Import SMS Worker
+const ScheduledSmsWorker = require('./workers/scheduledWorker');
 
 // Initialize Express app
 const app = express();
@@ -150,8 +154,13 @@ app.get('/', (req, res) => {
         status: 'running',
         timestamp: new Date().toISOString(),
         environment: process.env.NODE_ENV || 'development',
+        worker: {
+            enabled: true,
+            mode: 'in-process-scheduled'
+        },
         endpoints: {
             health: '/health',
+            workerHealth: '/eloqua/action/worker/health',
             app: {
                 install: 'GET /eloqua/app/install',
                 configure: 'GET /eloqua/app/configure',
@@ -183,8 +192,19 @@ app.get('/', (req, res) => {
 });
 
 // Health check endpoint
-app.get('/health', (req, res) => {
+app.get('/health', async (req, res) => {
     const mongoose = require('mongoose');
+    
+    // Get worker stats if available
+    let workerStats = null;
+    if (global.smsWorker) {
+        try {
+            workerStats = await global.smsWorker.getStats();
+        } catch (error) {
+            logger.error('Error getting worker stats', { error: error.message });
+        }
+    }
+    
     res.json({
         status: 'OK',
         uptime: process.uptime(),
@@ -193,8 +213,10 @@ app.get('/health', (req, res) => {
         environment: process.env.NODE_ENV || 'development',
         memory: {
             used: Math.round(process.memoryUsage().heapUsed / 1024 / 1024) + ' MB',
-            total: Math.round(process.memoryUsage().heapTotal / 1024 / 1024) + ' MB'
-        }
+            total: Math.round(process.memoryUsage().heapTotal / 1024 / 1024) + ' MB',
+            percentage: Math.round((process.memoryUsage().heapUsed / process.memoryUsage().heapTotal) * 100) + '%'
+        },
+        worker: workerStats || { status: 'not started' }
     });
 });
 
@@ -208,14 +230,55 @@ app.use('/webhooks', webhookRoutes);
 // 404 handler
 app.use(notFoundHandler);
 
-const { handleReauth } = require('./middleware');
+// Reauth handler
 app.use(handleReauth);
 
 // Error handler
 app.use(errorHandler);
 
+// Initialize worker after routes are set up
+let smsWorker = null;
+
+async function initializeWorker() {
+    try {
+        logger.info('Initializing SMS Worker...');
+        
+        // Create worker instance
+        smsWorker = new ScheduledSmsWorker();
+        
+        // Store globally for health checks
+        global.smsWorker = smsWorker;
+        
+        // Start the worker
+        smsWorker.start();
+        
+        logger.info('SMS Worker started successfully', {
+            mode: 'in-process-scheduled',
+            schedule: 'Every 30 seconds'
+        });
+        
+        // Log worker stats periodically (every 5 minutes)
+        setInterval(async () => {
+            try {
+                const stats = await smsWorker.getStats();
+                logger.info('SMS Worker Stats', stats);
+            } catch (error) {
+                logger.error('Error getting worker stats', { error: error.message });
+            }
+        }, 5 * 60 * 1000); // Every 5 minutes
+        
+    } catch (error) {
+        logger.error('Failed to initialize SMS Worker', {
+            error: error.message,
+            stack: error.stack
+        });
+        // Don't crash the server if worker fails to start
+        // The web server can still run without the worker
+    }
+}
+
 // Start server
-const server = app.listen(PORT, () => {
+const server = app.listen(PORT, async () => {
     logger.info('Server started', {
         port: PORT,
         environment: process.env.NODE_ENV || 'development',
@@ -229,43 +292,118 @@ const server = app.listen(PORT, () => {
     console.log(`  ✓ Environment: ${process.env.NODE_ENV || 'development'}`);
     console.log(`  ✓ URL: http://localhost:${PORT}`);
     console.log(`  ✓ Health: http://localhost:${PORT}/health`);
+    console.log(`  ✓ Worker Health: http://localhost:${PORT}/eloqua/action/worker/health`);
+    console.log('========================================');
+    
+    // Initialize worker after server starts
+    await initializeWorker();
+    
+    console.log('========================================');
+    console.log('  ✓ SMS Worker: Active (Scheduled)');
+    console.log('  ✓ Schedule: Every 30 seconds');
+    console.log('  ✓ Cleanup: Daily at 2 AM');
+    console.log('  ✓ Retry Failed: Every 10 minutes');
     console.log('========================================');
 });
 
 // Graceful shutdown
-process.on('SIGTERM', () => {
-    logger.info('SIGTERM received, shutting down gracefully');
+async function gracefulShutdown(signal) {
+    logger.info(`${signal} received, shutting down gracefully`);
+    
+    console.log('========================================');
+    console.log(`  Shutting down (${signal})...`);
+    console.log('========================================');
+    
+    // Stop accepting new requests
     server.close(() => {
-        logger.info('Server closed');
-        const mongoose = require('mongoose');
-        mongoose.connection.close(false, () => {
-            logger.info('MongoDB connection closed');
-            process.exit(0);
-        });
+        logger.info('HTTP server closed');
+        console.log('  ✓ HTTP server closed');
     });
-});
+    
+    // Stop the SMS worker
+    if (smsWorker) {
+        try {
+            smsWorker.stop();
+            logger.info('SMS Worker stopped');
+            console.log('  ✓ SMS Worker stopped');
+        } catch (error) {
+            logger.error('Error stopping SMS Worker', { error: error.message });
+        }
+    }
+    
+    // Wait for current jobs to complete (max 10 seconds)
+    console.log('  ⏳ Waiting for current jobs to complete...');
+    await new Promise(resolve => setTimeout(resolve, 10000));
+    
+    // Close MongoDB connection
+    const mongoose = require('mongoose');
+    try {
+        await mongoose.connection.close(false);
+        logger.info('MongoDB connection closed');
+        console.log('  ✓ MongoDB connection closed');
+    } catch (error) {
+        logger.error('Error closing MongoDB', { error: error.message });
+    }
+    
+    console.log('========================================');
+    console.log('  ✓ Shutdown complete');
+    console.log('========================================');
+    
+    process.exit(0);
+}
 
-process.on('SIGINT', () => {
-    logger.info('SIGINT received, shutting down gracefully');
-    server.close(() => {
-        logger.info('Server closed');
-        const mongoose = require('mongoose');
-        mongoose.connection.close(false, () => {
-            logger.info('MongoDB connection closed');
-            process.exit(0);
-        });
-    });
-});
+process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
+process.on('SIGINT', () => gracefulShutdown('SIGINT'));
 
 // Handle uncaught exceptions
 process.on('uncaughtException', (error) => {
-    logger.error('Uncaught Exception', { error: error.message, stack: error.stack });
-    process.exit(1);
+    logger.error('Uncaught Exception', { 
+        error: error.message, 
+        stack: error.stack 
+    });
+    
+    console.error('========================================');
+    console.error('  ✗ UNCAUGHT EXCEPTION');
+    console.error('========================================');
+    console.error(error);
+    console.error('========================================');
+    
+    // Try to shutdown gracefully
+    gracefulShutdown('UNCAUGHT_EXCEPTION');
 });
 
 // Handle unhandled promise rejections
 process.on('unhandledRejection', (reason, promise) => {
     logger.error('Unhandled Rejection', { reason, promise });
+    
+    console.error('========================================');
+    console.error('  ✗ UNHANDLED REJECTION');
+    console.error('========================================');
+    console.error('Reason:', reason);
+    console.error('Promise:', promise);
+    console.error('========================================');
 });
+
+// Log memory usage warnings
+setInterval(() => {
+    const usage = process.memoryUsage();
+    const heapUsedMB = Math.round(usage.heapUsed / 1024 / 1024);
+    const heapTotalMB = Math.round(usage.heapTotal / 1024 / 1024);
+    const percentage = Math.round((usage.heapUsed / usage.heapTotal) * 100);
+    
+    if (percentage > 90) {
+        logger.warn('High memory usage detected', {
+            heapUsed: heapUsedMB + ' MB',
+            heapTotal: heapTotalMB + ' MB',
+            percentage: percentage + '%'
+        });
+        
+        // Force garbage collection if available
+        if (global.gc) {
+            logger.info('Running garbage collection');
+            global.gc();
+        }
+    }
+}, 60000); // Check every minute
 
 module.exports = app;

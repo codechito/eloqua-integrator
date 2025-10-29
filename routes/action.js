@@ -65,6 +65,13 @@ router.post('/ajax/testsms/:installId/:siteId/:country/:phone',
     ActionController.testSms
 );
 
+// Worker status
+router.get('/worker/status',
+    validateQueryParams('installId'),
+    verifyInstallation,
+    ActionController.getWorkerStatus
+);
+
 router.get('/ajax/sender-ids/:installId/:siteId',
     sessionAuth,
     ActionController.getSenderIds

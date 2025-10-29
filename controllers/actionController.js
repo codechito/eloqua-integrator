@@ -234,8 +234,9 @@ class ActionController {
         });
     });
 
+
     /**
-     * Notify (Execute action)
+     * Notify (Execute action) - Queue SMS jobs
      * POST /eloqua/action/notify
      */
     static notify = asyncHandler(async (req, res) => {
@@ -252,9 +253,7 @@ class ActionController {
             return res.status(404).json({ error: 'Instance not found' });
         }
 
-        const consumer = await Consumer.findOne({ installId: instance.installId })
-            .select('+transmitsms_api_key +transmitsms_api_secret');
-        
+        const consumer = await Consumer.findOne({ installId: instance.installId });
         if (!consumer) {
             return res.status(404).json({ error: 'Consumer not found' });
         }
@@ -267,41 +266,34 @@ class ActionController {
             });
         }
 
-        // Process SMS sending
-        const results = await ActionController.processSendSms(
+        // Queue SMS jobs instead of sending immediately
+        const results = await ActionController.queueSmsJobs(
             instance, 
             consumer, 
             executionData
         );
 
-        logger.info('Action notify completed', { 
+        logger.info('Action notify completed - jobs queued', { 
             instanceId, 
-            successCount: results.filter(r => r.success).length,
+            queuedCount: results.filter(r => r.success).length,
             failCount: results.filter(r => !r.success).length
         });
 
         res.json({
             success: true,
+            message: 'SMS jobs queued for processing',
             results
         });
     });
 
     /**
-     * Process SMS sending
+     * Queue SMS jobs for background processing
      */
-    static async processSendSms(instance, consumer, executionData) {
-        const smsService = new TransmitSmsService(
-            consumer.transmitsms_api_key,
-            consumer.transmitsms_api_secret
-        );
-
-        const eloquaService = new EloquaService(
-            instance.installId,
-            instance.SiteId
-        );
-
+    static async queueSmsJobs(instance, consumer, executionData) {
         const results = [];
         const records = executionData.records || [];
+
+        const baseUrl = process.env.APP_BASE_URL || 'https://eloqua-integrator.onrender.com';
 
         for (const record of records) {
             try {
@@ -320,11 +312,17 @@ class ActionController {
                     continue;
                 }
 
+                // Get country for formatting
+                let country = consumer.default_country || 'Australia';
+                if (instance.country_field) {
+                    const countryValue = ActionController.getFieldValue(record, instance.country_field);
+                    if (countryValue) {
+                        country = countryValue;
+                    }
+                }
+
                 // Format phone number
-                const formattedNumber = formatPhoneNumber(
-                    mobileNumber, 
-                    consumer.default_country || 'Australia'
-                );
+                const formattedNumber = formatPhoneNumber(mobileNumber, country);
 
                 // Process message with merge fields
                 let message = replaceMergeFields(instance.message, record);
@@ -333,8 +331,6 @@ class ActionController {
                 message = message.replace(/\n\n+/g, '\n\n').trim();
 
                 // Build callback URLs with tracking parameters
-                const baseUrl = process.env.APP_BASE_URL || 'https://eloqua-integrator.onrender.com';
-                
                 const callbackParams = new URLSearchParams({
                     installId: instance.installId,
                     instanceId: instance.instanceId,
@@ -343,7 +339,7 @@ class ActionController {
                     campaignId: instance.assetId || ''
                 }).toString();
 
-                // Send SMS with callbacks
+                // Build SMS options
                 const smsOptions = {
                     from: instance.caller_id || undefined
                 };
@@ -370,70 +366,61 @@ class ActionController {
                     smsOptions.link_hits_callback = `${baseUrl}/webhooks/linkhit?${callbackParams}`;
                 }
 
-                const smsResponse = await smsService.sendSms(
-                    formattedNumber,
-                    message,
-                    smsOptions
-                );
+                // Prepare custom object data
+                const customObjectData = instance.custom_object_id ? {
+                    customObjectId: instance.custom_object_id,
+                    fieldMappings: {
+                        mobile_field: instance.mobile_field,
+                        email_field: instance.email_field,
+                        title_field: instance.title_field,
+                        notification_field: instance.notification_field,
+                        outgoing_field: instance.outgoing_field,
+                        vn_field: instance.vn_field
+                    },
+                    recordData: record
+                } : null;
 
-                // Log SMS
-                const smsLog = new SmsLog({
+                // Create SMS job
+                const jobId = generateId();
+                const smsJob = new SmsJob({
+                    jobId,
                     installId: instance.installId,
                     instanceId: instance.instanceId,
                     contactId: record.contactId,
                     emailAddress: record.emailAddress || '',
                     mobileNumber: formattedNumber,
                     message,
-                    messageId: smsResponse.message_id,
                     senderId: instance.caller_id,
+                    campaignId: instance.assetId,
                     campaignTitle: instance.assetName,
-                    status: 'sent',
-                    transmitSmsResponse: smsResponse,
-                    sentAt: new Date(),
-                    trackedLink: smsResponse.tracked_link ? {
-                        shortUrl: smsResponse.tracked_link.short_url,
-                        originalUrl: smsResponse.tracked_link.original_url
-                    } : undefined
+                    assetName: instance.assetName,
+                    smsOptions,
+                    customObjectData,
+                    status: 'pending',
+                    scheduledAt: new Date()
                 });
 
-                await smsLog.save();
-
-                // Update custom object if configured
-                if (instance.custom_object_id) {
-                    await ActionController.updateCustomObject(
-                        eloquaService,
-                        instance,
-                        record,
-                        smsLog,
-                        'sent'
-                    );
-                }
-
-                // Update stats
-                await instance.incrementSent();
+                await smsJob.save();
 
                 results.push({
                     contactId: record.contactId,
                     success: true,
-                    messageId: smsResponse.message_id
+                    jobId: jobId,
+                    message: 'SMS job queued'
                 });
 
-                logger.sms('sent', {
-                    instanceId: instance.instanceId,
-                    to: formattedNumber,
-                    messageId: smsResponse.message_id,
-                    hasTrackedLink: message.includes('[tracked-link]'),
-                    hasCallbacks: !!(smsOptions.dlr_callback || smsOptions.reply_callback || smsOptions.link_hits_callback)
+                logger.info('SMS job queued', {
+                    jobId,
+                    contactId: record.contactId,
+                    to: formattedNumber
                 });
 
             } catch (error) {
-                logger.error('Error sending SMS', {
+                logger.error('Error queuing SMS job', {
                     instanceId: instance.instanceId,
                     contactId: record.contactId,
                     error: error.message
                 });
-
-                await instance.incrementFailed();
 
                 results.push({
                     contactId: record.contactId,
@@ -445,6 +432,212 @@ class ActionController {
 
         return results;
     }
+
+    /**
+     * Process a single SMS job (called by worker)
+     */
+    static async processSmsJob(job) {
+        try {
+            // Mark as processing
+            await job.markAsProcessing();
+
+            logger.info('Processing SMS job', {
+                jobId: job.jobId,
+                contactId: job.contactId,
+                to: job.mobileNumber
+            });
+
+            // Get consumer credentials
+            const consumer = await Consumer.findOne({ installId: job.installId })
+                .select('+transmitsms_api_key +transmitsms_api_secret');
+
+            if (!consumer || !consumer.transmitsms_api_key) {
+                throw new Error('Consumer credentials not found');
+            }
+
+            const smsService = new TransmitSmsService(
+                consumer.transmitsms_api_key,
+                consumer.transmitsms_api_secret
+            );
+
+            // Send SMS
+            const smsResponse = await smsService.sendSms(
+                job.mobileNumber,
+                job.message,
+                job.smsOptions
+            );
+
+            // Mark job as sent
+            await job.markAsSent(smsResponse.message_id, smsResponse);
+
+            // Create SMS log
+            const smsLog = new SmsLog({
+                installId: job.installId,
+                instanceId: job.instanceId,
+                contactId: job.contactId,
+                emailAddress: job.emailAddress,
+                mobileNumber: job.mobileNumber,
+                message: job.message,
+                messageId: smsResponse.message_id,
+                senderId: job.senderId,
+                campaignTitle: job.campaignTitle,
+                status: 'sent',
+                transmitSmsResponse: smsResponse,
+                sentAt: new Date(),
+                trackedLink: smsResponse.tracked_link ? {
+                    shortUrl: smsResponse.tracked_link.short_url,
+                    originalUrl: smsResponse.tracked_link.original_url
+                } : undefined
+            });
+
+            await smsLog.save();
+
+            // Link smsLog to job
+            job.smsLogId = smsLog._id;
+            await job.save();
+
+            // Update custom object if configured
+            if (job.customObjectData && job.customObjectData.customObjectId) {
+                const instance = await ActionInstance.findOne({ instanceId: job.instanceId });
+                if (instance) {
+                    const eloquaService = new EloquaService(job.installId, instance.SiteId);
+                    await ActionController.updateCustomObjectForJob(
+                        eloquaService,
+                        job,
+                        smsLog
+                    );
+                }
+            }
+
+            // Update instance stats
+            const instance = await ActionInstance.findOne({ instanceId: job.instanceId });
+            if (instance) {
+                await instance.incrementSent();
+            }
+
+            logger.sms('sent', {
+                jobId: job.jobId,
+                messageId: smsResponse.message_id,
+                to: job.mobileNumber
+            });
+
+            return {
+                success: true,
+                jobId: job.jobId,
+                messageId: smsResponse.message_id
+            };
+
+        } catch (error) {
+            logger.error('Error processing SMS job', {
+                jobId: job.jobId,
+                error: error.message,
+                stack: error.stack
+            });
+
+            // Mark as failed
+            await job.markAsFailed(error.message, error.code);
+
+            // Update instance stats
+            const instance = await ActionInstance.findOne({ instanceId: job.instanceId });
+            if (instance) {
+                await instance.incrementFailed();
+            }
+
+            // Check if can retry
+            if (job.canRetry()) {
+                logger.info('SMS job will be retried', {
+                    jobId: job.jobId,
+                    retryCount: job.retryCount,
+                    maxRetries: job.maxRetries
+                });
+
+                // Reset for retry (will be picked up again by worker)
+                await job.resetForRetry();
+            } else {
+                logger.error('SMS job failed after max retries', {
+                    jobId: job.jobId,
+                    retryCount: job.retryCount
+                });
+            }
+
+            return {
+                success: false,
+                jobId: job.jobId,
+                error: error.message
+            };
+        }
+    }
+
+    /**
+     * Update custom object after SMS sent
+     */
+    static async updateCustomObjectForJob(eloquaService, job, smsLog) {
+        try {
+            const cdoData = {
+                fieldValues: []
+            };
+
+            const { customObjectId, fieldMappings } = job.customObjectData;
+
+            if (fieldMappings.mobile_field) {
+                cdoData.fieldValues.push({
+                    id: fieldMappings.mobile_field,
+                    value: smsLog.mobileNumber
+                });
+            }
+
+            if (fieldMappings.email_field) {
+                cdoData.fieldValues.push({
+                    id: fieldMappings.email_field,
+                    value: smsLog.emailAddress
+                });
+            }
+
+            if (fieldMappings.outgoing_field) {
+                cdoData.fieldValues.push({
+                    id: fieldMappings.outgoing_field,
+                    value: smsLog.message
+                });
+            }
+
+            if (fieldMappings.notification_field) {
+                cdoData.fieldValues.push({
+                    id: fieldMappings.notification_field,
+                    value: 'sent'
+                });
+            }
+
+            if (fieldMappings.vn_field && smsLog.senderId) {
+                cdoData.fieldValues.push({
+                    id: fieldMappings.vn_field,
+                    value: smsLog.senderId
+                });
+            }
+
+            if (fieldMappings.title_field) {
+                cdoData.fieldValues.push({
+                    id: fieldMappings.title_field,
+                    value: smsLog.campaignTitle || ''
+                });
+            }
+
+            await eloquaService.createCustomObjectRecord(customObjectId, cdoData);
+
+            logger.debug('Custom object updated for job', {
+                jobId: job.jobId,
+                customObjectId
+            });
+
+        } catch (error) {
+            logger.error('Error updating custom object for job', {
+                jobId: job.jobId,
+                error: error.message
+            });
+        }
+    }
+
+
+
 
     /**
      * Get field value from record
@@ -860,6 +1053,49 @@ class ActionController {
                 elements: []
             });
         }
+    });
+
+    /**
+     * Get SMS Worker Status
+     * GET /eloqua/action/worker/status
+     */
+    static getWorkerStatus = asyncHandler(async (req, res) => {
+        const { installId } = req.query;
+
+        // Get stats for this install
+        const stats = await SmsJob.aggregate([
+            { $match: { installId } },
+            {
+                $group: {
+                    _id: '$status',
+                    count: { $sum: 1 }
+                }
+            }
+        ]);
+
+        const statsMap = {
+            pending: 0,
+            processing: 0,
+            sent: 0,
+            failed: 0,
+            cancelled: 0
+        };
+
+        stats.forEach(stat => {
+            statsMap[stat._id] = stat.count;
+        });
+
+        // Get recent jobs
+        const recentJobs = await SmsJob.find({ installId })
+            .sort({ createdAt: -1 })
+            .limit(10)
+            .select('jobId status contactId mobileNumber errorMessage createdAt sentAt');
+
+        res.json({
+            success: true,
+            stats: statsMap,
+            recentJobs
+        });
     });
 }
 

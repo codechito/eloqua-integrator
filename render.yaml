@@ -1,0 +1,34 @@
+services:
+  # Web Service
+  - type: web
+    name: eloqua-integrator-web
+    env: node
+    buildCommand: npm install
+    startCommand: npm start
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: MONGODB_URI
+        sync: false
+      - key: ELOQUA_CLIENT_ID
+        sync: false
+      - key: ELOQUA_CLIENT_SECRET
+        sync: false
+
+  # Background Worker
+  - type: worker
+    name: eloqua-integrator-sms-worker
+    env: node
+    buildCommand: npm install
+    startCommand: npm run worker
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: MONGODB_URI
+        sync: false
+      - key: SMS_WORKER_BATCH_SIZE
+        value: 10
+      - key: SMS_WORKER_POLL_INTERVAL
+        value: 5000
+      - key: SMS_WORKER_CONCURRENCY
+        value: 5
