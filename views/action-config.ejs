@@ -467,16 +467,15 @@ Opt-out reply STOP"></textarea>
         <!-- Tracked Link (Full Width) -->
         <div class="full-width">
           <div class="form-group">
-            <label>Tracked Link</label>
-            <textarea 
-              v-model="instance.tracked_link" 
-              class="form-control" 
-              rows="2" 
-              placeholder="Enter URL here (e.g., https://example.com)"></textarea>
-            <p style="font-size: 11px; margin-top: 5px;" :style="{ color: trackedLinkStatus.color }">
-              <i>{{ trackedLinkStatus.message }}</i>
+            <label for="tracked_link">Tracked Link</label>
+            <input type="text" 
+                  class="form-control" 
+                  v-model="instance.tracked_link"
+                  placeholder="Enter URL to track (will be shortened automatically)"/>
+            <p style="font-size: 11px;">
+                <i>Add [tracked-link] to your message above. The URL you enter here will be automatically shortened and inserted.</i>
             </p>
-          </div>
+        </div>
         </div>
 
         <!-- Message Expiry -->

@@ -328,32 +328,6 @@ class ActionController {
                 // Process message with merge fields
                 let message = replaceMergeFields(instance.message, record);
 
-                // Handle tracked link
-                let trackedLinkData = null;
-                if (instance.tracked_link && message.includes('[tracked-link]')) {
-                    try {
-                        const linkResponse = await smsService.addTrackedLink(
-                            instance.tracked_link,
-                            instance.assetName || 'SMS Campaign'
-                        );
-                        
-                        if (linkResponse && linkResponse.short_url) {
-                            message = message.replace(/\[tracked-link\]/g, linkResponse.short_url);
-                            trackedLinkData = {
-                                shortUrl: linkResponse.short_url,
-                                originalUrl: instance.tracked_link
-                            };
-                        } else {
-                            message = message.replace(/\[tracked-link\]/g, '');
-                        }
-                    } catch (error) {
-                        logger.error('Error creating tracked link', { error: error.message });
-                        message = message.replace(/\[tracked-link\]/g, '');
-                    }
-                }
-
-                // Clean up message
-                message = message.replace(/\n\n+/g, '\n\n').trim();
 
                 // Send SMS
                 const smsOptions = {
@@ -642,41 +616,6 @@ class ActionController {
             });
 
             let finalMessage = message;
-
-            // Handle tracked link
-            if (tracked_link_url && tracked_link_url.trim()) {
-                try {
-                    logger.info('Adding tracked link for test SMS', { url: tracked_link_url });
-                    
-                    const linkResponse = await smsService.addTrackedLink(
-                        tracked_link_url,
-                        'Test SMS Link'
-                    );
-                    
-                    if (linkResponse && linkResponse.short_url) {
-                        finalMessage = finalMessage.replace(/\[tracked-link\]/g, linkResponse.short_url);
-                        
-                        logger.info('Tracked link created for test', { 
-                            shortUrl: linkResponse.short_url,
-                            originalUrl: tracked_link_url
-                        });
-                    } else {
-                        logger.warn('No short URL returned from TransmitSMS');
-                        finalMessage = finalMessage.replace(/\[tracked-link\]/g, '');
-                    }
-                } catch (error) {
-                    logger.error('Error creating tracked link for test', { 
-                        error: error.message,
-                        url: tracked_link_url 
-                    });
-                    finalMessage = finalMessage.replace(/\[tracked-link\]/g, '');
-                }
-            } else {
-                finalMessage = finalMessage.replace(/\[tracked-link\]/g, '');
-            }
-
-            // Clean up message
-            finalMessage = finalMessage.replace(/\n\n+/g, '\n\n').trim();
 
             if (!finalMessage) {
                 return res.status(400).json({ 
