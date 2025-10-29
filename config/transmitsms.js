@@ -16,7 +16,6 @@ module.exports = {
         sendSms: '/send-sms.json',
         getSmsResponses: '/get-sms-responses.json',
         getNumbers: '/get-numbers.json',
-        addLink: '/add-link.json',
         getDeliveryStatus: '/get-delivery-status.json'
     }
 };

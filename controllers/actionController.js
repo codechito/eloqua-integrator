@@ -312,20 +312,6 @@ class ActionController {
                 // Process message with merge fields
                 let message = replaceMergeFields(instance.message, record);
 
-                // Handle tracked link
-                let trackedLinkData = null;
-                if (instance.tracked_link && message.includes('[tracked-link]')) {
-                    const linkResponse = await smsService.addTrackedLink(
-                        instance.tracked_link,
-                        instance.assetName || 'Campaign'
-                    );
-                    trackedLinkData = {
-                        shortUrl: linkResponse.short_url,
-                        originalUrl: instance.tracked_link
-                    };
-                    message = message.replace('[tracked-link]', linkResponse.short_url);
-                }
-
                 // Send SMS
                 const smsOptions = {
                     from: instance.caller_id || undefined,
@@ -581,13 +567,6 @@ class ActionController {
         const formattedNumber = formatPhoneNumber(phone, country);
 
         let finalMessage = message;
-        if (tracked_link_url && message.includes('[tracked-link]')) {
-            const linkResponse = await smsService.addTrackedLink(
-                tracked_link_url, 
-                'Test'
-            );
-            finalMessage = message.replace('[tracked-link]', linkResponse.short_url);
-        }
 
         const response = await smsService.sendSms(
             formattedNumber,
