@@ -1,0 +1,410 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="utf-8">
+    <meta http-equiv="X-UA-Compatible" content="IE=edge">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+
+    <title>Incoming SMS Feeder Configuration</title>
+
+    <link href="/eloqua-service/assets/css/bootstrap.min.css" rel="stylesheet">
+    <link rel="stylesheet" href="https://code.jquery.com/ui/1.12.1/themes/base/jquery-ui.css">
+    <link href="/eloqua-service/assets/css/main.css" rel="stylesheet">
+    <style type="text/css">
+      #custom-merge-fields-list li:hover {background-color: #bdf;}
+      .form-group span {
+        text-align: left;
+        display: block;
+        font-size: 12px;
+        font-style: italic;
+        margin-top: 10px;
+      }
+      .ui-widget {
+          font-family: "Helvetica Neue",Helvetica,Arial,sans-serif;
+          font-size: 12px;
+          padding: 0px;
+        }
+        .ui-widget #dialog {
+          padding: 10px 0px;
+        }
+        .ui-widget input, .ui-widget select, .ui-widget textarea, .ui-widget button {
+          font-family: "Helvetica Neue",Helvetica,Arial,sans-serif;
+          font-size: 12px;
+        }
+        .ui-dialog .ui-dialog-titlebar-close {
+          background-image: url("data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAYAAAAf8/9hAAAACXBIWXMAAAsTAAALEwEAmpwYAAAAGXRFWHRTb2Z0d2FyZQBBZG9iZSBJbWFnZVJlYWR5ccllPAAAANBJREFUeNpiYKAQMMMYrq6uCcrKyv1AfPHevXsvsCkGqjEAyi8HYkagmgsgMUaYZiA1H6ruAxA77t69+wK6ZiC1H4gFoEKJQDULmKCceCS1IAX7oRpwaYbrYYFyCtEUwAxxhPLRNX+A6oF4AY8tH5AMZMDmRUYC/kQHGOHDiC2kcRiCNXCZKE0H1PMCRYGIRzO+aAQbAguDflwKoDY5IrkG5qJ+5EBciM+fOAxZCM9MoIwBzCAPoSZHokcVVM0LoJqdQKYGEDeC8gEDNQBAgAEARFVtDaumXRoAAAAASUVORK5CYII=");
+          background-color: transparent;
+          border: 0px;
+          background-repeat: no-repeat;
+          background-position: center;
+        }
+        button.ui-dialog-titlebar-close:focus {
+          outline: none;
+        }
+        .loading {
+          pointer-events: none;
+          opacity: 0.6;
+        }
+    </style>
+  </head>
+  <body>
+  <div class="disabler"></div>
+  <div class="container" style="width: 600px; margin-left: 120px;">
+  <center>
+      <form method="post" id="feederForm">
+        <br/>
+        <br/>
+        <br/>
+        <h4 style="font-size: 20px; font-weight: bold; text-align: center;">
+          <img src="/eloqua-service/assets/images/eloqua-form-icon-inbound.png" onerror="this.style.display='none'">&nbsp;Incoming SMS Contacts
+        </h4>
+        <br/>
+        
+        <div id="statusMessage"></div>
+        
+        <div class="row">
+          <div class="col-md-6" style="display: inline-block;width: 280px;vertical-align: top;margin-left: -10px;">
+            <div class="form-group">
+              <label for="sender_id" style="float: left;">Virtual Number</label><br>
+              <select style="width: 275px;" name="sender_id" id="sender_id" class="form-control">
+                <option value="">Select a number</option>
+                <% if (sender_ids && sender_ids['Virtual Number']) { %>
+                  <% for(var i=0; i < sender_ids["Virtual Number"].length; i++) { %>
+                    <option value="<%= sender_ids['Virtual Number'][i] %>" 
+                      <% if(instance && instance.senderIds && instance.senderIds.indexOf(sender_ids['Virtual Number'][i]) !== -1){ %> 
+                        selected="selected" 
+                      <% } %>>
+                      <%= sender_ids["Virtual Number"][i] %>
+                    </option>
+                  <% } %>
+                <% } %>
+              </select>
+              <span>Select the virtual number to monitor for incoming SMS</span>
+           </div>
+          </div>
+          <div class="col-md-6" style="width: 280px;float: right;margin-right: -15px;">
+              <div class="form-group">
+                  <label for="text_type" style="float: left;">What type of text are we looking for?</label>
+                  <select style="width: 275px;" name="text_type" id="text_type" class="form-control">
+                      <option value="Anything" <% if(instance && instance.textType == "Anything"){ %> selected="selected" <% } %>>Anything</option>
+                      <option value="Keyword" <% if(instance && instance.textType == "Keyword"){ %> selected="selected" <% } %>>Keyword</option>
+                  </select>
+              </div>
+          </div>
+        </div>
+        
+        <div class="row">
+            <div class="col-md-6" style="display: inline-block;width: 280px;vertical-align: top;margin-left: -10px; text-align:left">
+                <div class="form-group">
+                    <label for="custom_object_id">Custom Object</label><br>
+                    <select class="form-control" name="custom_object_id" id="custom_object_id" style="width: 275px;">
+                      <option value="">None</option>
+                      <% if (custom_objects && custom_objects.elements && custom_objects.elements.length){ %>
+                        <% for(var i=0; i < custom_objects.elements.length; i++) { %>
+                          <option value="<%= custom_objects.elements[i].id %>" 
+                            <% if(instance && instance.customObjectId == custom_objects.elements[i].id ){ %> 
+                              selected="selected" 
+                            <% } %>>
+                            <%= custom_objects.elements[i].name %>
+                          </option>
+                        <% } %>
+                      <% } %>
+                    </select>
+                    <span>Select custom object to store incoming SMS data</span>
+                 </div>
+            </div>
+            <div class="col-md-6" style="width: 280px;float: right;margin-right: -15px;">
+                <div class="form-group">
+                    <label for="keyword" style="float: left;">Keyword</label>
+                    <input style="width: 275px;" type="text" name="keyword" id="keyword" 
+                      value="<%= instance && instance.keyword ? instance.keyword : '' %>" 
+                      class="form-control" placeholder="e.g., JOIN, STOP"/>
+                    <span>Filter messages containing this keyword (case insensitive)</span>
+                </div>
+            </div>
+        </div>
+        
+        <div class="row">
+            <div class="col-md-6" style="display: inline-block;width: 280px;vertical-align: top;margin-left: 10px;text-align:left;">
+                <div class="form-group">
+                    <label for="mobile_field" style="margin-left: -20px;">Map mobile to:</label><br/>
+                    <input type="text" class="form-control" style="width:200px;display: inline;margin-left: -20px;" 
+                      id="mobile_field" name="mobile_field" 
+                      value="<%= instance && instance.fieldMappings && instance.fieldMappings.mobile ? instance.fieldMappings.mobile : '' %>"/>
+                    <button type="button" class="btn btn-default" style="float: right; font-size: 11px; height:35px;" id="mobileFieldList">Choose</button><br/>
+                </div>
+             </div>
+            <div class="col-md-6" style="width: 280px;float: right;margin-right: -35px; text-align:left;">
+                <div class="form-group">
+                    <label for="email_field" style="margin-left: -20px;">Map email to:</label><br/>
+                    <input type="text" class="form-control" style="width:200px;display: inline;margin-left: -20px;" 
+                      id="email_field" name="email_field" 
+                      value="<%= instance && instance.fieldMappings && instance.fieldMappings.email ? instance.fieldMappings.email : '' %>"/>
+                    <button type="button" class="btn btn-default" style="float: right; font-size: 11px; height:35px;" id="emailFieldList">Choose</button><br/>
+                </div>
+            </div>
+        </div>
+        
+        <div class="row">
+            <div class="col-md-6" style="display: inline-block;width: 280px;vertical-align: top;margin-left: 10px; text-align:left;">
+              <div class="form-group">
+                  <label for="message_field" style="margin-left: -20px;">Map incoming message to:</label><br/>
+                  <input type="text" class="form-control" style="width:200px;display: inline;margin-left: -20px;" 
+                    id="message_field" name="message_field" 
+                    value="<%= instance && instance.fieldMappings && instance.fieldMappings.message ? instance.fieldMappings.message : '' %>"/>
+                  <button type="button" class="btn btn-default" style="float: right; font-size: 11px; height:35px;" id="messageFieldList">Choose</button><br/>
+              </div>
+            </div>
+            <div class="col-md-6" style="width: 280px;float: right;margin-right: -35px; text-align:left;">
+                <div class="form-group">
+                    <label for="sender_id_field" style="margin-left: -20px;">Map virtual number to:</label><br/>
+                    <input type="text" class="form-control" style="width:200px; display: inline;margin-left: -20px;" 
+                      id="sender_id_field" name="sender_id_field" 
+                      value="<%= instance && instance.fieldMappings && instance.fieldMappings.senderId ? instance.fieldMappings.senderId : '' %>"/>
+                    <button type="button" class="btn btn-default" style="float: right; font-size: 11px; height:35px;" id="senderIdFieldList">Choose</button><br/>
+                </div>
+            </div>
+        </div>
+        
+        <div class="row">
+            <div class="col-md-6" style="display: inline-block;width: 280px;vertical-align: top;margin-left: 10px; text-align:left;">
+              <div class="form-group">
+                  <label for="timestamp_field" style="margin-left: -20px;">Map timestamp to:</label><br/>
+                  <input type="text" class="form-control" style="width:200px;display: inline;margin-left: -20px;" 
+                    id="timestamp_field" name="timestamp_field" 
+                    value="<%= instance && instance.fieldMappings && instance.fieldMappings.timestamp ? instance.fieldMappings.timestamp : '' %>"/>
+                  <button type="button" class="btn btn-default" style="float: right; font-size: 11px; height:35px;" id="timestampFieldList">Choose</button><br/>
+              </div>
+            </div>
+            <div class="col-md-6" style="width: 280px;float: right;margin-right: -35px; text-align:left;">
+                <div class="form-group">
+                    <label for="message_id_field" style="margin-left: -20px;">Map message ID to:</label><br/>
+                    <input type="text" class="form-control" style="width:200px; display: inline;margin-left: -20px;" 
+                      id="message_id_field" name="message_id_field" 
+                      value="<%= instance && instance.fieldMappings && instance.fieldMappings.messageId ? instance.fieldMappings.messageId : '' %}"/>
+                    <button type="button" class="btn btn-default" style="float: right; font-size: 11px; height:35px;" id="messageIdFieldList">Choose</button><br/>
+                </div>
+            </div>
+        </div>
+        
+        <button id="btnSave" type="button" class="btn btn-default">Save Configuration</button>
+      </form>
+      </center>
+    </div>
+    
+    <script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
+    <script src="https://code.jquery.com/ui/1.12.1/jquery-ui.min.js"></script>
+    <script src="/eloqua-service/assets/js/bootstrap.min.js"></script>
+    
+    <script type="text/javascript">
+      $(document).ready(function () {
+        var clickSrc = '';
+        var installId = '<%= instance.installId %>';
+        var siteId = '<%= instance.SiteId %>';
+        var instanceId = '<%= instance.instanceId %>';
+
+        var customdialog = $("#customdialog").dialog({
+          autoOpen: false,
+          height: 400,
+          width: 240,
+          modal: false
+        });
+
+        $('#btnSave').click(function() {
+          saveConfiguration();
+        });
+
+        $("#text_type").change(function(){
+          if($(this).val() == "Keyword"){
+            $("#keyword").parent().show();
+          }
+          else{
+            $("#keyword").parent().hide();
+          }
+        });
+        
+        $("#text_type").change();
+
+        var reloadObjectField = function(id){
+          if(id){
+            $.ajax({
+              url: "/eloqua/action/ajax/customobject/" + installId + "/" + siteId + "/" + id,
+              method: "GET",
+              success: function(objectFields) {
+                $("#custom-merge-fields-list").find('li').empty();
+                
+                if (objectFields.fields) {
+                  for(var i in objectFields.fields) {
+                    $("#custom-merge-fields-list").append(
+                      '<li data-name="' + objectFields.fields[i].name + '" ' + 
+                      'data-dataType="' + objectFields.fields[i].dataType + '" ' + 
+                      'data-internalName="' + objectFields.fields[i].internalName + '" ' +
+                      'data-id="' + objectFields.fields[i].id + '" ' +
+                      'style="display: block; cursor: pointer; padding: 5px;">' +
+                      objectFields.fields[i].name + '</li>'
+                    );
+                  }
+                }
+              },
+              error: function(jqXHR, textStatus) {
+                console.error('Error loading fields:', textStatus);
+                showStatus('error', 'Failed to load custom object fields');
+              }
+            });
+          }
+        };
+
+        $("#custom_object_id").change(function(){
+          if($(this).val()){
+            reloadObjectField($(this).val());
+            $("#mobile_field").parent().show();
+            $("#email_field").parent().show();
+            $("#message_field").parent().show();
+            $("#sender_id_field").parent().show();
+            $("#timestamp_field").parent().show();
+            $("#message_id_field").parent().show();
+          }
+          else{
+            $("#mobile_field").parent().hide();
+            $("#email_field").parent().hide();
+            $("#message_field").parent().hide();
+            $("#sender_id_field").parent().hide();
+            $("#timestamp_field").parent().hide();
+            $("#message_id_field").parent().hide();
+          }
+        });
+
+        $("#custom_object_id").change();
+
+        // Field chooser buttons
+        $("#mobileFieldList").button().on("click", function() {
+          openFieldChooser("#mobile_field");
+        });
+
+        $("#emailFieldList").button().on("click", function() {
+          openFieldChooser("#email_field");
+        });
+
+        $("#messageFieldList").button().on("click", function() {
+          openFieldChooser("#message_field");
+        });
+
+        $("#senderIdFieldList").button().on("click", function() {
+          openFieldChooser("#sender_id_field");
+        });
+
+        $("#timestampFieldList").button().on("click", function() {
+          openFieldChooser("#timestamp_field");
+        });
+
+        $("#messageIdFieldList").button().on("click", function() {
+          openFieldChooser("#message_id_field");
+        });
+
+        function openFieldChooser(targetField) {
+          if($("#custom_object_id").val()){
+            clickSrc = targetField;
+            customdialog.dialog("open");
+          }
+          else{
+            showStatus('error', 'Please select a custom object first');
+          }
+        }
+
+        $("#custom-field-search").on("keyup click input", function () {
+          if (this.value.length > 0) {
+            $("#custom-merge-fields-list li").hide().filter(function () {
+              return $(this).text().toLowerCase().indexOf($("#custom-field-search").val().toLowerCase()) != -1;
+            }).show();
+          }
+          else {
+            $("#custom-merge-fields-list li").show();
+          }
+        });
+
+        $('#custom-merge-fields-list').delegate('li', 'click', function (e) {
+          var item = $(this);
+          var srcField = $(clickSrc);
+          srcField.val(item.attr("data-internalName"));
+          customdialog.dialog("close");
+        });
+
+        function saveConfiguration() {
+          $('body').addClass('loading');
+          
+          var configData = {
+            instance: {
+              instanceId: instanceId,
+              installId: installId,
+              SiteId: siteId,
+              feederType: 'incoming_sms',
+              senderIds: [$("#sender_id").val()],
+              textType: $("#text_type").val(),
+              keyword: $("#keyword").val(),
+              customObjectId: $("#custom_object_id").val(),
+              fieldMappings: {
+                mobile: $("#mobile_field").val(),
+                email: $("#email_field").val(),
+                message: $("#message_field").val(),
+                senderId: $("#sender_id_field").val(),
+                timestamp: $("#timestamp_field").val(),
+                messageId: $("#message_id_field").val()
+              }
+            }
+          };
+
+          $.ajax({
+            url: '/eloqua/feeder/configure?instanceId=' + instanceId,
+            method: 'POST',
+            contentType: 'application/json',
+            data: JSON.stringify(configData),
+            success: function(response) {
+              $('body').removeClass('loading');
+              showStatus('success', 'Configuration saved successfully! The virtual number has been configured to forward incoming SMS to this feeder.');
+              
+              $('html, body').animate({ scrollTop: 0 }, 'fast');
+            },
+            error: function(jqXHR, textStatus) {
+              $('body').removeClass('loading');
+              var errorMsg = jqXHR.responseJSON && jqXHR.responseJSON.message 
+                ? jqXHR.responseJSON.message 
+                : 'Failed to save configuration';
+              showStatus('error', errorMsg);
+              
+              $('html, body').animate({ scrollTop: 0 }, 'fast');
+            }
+          });
+        }
+
+        function showStatus(type, message) {
+          var alertClass = type === 'success' ? 'alert-success' : 'alert-danger';
+          var html = '<div class="alert ' + alertClass + ' alert-dismissible fade in" role="alert">' +
+            '<button type="button" class="close" data-dismiss="alert" aria-label="Close">' +
+            '<span aria-hidden="true">&times;</span>' +
+            '</button>' +
+            message +
+            '</div>';
+          
+          $('#statusMessage').html(html);
+          
+          setTimeout(function() {
+            $('#statusMessage .alert').fadeOut(300, function() {
+              $(this).remove();
+            });
+          }, 5000);
+        }
+      });
+    </script>
+  </div>
+
+  <div id="customdialog" title="Custom Object Fields">
+      <div>
+          <ul id="custom-merge-fields-list" style="overflow:scroll; height:300px; margin-bottom: 0px; border-bottom: 1px solid #c5c5c5; list-style: none; padding: 0;"></ul>
+          <div style="width: 100%; padding: 5px;">
+             <input type="text" id="custom-field-search" placeholder="Search" style="width: 100%; padding: 5px;">
+          </div>
+      </div>
+  </div>
+
+  </body>
+</html>

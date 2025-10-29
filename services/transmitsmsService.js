@@ -11,6 +11,40 @@ class TransmitSmsService {
     }
 
     /**
+     * Configure number forwarding
+     * @param {string} number - Phone number to configure
+     * @param {string} forwardUrl - URL to forward messages to
+     */
+    async configureNumberForwarding(number, forwardUrl) {
+        try {
+            const params = {
+                number: number,
+                forward_url: forwardUrl
+            };
+
+            logger.info('Configuring number forwarding', {
+                number,
+                forwardUrl
+            });
+
+            const response = await this.makeRequest('GET', '/edit-number-options.json', params);
+
+            logger.info('Number forwarding configured', {
+                number,
+                response
+            });
+
+            return response;
+        } catch (error) {
+            logger.error('Error configuring number forwarding', {
+                number,
+                error: error.message
+            });
+            throw error;
+        }
+    }
+
+    /**
      * Get authorization header (Basic Auth)
      */
     getAuthHeader() {

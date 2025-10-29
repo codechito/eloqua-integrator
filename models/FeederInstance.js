@@ -1,18 +1,16 @@
 const mongoose = require('mongoose');
 
 const FeederInstanceSchema = new mongoose.Schema({
-    // Instance Identification
+    // Eloqua instance info
     instanceId: {
         type: String,
         required: true,
         unique: true,
-        index: true,
-        trim: true
+        index: true
     },
     installId: {
         type: String,
         required: true,
-        ref: 'Consumer',
         index: true
     },
     SiteId: {
@@ -20,55 +18,88 @@ const FeederInstanceSchema = new mongoose.Schema({
         required: true
     },
     assetId: {
-        type: String,
-        trim: true
+        type: String
     },
     assetName: {
+        type: String
+    },
+    
+    // Feeder type: 'incoming_sms' or 'link_hits'
+    feederType: {
+        type: String,
+        enum: ['incoming_sms', 'link_hits'],
+        required: true
+    },
+    
+    // Configuration for incoming SMS feeder
+    senderIds: [{
+        type: String,
+        trim: true
+    }],
+    textType: {
+        type: String,
+        enum: ['Anything', 'Keyword'],
+        default: 'Anything'
+    },
+    keyword: {
         type: String,
         trim: true
     },
-    
-    // Configuration
-    batchSize: {
-        type: Number,
-        default: 50,
-        min: 1,
-        max: 100
+    customObjectId: {
+        type: String
     },
     
-    // Status
+    // Field mappings
+    fieldMappings: {
+        mobile: String,
+        email: String,
+        message: String,
+        timestamp: String,
+        messageId: String,
+        senderId: String,
+        // For link hits
+        url: String,
+        originalUrl: String,
+        linkHits: String
+    },
+    
+    // Feeder state
     isActive: {
         type: Boolean,
-        default: true,
-        index: true
+        default: true
     },
     
-    // Statistics
-    totalLinkHitsProcessed: {
+    lastPolledAt: {
+        type: Date
+    },
+    
+    totalRecordsSent: {
         type: Number,
         default: 0
     },
-    lastExecutedAt: Date,
     
+    // Metadata
+    createdAt: {
+        type: Date,
+        default: Date.now
+    },
+    updatedAt: {
+        type: Date,
+        default: Date.now
+    }
 }, {
-    timestamps: true,
-    collection: 'feederinstances'
+    timestamps: true
 });
 
 // Indexes
-FeederInstanceSchema.index({ instanceId: 1, isActive: 1 });
-FeederInstanceSchema.index({ installId: 1, isActive: 1 });
+FeederInstanceSchema.index({ installId: 1, feederType: 1 });
+FeederInstanceSchema.index({ isActive: 1 });
 
-// Method to increment stats
-FeederInstanceSchema.methods.recordProcessing = async function(count) {
-    this.totalLinkHitsProcessed += count;
-    this.lastExecutedAt = new Date();
+// Methods
+FeederInstanceSchema.methods.incrementRecordsSent = function(count = 1) {
+    this.totalRecordsSent += count;
+    this.lastPolledAt = new Date();
     return this.save();
-};
-
-// Static method to find active instance
-FeederInstanceSchema.statics.findActiveInstance = function(instanceId, installId) {
-    return this.findOne({ instanceId, installId, isActive: true });
 };
 
 module.exports = mongoose.model('FeederInstance', FeederInstanceSchema);

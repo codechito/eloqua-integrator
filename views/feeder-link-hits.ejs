@@ -1,0 +1,67 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <meta http-equiv="X-UA-Compatible" content="IE=edge">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>SMS Link Hits Feeder Configuration</title>
+    <link href="/eloqua-service/assets/css/bootstrap.min.css" rel="stylesheet">
+    <link href="/eloqua-service/assets/css/main.css" rel="stylesheet">
+</head>
+<body>
+    <div class="container" style="width: 600px; padding: 20px;">
+        <center>
+            <br/><br/>
+            <h4 style="font-size: 20px; font-weight: bold;">
+                <img src="/eloqua-service/assets/images/eloqua-sms-link-128.png" onerror="this.style.display='none'" style="max-height: 48px;">&nbsp;SMS Link Hits Feeder
+            </h4>
+            <br/>
+            
+            <div class="alert alert-info" style="text-align: left;">
+                <h5><strong>✓ No Configuration Needed!</strong></h5>
+                <p>This feeder automatically tracks all link clicks from your SMS campaigns.</p>
+            </div>
+            
+            <div style="text-align: left; padding: 20px; background: #f9f9f9; border-radius: 4px;">
+                <h5><strong>What This Feeder Does:</strong></h5>
+                <ul>
+                    <li>Automatically collects data when recipients click links in SMS messages</li>
+                    <li>Tracks which mobile number clicked which link</li>
+                    <li>Records the timestamp of each click</li>
+                    <li>Provides both the short URL and original URL</li>
+                    <li>Links clicks to the original campaign</li>
+                </ul>
+                
+                <h5 style="margin-top: 20px;"><strong>Data Provided:</strong></h5>
+                <ul>
+                    <li><strong>Mobile Number:</strong> Who clicked the link</li>
+                    <li><strong>Short URL:</strong> The tracked link that was clicked</li>
+                    <li><strong>Original URL:</strong> The destination URL</li>
+                    <li><strong>Timestamp:</strong> When the link was clicked</li>
+                    <li><strong>Link Hit Count:</strong> Number of clicks (1 per event)</li>
+                    <li><strong>Email:</strong> Associated email address (if available)</li>
+                </ul>
+                
+                <h5 style="margin-top: 20px;"><strong>How It Works:</strong></h5>
+                <ol>
+                    <li>You send SMS messages with [tracked-link] placeholders</li>
+                    <li>TransmitSMS automatically creates short URLs</li>
+                    <li>When recipients click the links, TransmitSMS sends data to this feeder</li>
+                    <li>The feeder feeds the click data into Eloqua</li>
+                    <li>You can use this data for segmentation, scoring, and reporting</li>
+                </ol>
+            </div>
+            
+            <br/>
+            <div class="alert alert-success" style="text-align: left;">
+                <strong>✓ Ready to Use</strong><br>
+                This feeder is active and will automatically start collecting link hit data from all your SMS campaigns.
+            </div>
+            
+            <p style="text-align: left; color: #666; font-size: 12px;">
+                <strong>Note:</strong> Make sure your SMS Action Service has the Link Hits callback URL configured. This is done automatically when you configure your app.
+            </p>
+        </center>
+    </div>
+</body>
+</html>

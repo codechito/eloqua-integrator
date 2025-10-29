@@ -7,7 +7,7 @@ const {
 } = require('../middleware');
 
 // Feeder service lifecycle
-router.post('/create', 
+router.get('/create', 
     validateQueryParams('installId', 'siteId'),
     verifyInstallation,
     FeederController.create
@@ -42,5 +42,9 @@ router.post('/delete',
     verifyInstallation,
     FeederController.delete
 );
+
+// Webhook endpoint for incoming SMS (for feeder)
+router.get('/incomingsms', FeederController.handleIncomingSms);
+router.post('/incomingsms', FeederController.handleIncomingSms);
 
 module.exports = router;
