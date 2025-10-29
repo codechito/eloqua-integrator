@@ -20,31 +20,49 @@ class TransmitSmsService {
 
     /**
      * Make API request to TransmitSMS
+     * @param {string} method - HTTP method
+     * @param {string} endpoint - API endpoint
+     * @param {object} data - Request data (will be converted to URLSearchParams for POST)
      */
     async makeRequest(method, endpoint, data = null) {
         try {
             const url = `${this.baseUrl}${endpoint}`;
             
-            const config = {
+            const axiosConfig = {
                 method,
                 url,
                 headers: {
-                    'Authorization': this.getAuthHeader(),
-                    'Content-Type': 'application/json'
+                    'Authorization': this.getAuthHeader()
                 },
                 timeout: this.timeout
             };
 
             if (data) {
-                config.data = data;
+                if (method === 'GET') {
+                    // For GET requests, use query parameters
+                    axiosConfig.params = data;
+                    axiosConfig.headers['Accept'] = 'application/json';
+                } else if (method === 'POST' || method === 'PUT') {
+                    // For POST/PUT requests, use URL-encoded form data
+                    const params = new URLSearchParams();
+                    Object.keys(data).forEach(key => {
+                        if (data[key] !== undefined && data[key] !== null) {
+                            params.append(key, data[key]);
+                        }
+                    });
+                    axiosConfig.data = params;
+                    axiosConfig.headers['Content-Type'] = 'application/x-www-form-urlencoded';
+                    axiosConfig.headers['Accept'] = 'application/json';
+                }
+                
+                logger.debug(`TransmitSMS API ${method} ${endpoint}`, { 
+                    hasData: !!data,
+                    dataKeys: Object.keys(data),
+                    contentType: axiosConfig.headers['Content-Type']
+                });
             }
 
-            logger.debug(`TransmitSMS API ${method} ${endpoint}`, { 
-                hasData: !!data,
-                dataKeys: data ? Object.keys(data) : []
-            });
-
-            const response = await axios(config);
+            const response = await axios(axiosConfig);
 
             logger.api(endpoint, method, response.status, {
                 service: 'TransmitSMS'
@@ -58,7 +76,8 @@ class TransmitSmsService {
             logger.error(`TransmitSMS API Error: ${method} ${endpoint}`, {
                 status: statusCode,
                 error: errorMessage,
-                data: error.response?.data
+                requestData: data,
+                responseData: error.response?.data
             });
 
             throw new Error(`TransmitSMS API Error (${statusCode}): ${errorMessage}`);
@@ -82,7 +101,7 @@ class TransmitSmsService {
                 throw new Error('Message is required');
             }
 
-            // Build payload with required fields first
+            // Build payload with required fields
             const payload = {
                 to: to.trim(),
                 message: message.trim()
@@ -97,31 +116,44 @@ class TransmitSmsService {
                 payload.validity = options.validity;
             }
 
+            if (options.send_at) {
+                payload.send_at = options.send_at;
+            }
+
+            if (options.countrycode) {
+                payload.countrycode = options.countrycode;
+            }
+
+            if (options.replies_to_email) {
+                payload.replies_to_email = options.replies_to_email;
+            }
+
+            // Add callback URLs with tracking parameters
             if (options.dlr_callback) {
                 payload.dlr_callback = options.dlr_callback;
             }
 
-            // Add any other options (but don't let them override required fields)
-            Object.keys(options).forEach(key => {
-                if (!['from', 'validity', 'dlr_callback'].includes(key) && options[key] !== undefined) {
-                    payload[key] = options[key];
-                }
-            });
+            if (options.reply_callback) {
+                payload.reply_callback = options.reply_callback;
+            }
+
+            if (options.link_hits_callback) {
+                payload.link_hits_callback = options.link_hits_callback;
+            }
+
+            // If message contains [tracked-link], add the URL
+            if (message.includes('[tracked-link]') && options.tracked_link_url) {
+                payload.tracked_link_url = options.tracked_link_url;
+            }
 
             logger.sms('send_request', {
                 to: payload.to,
                 messageLength: payload.message.length,
                 from: payload.from || 'default',
                 hasTrackedLink: payload.message.includes('[tracked-link]'),
+                trackedLinkUrl: payload.tracked_link_url,
+                hasCallbacks: !!(options.dlr_callback || options.reply_callback || options.link_hits_callback),
                 payloadKeys: Object.keys(payload)
-            });
-
-            logger.debug('SMS Payload', { 
-                to: payload.to,
-                messageLength: payload.message.length,
-                message: payload.message.substring(0, 50) + '...',
-                from: payload.from,
-                allKeys: Object.keys(payload)
             });
 
             const response = await this.makeRequest('POST', '/send-sms.json', payload);
@@ -197,7 +229,7 @@ class TransmitSmsService {
      * @param {string} messageId - Message ID
      */
     async getDeliveryStatus(messageId) {
-        return await this.makeRequest('GET', `/get-delivery-status.json`, {
+        return await this.makeRequest('GET', '/get-delivery-status.json', {
             message_id: messageId
         });
     }

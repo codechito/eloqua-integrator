@@ -11,11 +11,14 @@ class WebhookController {
      * POST /webhooks/dlr
      */
     static handleDeliveryReport = asyncHandler(async (req, res) => {
-        const dlrData = req.body;
+        const dlrData = { ...req.query, ...req.body };
         
         logger.webhook('dlr_received', { 
             messageId: dlrData.message_id,
-            status: dlrData.status 
+            status: dlrData.status,
+            mobile: dlrData.mobile,
+            installId: dlrData.installId,
+            contactId: dlrData.contactId
         });
 
         try {
@@ -31,13 +34,19 @@ class WebhookController {
                 smsLog.status = status;
                 
                 if (dlrData.status === 'delivered') {
-                    smsLog.deliveredAt = new Date();
+                    smsLog.deliveredAt = new Date(dlrData.datetime || Date.now());
                 }
 
                 if (dlrData.error_code) {
                     smsLog.errorMessage = dlrData.error_text || `Error code: ${dlrData.error_code}`;
                     smsLog.errorCode = dlrData.error_code;
                 }
+
+                // Store webhook data
+                smsLog.webhookData = {
+                    dlr: dlrData,
+                    receivedAt: new Date()
+                };
 
                 await smsLog.save();
 
@@ -76,53 +85,66 @@ class WebhookController {
      * POST /webhooks/reply
      */
     static handleSmsReply = asyncHandler(async (req, res) => {
-        const replyData = req.body;
+        const replyData = { ...req.query, ...req.body };
         
         logger.webhook('reply_received', { 
-            from: replyData.from || replyData.mobile,
-            message: replyData.message 
+            from: replyData.mobile,
+            message: replyData.response,
+            messageId: replyData.message_id,
+            responseId: replyData.response_id,
+            installId: replyData.installId,
+            contactId: replyData.contactId
         });
 
         try {
-            const fromNumber = replyData.from || replyData.mobile;
-            const toNumber = replyData.to || replyData.destination;
-            const message = replyData.message || replyData.message_text;
-            const timestamp = replyData.timestamp 
-                ? new Date(replyData.timestamp * 1000) 
+            const fromNumber = replyData.mobile;
+            const toNumber = replyData.longcode;
+            const message = replyData.response;
+            const messageId = replyData.message_id;
+            const responseId = replyData.response_id;
+            const timestamp = replyData.datetime_entry 
+                ? new Date(replyData.datetime_entry) 
                 : new Date();
+            const isOptOut = replyData.is_optout === 'yes';
 
             // Find the original SMS(s)
-            const smsLogs = await SmsLog.find({
-                mobileNumber: fromNumber
-            }).sort({ createdAt: -1 }).limit(10);
+            let smsLog = null;
+            let installId = replyData.installId || null;
+            let contactId = replyData.contactId || null;
 
-            let smsLogId = null;
-            let installId = null;
+            if (messageId) {
+                smsLog = await SmsLog.findOne({ messageId });
+                if (smsLog) {
+                    installId = smsLog.installId;
+                    contactId = smsLog.contactId;
+                }
+            }
 
-            if (smsLogs.length > 0) {
-                // Associate with most recent SMS
-                const smsLog = smsLogs[0];
-                smsLogId = smsLog._id;
-                installId = smsLog.installId;
+            // If not found by messageId, try by mobile number
+            if (!smsLog && fromNumber) {
+                const recentSms = await SmsLog.find({
+                    mobileNumber: fromNumber
+                }).sort({ createdAt: -1 }).limit(1);
 
-                logger.debug('Reply associated with SMS', {
-                    smsLogId,
-                    fromNumber
-                });
-            } else {
-                logger.warn('No associated SMS found for reply', {
-                    fromNumber
-                });
+                if (recentSms.length > 0) {
+                    smsLog = recentSms[0];
+                    installId = smsLog.installId;
+                    contactId = smsLog.contactId;
+                }
             }
 
             // Create reply record
             const smsReply = new SmsReply({
-                smsLogId,
+                smsLogId: smsLog ? smsLog._id : null,
                 installId,
+                contactId,
                 fromNumber,
                 toNumber,
                 message,
+                messageId,
+                responseId,
                 receivedAt: timestamp,
+                isOptOut,
                 webhookData: replyData
             });
 
@@ -131,7 +153,8 @@ class WebhookController {
             logger.webhook('reply_saved', {
                 replyId: smsReply._id,
                 fromNumber,
-                isOptOut: smsReply.isOptOut
+                isOptOut,
+                linkedToSms: !!smsLog
             });
 
             res.json({ 
@@ -159,83 +182,86 @@ class WebhookController {
      * POST /webhooks/linkhit
      */
     static handleLinkHit = asyncHandler(async (req, res) => {
-        const hitData = req.body;
+        const hitData = { ...req.query, ...req.body };
         
         logger.webhook('linkhit_received', { 
-            mobile: hitData.mobile || hitData.to,
-            url: hitData.short_url || hitData.link 
+            mobile: hitData.mobile,
+            messageId: hitData.message_id,
+            linkHits: hitData.link_hits,
+            installId: hitData.installId,
+            contactId: hitData.contactId
         });
 
         try {
-            const mobileNumber = hitData.mobile || hitData.to;
-            const shortUrl = hitData.short_url || hitData.link;
-            const originalUrl = hitData.original_url || hitData.destination;
-            const timestamp = hitData.timestamp 
-                ? new Date(hitData.timestamp * 1000) 
+            const mobileNumber = hitData.mobile;
+            const messageId = hitData.message_id;
+            const timestamp = hitData.datetime 
+                ? new Date(hitData.datetime) 
                 : new Date();
+            const linkHitsCount = parseInt(hitData.link_hits) || 1;
+
+            // Extract URLs from message
+            const message = hitData.message || '';
+            const urlRegex = /(https?:\/\/[^\s]+)/g;
+            const urls = message.match(urlRegex) || [];
+            const shortUrl = urls.find(url => url.includes('TapTh.is') || url.includes('tap.th')) || urls[0];
 
             // Find the SMS that contained this link
-            const smsLog = await SmsLog.findOne({
-                mobileNumber,
-                'trackedLink.shortUrl': shortUrl
-            }).sort({ createdAt: -1 });
+            let smsLog = null;
+            let installId = hitData.installId || null;
+            let contactId = hitData.contactId || null;
 
-            let smsLogId = null;
-            let installId = null;
-
-            if (smsLog) {
-                smsLogId = smsLog._id;
-                installId = smsLog.installId;
-
-                logger.debug('Link hit associated with SMS', {
-                    smsLogId,
-                    mobileNumber,
-                    shortUrl
-                });
-            } else {
-                // Try to find by mobile number and approximate URL
-                const recentSms = await SmsLog.findOne({
-                    mobileNumber,
-                    message: { $regex: new RegExp(shortUrl.replace(/[-\/\\^$*+?.()|[\]{}]/g, '\\$&')) }
-                }).sort({ createdAt: -1 });
-
-                if (recentSms) {
-                    smsLogId = recentSms._id;
-                    installId = recentSms.installId;
+            if (messageId) {
+                smsLog = await SmsLog.findOne({ messageId });
+                if (smsLog) {
+                    installId = smsLog.installId;
+                    contactId = smsLog.contactId;
                 }
-
-                logger.warn('No exact SMS match found for link hit', {
-                    mobileNumber,
-                    shortUrl,
-                    foundApproximate: !!recentSms
-                });
             }
 
-            // Create link hit record
-            const linkHit = new LinkHit({
-                smsLogId,
-                installId,
-                mobileNumber,
-                shortUrl,
-                originalUrl,
-                clickedAt: timestamp,
-                ipAddress: hitData.ip_address || req.ip,
-                userAgent: hitData.user_agent || req.headers['user-agent'],
-                webhookData: hitData
-            });
+            // If not found by messageId, try by mobile number
+            if (!smsLog && mobileNumber) {
+                const recentSms = await SmsLog.find({
+                    mobileNumber,
+                    'trackedLink.shortUrl': { $exists: true }
+                }).sort({ createdAt: -1 }).limit(1);
 
-            await linkHit.save();
+                if (recentSms.length > 0) {
+                    smsLog = recentSms[0];
+                    installId = smsLog.installId;
+                    contactId = smsLog.contactId;
+                }
+            }
+
+            // Create link hit record(s) - one for each hit
+            for (let i = 0; i < linkHitsCount; i++) {
+                const linkHit = new LinkHit({
+                    smsLogId: smsLog ? smsLog._id : null,
+                    installId,
+                    contactId,
+                    mobileNumber,
+                    shortUrl,
+                    originalUrl: smsLog?.trackedLink?.originalUrl || '',
+                    clickedAt: timestamp,
+                    ipAddress: req.ip,
+                    userAgent: req.headers['user-agent'],
+                    webhookData: hitData
+                });
+
+                await linkHit.save();
+            }
 
             logger.webhook('linkhit_saved', {
-                linkHitId: linkHit._id,
                 mobileNumber,
-                shortUrl
+                shortUrl,
+                hitCount: linkHitsCount,
+                linkedToSms: !!smsLog
             });
 
             res.json({ 
                 success: true, 
                 message: 'Link hit processed',
-                linkHitId: linkHit._id 
+                hitCount: linkHitsCount
             });
 
         } catch (error) {

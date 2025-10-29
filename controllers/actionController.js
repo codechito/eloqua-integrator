@@ -329,15 +329,45 @@ class ActionController {
                 // Process message with merge fields
                 let message = replaceMergeFields(instance.message, record);
 
+                // Clean up message
+                message = message.replace(/\n\n+/g, '\n\n').trim();
 
-                // Send SMS
+                // Build callback URLs with tracking parameters
+                const baseUrl = process.env.APP_BASE_URL || 'https://eloqua-integrator.onrender.com';
+                
+                const callbackParams = new URLSearchParams({
+                    installId: instance.installId,
+                    instanceId: instance.instanceId,
+                    contactId: record.contactId,
+                    emailAddress: record.emailAddress || '',
+                    campaignId: instance.assetId || ''
+                }).toString();
+
+                // Send SMS with callbacks
                 const smsOptions = {
-                    from: instance.caller_id || undefined,
-                    dlr_callback: consumer.dlr_callback
+                    from: instance.caller_id || undefined
                 };
 
                 if (instance.message_expiry === 'YES') {
                     smsOptions.validity = parseInt(instance.message_validity) * 60;
+                }
+
+                // Add tracked link URL if message contains [tracked-link]
+                if (message.includes('[tracked-link]') && instance.tracked_link) {
+                    smsOptions.tracked_link_url = instance.tracked_link;
+                }
+
+                // Add callback URLs
+                if (consumer.dlr_callback) {
+                    smsOptions.dlr_callback = `${baseUrl}/webhooks/dlr?${callbackParams}`;
+                }
+
+                if (consumer.reply_callback) {
+                    smsOptions.reply_callback = `${baseUrl}/webhooks/reply?${callbackParams}`;
+                }
+
+                if (consumer.link_hits_callback) {
+                    smsOptions.link_hits_callback = `${baseUrl}/webhooks/linkhit?${callbackParams}`;
                 }
 
                 const smsResponse = await smsService.sendSms(
@@ -360,7 +390,10 @@ class ActionController {
                     status: 'sent',
                     transmitSmsResponse: smsResponse,
                     sentAt: new Date(),
-                    trackedLink: trackedLinkData
+                    trackedLink: smsResponse.tracked_link ? {
+                        shortUrl: smsResponse.tracked_link.short_url,
+                        originalUrl: smsResponse.tracked_link.original_url
+                    } : undefined
                 });
 
                 await smsLog.save();
@@ -388,7 +421,9 @@ class ActionController {
                 logger.sms('sent', {
                     instanceId: instance.instanceId,
                     to: formattedNumber,
-                    messageId: smsResponse.message_id
+                    messageId: smsResponse.message_id,
+                    hasTrackedLink: message.includes('[tracked-link]'),
+                    hasCallbacks: !!(smsOptions.dlr_callback || smsOptions.reply_callback || smsOptions.link_hits_callback)
                 });
 
             } catch (error) {
@@ -553,7 +588,7 @@ class ActionController {
     });
 
     /**
-     * Test SMS - FIXED VERSION
+     * Test SMS
      * POST /eloqua/action/ajax/testsms/:installId/:siteId/:country/:phone
      */
     static testSms = asyncHandler(async (req, res) => {
@@ -567,7 +602,7 @@ class ActionController {
             hasMessage: !!message,
             messageLength: message?.length || 0,
             hasTrackedLinkPlaceholder: message?.includes('[tracked-link]') || false,
-            messagePreview: message?.substring(0, 50)
+            trackedLinkUrl: tracked_link_url
         });
 
         // Validate inputs
@@ -617,11 +652,8 @@ class ActionController {
                 country 
             });
 
-            // Just use the message as-is
-            // TransmitSMS will automatically handle [tracked-link] placeholder
+            // Prepare message
             let finalMessage = message.trim();
-
-            // Clean up extra line breaks
             finalMessage = finalMessage.replace(/\n\n+/g, '\n\n');
 
             if (!finalMessage) {
@@ -636,22 +668,51 @@ class ActionController {
                 messageLength: finalMessage.length,
                 from: caller_id || 'default',
                 hasTrackedLinkPlaceholder: finalMessage.includes('[tracked-link]'),
-                finalMessagePreview: finalMessage.substring(0, 100)
+                trackedLinkUrl: tracked_link_url
             });
+
+            // Build callback URLs with tracking parameters
+            const baseUrl = process.env.APP_BASE_URL || 'https://eloqua-integrator.onrender.com';
+            
+            const callbackParams = new URLSearchParams({
+                installId: installId,
+                test: 'true',
+                phone: formattedNumber
+            }).toString();
 
             // Prepare SMS options
             const smsOptions = {};
+            
             if (caller_id) {
                 smsOptions.from = caller_id;
             }
 
-            logger.debug('SMS options prepared', {
-                to: formattedNumber,
-                message: finalMessage,
-                options: smsOptions
+            // Add tracked link URL if message contains [tracked-link]
+            if (finalMessage.includes('[tracked-link]') && tracked_link_url) {
+                smsOptions.tracked_link_url = tracked_link_url;
+            }
+
+            // Add callback URLs for test
+            if (consumer.dlr_callback) {
+                smsOptions.dlr_callback = `${baseUrl}/webhooks/dlr?${callbackParams}`;
+            }
+
+            if (consumer.reply_callback) {
+                smsOptions.reply_callback = `${baseUrl}/webhooks/reply?${callbackParams}`;
+            }
+
+            if (consumer.link_hits_callback) {
+                smsOptions.link_hits_callback = `${baseUrl}/webhooks/linkhit?${callbackParams}`;
+            }
+
+            logger.info('SMS options with callbacks', {
+                hasCallbacks: !!(smsOptions.dlr_callback || smsOptions.reply_callback || smsOptions.link_hits_callback),
+                dlr: !!smsOptions.dlr_callback,
+                reply: !!smsOptions.reply_callback,
+                linkHits: !!smsOptions.link_hits_callback
             });
 
-            // Send SMS - TransmitSMS handles [tracked-link] automatically
+            // Send SMS
             const response = await smsService.sendSms(
                 formattedNumber,
                 finalMessage,
@@ -669,6 +730,11 @@ class ActionController {
                 messageId: response.message_id,
                 to: formattedNumber,
                 messageLength: finalMessage.length,
+                callbacks: {
+                    dlr: smsOptions.dlr_callback,
+                    reply: smsOptions.reply_callback,
+                    linkHits: smsOptions.link_hits_callback
+                },
                 response
             });
 
