@@ -362,15 +362,6 @@
         <h4 style="font-size: 20px; font-weight: bold; text-align: center; margin-bottom: 20px;">
           <img src="/eloqua-service/assets/images/send-sms-el-icon.png" onerror="this.style.display='none'" style="vertical-align: middle;">&nbsp;Create your Text Message
         </h4>
-        
-        <!-- Main Status Messages -->
-        <div v-if="status.success || status.error" 
-             v-bind:class="{ 'alert-success': status.success, 'alert-danger': status.error, 'fade-out': statusFading }" 
-             class="alert" 
-             role="alert">
-          <button type="button" class="close" @click="clearStatus">&times;</button>
-          <strong>{{ status.success ? '✓' : '✗' }}</strong> {{ status.success || status.error }}
-        </div>
 
         <!-- Row 1: Sender ID (LEFT) | Recipient Field (RIGHT) -->
         <div class="two-column-row">
@@ -646,21 +637,21 @@ Opt-out reply STOP"></textarea>
           </div>
 
           <!-- Test SMS Status - Simple inline message -->
-          <div v-if="testSmsStatus.success" class="test-status success">
+          <div v-if="messageStatus.success" class="test-status success">
             <strong>✓ Success!</strong>
-            <span>{{ testSmsStatus.success }}</span>
-            <div v-if="testSmsStatus.details" class="test-status-details">
-              <div><strong>Message ID:</strong> {{ testSmsStatus.details.messageId }}</div>
-              <div><strong>Sent to:</strong> {{ testSmsStatus.details.to }}</div>
-              <div><strong>Length:</strong> {{ testSmsStatus.details.messageLength }} characters</div>
+            <span>{{ messageStatus.success }}</span>
+            <div v-if="messageStatus.details" class="test-status-details">
+              <div><strong>Message ID:</strong> {{ messageStatus.details.messageId }}</div>
+              <div><strong>Sent to:</strong> {{ messageStatus.details.to }}</div>
+              <div><strong>Length:</strong> {{ messageStatus.details.messageLength }} characters</div>
             </div>
           </div>
           
-          <div v-if="testSmsStatus.error" class="test-status error">
+          <div v-if="messageStatus.error" class="test-status error">
             <strong>✗ Error</strong>
-            <span>{{ testSmsStatus.error }}</span>
-            <div v-if="testSmsStatus.description" style="margin-top: 5px; font-size: 12px;">
-              {{ testSmsStatus.description }}
+            <span>{{ messageStatus.error }}</span>
+            <div v-if="messageStatus.description" style="margin-top: 5px; font-size: 12px;">
+              {{ messageStatus.description }}
             </div>
           </div>
         </div>
@@ -746,7 +737,7 @@ Opt-out reply STOP"></textarea>
           cdoMergeFields: [],
           
           // Test SMS - simplified
-          testSmsStatus: {},
+          messageStatus: {},
           testingSms: false
         },
         computed: {
@@ -770,6 +761,7 @@ Opt-out reply STOP"></textarea>
               vm.statusFading = false;
               vm.testingSms = false;
             }, 300);
+            vm.messageStatus = {};
           },
           
           insertMerge: function(value) {
@@ -1000,11 +992,11 @@ Opt-out reply STOP"></textarea>
             var testmessage = vm.instance.message || '';
             
             // Clear previous status
-            vm.testSmsStatus = {};
+            vm.messageStatus = {};
             
             // Validation
             if (!testmessage.trim()) {
-              vm.testSmsStatus = {
+              vm.messageStatus = {
                 error: 'Message is required',
                 description: 'Please enter a message before sending test SMS'
               };
@@ -1012,7 +1004,7 @@ Opt-out reply STOP"></textarea>
             }
             
             if (!vm.instance.test_phone || !vm.instance.test_phone.trim()) {
-              vm.testSmsStatus = {
+              vm.messageStatus = {
                 error: 'Phone number is required',
                 description: 'Please enter a phone number'
               };
@@ -1045,7 +1037,7 @@ Opt-out reply STOP"></textarea>
             
             axios.post('/eloqua/action/ajax/testsms/' + vm.consumer.installId + '/' + vm.consumer.SiteId + '/' + vm.consumer.default_country + '/' + encodeURIComponent(vm.instance.test_phone), data)
               .then(function(response){
-                vm.testSmsStatus = {
+                vm.messageStatus = {
                   success: 'Test SMS sent successfully!',
                   details: {
                     messageId: response.data.messageId,
@@ -1056,7 +1048,7 @@ Opt-out reply STOP"></textarea>
                 vm.testingSms = false;
               })
               .catch(function (error) {
-                vm.testSmsStatus = {
+                vm.messageStatus = {
                   error: error.response?.data?.error || 'Failed to send test SMS',
                   description: error.response?.data?.description || error.message
                 };
@@ -1078,17 +1070,17 @@ Opt-out reply STOP"></textarea>
 
             if(vm.instance.message){
               vm.saving = true;
-              
+              vm.messageStatus = {};
               axios.post(location.pathname + location.search, {"instance": vm.instance})
                 .then(function(response){
-                  vm.status = { success: 'Configuration successfully updated' };
+                  vm.messageStatus = { success: 'Configuration successfully updated' };
                   
                   window.scrollTo({ bottom: 0, behavior: 'smooth' });
                   vm.saving = false;
                   
                 })
                 .catch(function (error) {
-                  vm.status = { error: error.response?.data?.message || 'Failed to update instance!' };
+                  vm.messageStatus = { error: error.response?.data?.message || 'Failed to update instance!' };
                   
                   window.scrollTo({ bottom: 0, behavior: 'smooth' });
                   vm.saving = false;
