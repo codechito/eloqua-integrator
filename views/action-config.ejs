@@ -1125,7 +1125,7 @@ Opt-out reply STOP"></textarea>
                 vm.testingSms = false;
                 
                 // Auto-hide after 10 seconds with smooth fade
-                vm.autoHideTestSmsStatus(10000);
+                vm.autoHideTestSmsStatus(5000);
               })
               .catch(function (error) {
                 console.error('Test SMS error:', error.response?.data);
@@ -1138,7 +1138,7 @@ Opt-out reply STOP"></textarea>
                 vm.testingSms = false;
                 
                 // Auto-hide after 10 seconds with smooth fade
-                vm.autoHideTestSmsStatus(10000);
+                vm.autoHideTestSmsStatus(5000);
               });
           },
           
@@ -1173,8 +1173,8 @@ Opt-out reply STOP"></textarea>
                       vm.fade = false;
                       vm.status = {};
                       vm.statusFading = false;
-                    }, 500);
-                  }, 5000);
+                    }, 1500);
+                  }, 3000);
                 })
                 .catch(function (error) {
                   vm.saving = false;
@@ -1191,8 +1191,8 @@ Opt-out reply STOP"></textarea>
                       vm.fade = false;
                       vm.status = {};
                       vm.statusFading = false;
-                    }, 500);
-                  }, 5000);
+                    }, 1500);
+                  }, 3000);
                 });
             }
             else{
@@ -1209,8 +1209,8 @@ Opt-out reply STOP"></textarea>
                   vm.fade = false;
                   vm.status = {};
                   vm.statusFading = false;
-                }, 500);
-              }, 5000);
+                }, 1500);
+              }, 3000);
             }
           }
         },
