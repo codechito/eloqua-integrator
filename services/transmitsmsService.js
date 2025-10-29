@@ -243,25 +243,7 @@ class TransmitSmsService {
 
             const response = await this.makeRequest('GET', '/get-sender-ids.json');
 
-            const senderIds = {
-                'Virtual Number': [],
-                'Business Name': [],
-                'Mobile Number': []
-            };
-
-            // Extract virtual numbers
-            if (response.numbers && Array.isArray(response.numbers)) {
-                response.numbers.forEach(number => {
-                    if (number.dedicated || number.type === 'dedicated') {
-                        senderIds['Virtual Number'].push(number.number);
-                    }
-                });
-            }
-
-            // Extract business names/sender IDs
-            if (response.sender_ids && Array.isArray(response.sender_ids)) {
-                senderIds['Business Name'] = response.sender_ids;
-            }
+            const senderIds = response.result.caller_ids;
 
             logger.debug('Sender IDs fetched', {
                 virtualNumbers: senderIds['Virtual Number'].length,
