@@ -154,7 +154,6 @@ class EloquaService {
                 hasData: !!data 
             });
 
-            logger.info(`Make Request ${method} ${endpoint}`, config);
             const response = await axios(config);
 
             logger.api(endpoint, method, response.status, {

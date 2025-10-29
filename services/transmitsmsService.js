@@ -39,7 +39,10 @@ class TransmitSmsService {
                 config.data = data;
             }
 
-            logger.debug(`TransmitSMS API ${method} ${endpoint}`, { hasData: !!data });
+            logger.debug(`TransmitSMS API ${method} ${endpoint}`, { 
+                hasData: !!data,
+                dataKeys: data ? Object.keys(data) : []
+            });
 
             const response = await axios(config);
 
@@ -65,42 +68,66 @@ class TransmitSmsService {
     /**
      * Send SMS
      * @param {string} to - Recipient phone number (E.164 format)
-     * @param {string} message - SMS message
+     * @param {string} message - SMS message (can include [tracked-link] placeholder)
      * @param {object} options - Additional options
      */
     async sendSms(to, message, options = {}) {
         try {
+            // Validate required fields
+            if (!to || !to.trim()) {
+                throw new Error('Recipient phone number is required');
+            }
+
+            if (!message || !message.trim()) {
+                throw new Error('Message is required');
+            }
+
+            // Build payload with required fields first
             const payload = {
-                to,
-                message,
-                ...options
+                to: to.trim(),
+                message: message.trim()
             };
 
-            // Add sender ID if provided
+            // Add optional fields
             if (options.from) {
                 payload.from = options.from;
             }
 
-            // Add validity period if message expiry is enabled
             if (options.validity) {
                 payload.validity = options.validity;
             }
 
-            // Add delivery report callback
             if (options.dlr_callback) {
                 payload.dlr_callback = options.dlr_callback;
             }
 
+            // Add any other options (but don't let them override required fields)
+            Object.keys(options).forEach(key => {
+                if (!['from', 'validity', 'dlr_callback'].includes(key) && options[key] !== undefined) {
+                    payload[key] = options[key];
+                }
+            });
+
             logger.sms('send_request', {
-                to,
-                messageLength: message.length,
-                from: options.from
+                to: payload.to,
+                messageLength: payload.message.length,
+                from: payload.from || 'default',
+                hasTrackedLink: payload.message.includes('[tracked-link]'),
+                payloadKeys: Object.keys(payload)
+            });
+
+            logger.debug('SMS Payload', { 
+                to: payload.to,
+                messageLength: payload.message.length,
+                message: payload.message.substring(0, 50) + '...',
+                from: payload.from,
+                allKeys: Object.keys(payload)
             });
 
             const response = await this.makeRequest('POST', '/send-sms.json', payload);
 
             logger.sms('send_success', {
-                to,
+                to: payload.to,
                 messageId: response.message_id,
                 status: response.status
             });
@@ -186,7 +213,8 @@ class TransmitSmsService {
 
             const senderIds = {
                 'Virtual Number': [],
-                'Business Name': []
+                'Business Name': [],
+                'Mobile Number': []
             };
 
             // Extract virtual numbers
@@ -214,7 +242,8 @@ class TransmitSmsService {
             // Return empty arrays instead of failing
             return {
                 'Virtual Number': [],
-                'Business Name': []
+                'Business Name': [],
+                'Mobile Number': []
             };
         }
     }
@@ -246,55 +275,6 @@ class TransmitSmsService {
             return true;
         } catch (error) {
             return false;
-        }
-    }
-    /**
-     * Get sender IDs (virtual numbers, business names, mobile numbers)
-     */
-    async getSenderIds() {
-        try {
-            logger.debug('Fetching sender IDs from TransmitSMS');
-
-            const response = await this.makeRequest('GET', '/get-sender-ids.json');
-
-            const senderIds = {
-                'Virtual Number': [],
-                'Business Name': [],
-                'Mobile Number': []
-            };
-
-            if (response.result && response.result.caller_ids) {
-                const callerIds = response.result.caller_ids;
-                
-                // Extract all types of sender IDs
-                if (callerIds['Virtual Number']) {
-                    senderIds['Virtual Number'] = callerIds['Virtual Number'];
-                }
-                
-                if (callerIds['Business Name']) {
-                    senderIds['Business Name'] = callerIds['Business Name'];
-                }
-                
-                if (callerIds['Mobile Number']) {
-                    senderIds['Mobile Number'] = callerIds['Mobile Number'];
-                }
-            }
-
-            logger.debug('Sender IDs fetched', {
-                virtualNumbers: senderIds['Virtual Number'].length,
-                businessNames: senderIds['Business Name'].length,
-                mobileNumbers: senderIds['Mobile Number'].length
-            });
-
-            return senderIds;
-        } catch (error) {
-            logger.error('Error fetching sender IDs', { error: error.message });
-            // Return empty arrays instead of failing
-            return {
-                'Virtual Number': [],
-                'Business Name': [],
-                'Mobile Number': []
-            };
         }
     }
 }

@@ -566,7 +566,8 @@ class ActionController {
             phone,
             hasMessage: !!message,
             messageLength: message?.length || 0,
-            hasTrackedLink: !!tracked_link_url
+            hasTrackedLinkPlaceholder: message?.includes('[tracked-link]') || false,
+            messagePreview: message?.substring(0, 50)
         });
 
         // Validate inputs
@@ -616,7 +617,12 @@ class ActionController {
                 country 
             });
 
-            let finalMessage = message;
+            // Just use the message as-is
+            // TransmitSMS will automatically handle [tracked-link] placeholder
+            let finalMessage = message.trim();
+
+            // Clean up extra line breaks
+            finalMessage = finalMessage.replace(/\n\n+/g, '\n\n');
 
             if (!finalMessage) {
                 return res.status(400).json({ 
@@ -628,14 +634,28 @@ class ActionController {
             logger.info('Sending test SMS', { 
                 to: formattedNumber,
                 messageLength: finalMessage.length,
-                from: caller_id || 'default'
+                from: caller_id || 'default',
+                hasTrackedLinkPlaceholder: finalMessage.includes('[tracked-link]'),
+                finalMessagePreview: finalMessage.substring(0, 100)
             });
 
-            // Send SMS
+            // Prepare SMS options
+            const smsOptions = {};
+            if (caller_id) {
+                smsOptions.from = caller_id;
+            }
+
+            logger.debug('SMS options prepared', {
+                to: formattedNumber,
+                message: finalMessage,
+                options: smsOptions
+            });
+
+            // Send SMS - TransmitSMS handles [tracked-link] automatically
             const response = await smsService.sendSms(
                 formattedNumber,
                 finalMessage,
-                { from: caller_id || undefined }
+                smsOptions
             );
 
             logger.sms('test_sent', { 
