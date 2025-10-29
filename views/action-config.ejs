@@ -19,7 +19,7 @@
       @keyframes fadeIn {
         from { 
           opacity: 0; 
-          transform: translateY(-20px); 
+          transform: translateY(-10px); 
         }
         to { 
           opacity: 1; 
@@ -31,12 +31,10 @@
         from { 
           opacity: 1; 
           transform: translateY(0);
-          max-height: 200px;
         }
         to { 
           opacity: 0; 
-          transform: translateY(-20px);
-          max-height: 0;
+          transform: translateY(-10px);
         }
       }
       
@@ -56,6 +54,7 @@
         height: 16px;
         border-width: 2px;
         margin-right: 5px;
+        vertical-align: middle;
       }
 
       .two-column-row {
@@ -112,12 +111,11 @@
         border: 1px solid transparent;
         border-radius: 4px;
         position: relative;
-        animation: fadeIn 0.5s ease-out;
-        transition: all 0.5s ease-out;
+        animation: fadeIn 0.3s ease-out;
       }
 
       .alert.fade-out {
-        animation: fadeOut 0.5s ease-out forwards;
+        animation: fadeOut 0.3s ease-out forwards;
       }
 
       .alert-success {
@@ -140,7 +138,7 @@
 
       .alert.fade {
         opacity: 0;
-        transition: opacity 0.5s ease-out;
+        transition: opacity 0.3s ease-out;
       }
 
       .alert.fade.in {
@@ -164,17 +162,6 @@
 
       .alert .close:hover {
         opacity: .5;
-      }
-
-      .alert-details {
-        margin-top: 10px;
-        padding-left: 20px;
-        font-size: 12px;
-      }
-
-      .alert-details strong {
-        display: inline-block;
-        width: 120px;
       }
 
       .btn {
@@ -331,6 +318,42 @@
         font-weight: bold;
         color: #333;
       }
+
+      .test-status {
+        padding: 10px 15px;
+        margin-top: 15px;
+        border-radius: 4px;
+        font-size: 13px;
+        animation: fadeIn 0.3s ease-out;
+      }
+
+      .test-status.success {
+        background-color: #d4edda;
+        border: 1px solid #c3e6cb;
+        color: #155724;
+      }
+
+      .test-status.error {
+        background-color: #f8d7da;
+        border: 1px solid #f5c6cb;
+        color: #721c24;
+      }
+
+      .test-status strong {
+        display: block;
+        margin-bottom: 5px;
+      }
+
+      .test-status-details {
+        font-size: 12px;
+        margin-top: 8px;
+        padding-top: 8px;
+        border-top: 1px solid rgba(0,0,0,0.1);
+      }
+
+      .test-status-details div {
+        margin: 3px 0;
+      }
     </style>
   </head>
   <body>
@@ -341,15 +364,13 @@
         </h4>
         
         <!-- Main Status Messages -->
-        <transition name="fade">
-          <div v-if="status.success || status.error" 
-               v-bind:class="{ 'alert-success': status.success, 'alert-danger': status.error, 'fade-out': statusFading }" 
-               class="alert" 
-               role="alert">
-            <button type="button" class="close" @click="clearStatus">&times;</button>
-            <strong>{{ status.success ? '✓' : '✗' }}</strong> {{ status.success || status.error }}
-          </div>
-        </transition>
+        <div v-if="status.success || status.error" 
+             v-bind:class="{ 'alert-success': status.success, 'alert-danger': status.error, 'fade-out': statusFading }" 
+             class="alert" 
+             role="alert">
+          <button type="button" class="close" @click="clearStatus">&times;</button>
+          <strong>{{ status.success ? '✓' : '✗' }}</strong> {{ status.success || status.error }}
+        </div>
 
         <!-- Row 1: Sender ID (LEFT) | Recipient Field (RIGHT) -->
         <div class="two-column-row">
@@ -597,56 +618,14 @@ Opt-out reply STOP"></textarea>
         <div class="test-sms-section">
           <h5>Test Your SMS</h5>
           
-          <!-- Test SMS Status Messages with smooth transitions -->
-          <transition name="fade">
-            <div v-if="testSmsStatus.success" 
-                 v-bind:class="{ 'fade-out': testSmsFading }"
-                 class="alert alert-success" 
-                 style="margin-bottom: 15px;">
-              <button type="button" class="close" @click="clearTestSmsStatus">&times;</button>
-              <strong>✓ Success!</strong> {{ testSmsStatus.success }}
-              <div v-if="testSmsStatus.details" class="alert-details">
-                <div><strong>Message ID:</strong> {{ testSmsStatus.details.messageId }}</div>
-                <div><strong>Sent to:</strong> {{ testSmsStatus.details.to }}</div>
-                <div><strong>Length:</strong> {{ testSmsStatus.details.messageLength }} characters</div>
-                <div v-if="testSmsStatus.details.callbacks && (testSmsStatus.details.callbacks.dlr || testSmsStatus.details.callbacks.reply || testSmsStatus.details.callbacks.linkHits)">
-                  <strong>Callbacks:</strong>
-                  <span v-if="testSmsStatus.details.callbacks.dlr"> Delivery ✓</span>
-                  <span v-if="testSmsStatus.details.callbacks.reply"> Reply ✓</span>
-                  <span v-if="testSmsStatus.details.callbacks.linkHits"> Link Tracking ✓</span>
-                </div>
-              </div>
-            </div>
-          </transition>
-          
-          <transition name="fade">
-            <div v-if="testSmsStatus.error" 
-                 v-bind:class="{ 'fade-out': testSmsFading }"
-                 class="alert alert-danger" 
-                 style="margin-bottom: 15px;">
-              <button type="button" class="close" @click="clearTestSmsStatus">&times;</button>
-              <strong>✗ Error!</strong> {{ testSmsStatus.error }}
-              <div v-if="testSmsStatus.description" class="alert-details">
-                {{ testSmsStatus.description }}
-              </div>
-            </div>
-          </transition>
-
-          <transition name="fade">
-            <div v-if="testingSms" class="alert alert-info" style="margin-bottom: 15px;">
-              <div class="spinner spinner-sm"></div>
-              <strong>Sending test SMS...</strong> Please wait.
-            </div>
-          </transition>
-
-          <div style="display: flex; justify-content: space-between; align-items: center;">
-            <div>
-              <select v-model="consumer.default_country" style="width:100px; display:inline-block; margin-right: 5px;" class="form-control">
+          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
+            <div style="display: flex; align-items: center; gap: 5px;">
+              <select v-model="consumer.default_country" style="width:100px;" class="form-control">
                 <option v-for="country in countries" v-bind:value="country.name" :key="country.name">
                   {{ country.alpha2 + country.countryCallingCodes[0] }}
                 </option>
               </select>
-              <input type="text" v-model="instance.test_phone" style="width:150px; display:inline-block; margin-right: 5px;" class="form-control" placeholder="Phone number"/>
+              <input type="text" v-model="instance.test_phone" style="width:150px;" class="form-control" placeholder="Phone number"/>
               <button @click.prevent="testSMS" type="button" class="btn btn-default" :disabled="testingSms || !instance.message || !instance.test_phone">
                 <span v-if="testingSms">
                   <span class="spinner spinner-sm"></span>
@@ -665,19 +644,35 @@ Opt-out reply STOP"></textarea>
               </button>
             </div>
           </div>
+
+          <!-- Test SMS Status - Simple inline message -->
+          <div v-if="testSmsStatus.success" class="test-status success">
+            <strong>✓ Success!</strong>
+            <span>{{ testSmsStatus.success }}</span>
+            <div v-if="testSmsStatus.details" class="test-status-details">
+              <div><strong>Message ID:</strong> {{ testSmsStatus.details.messageId }}</div>
+              <div><strong>Sent to:</strong> {{ testSmsStatus.details.to }}</div>
+              <div><strong>Length:</strong> {{ testSmsStatus.details.messageLength }} characters</div>
+            </div>
+          </div>
+          
+          <div v-if="testSmsStatus.error" class="test-status error">
+            <strong>✗ Error</strong>
+            <span>{{ testSmsStatus.error }}</span>
+            <div v-if="testSmsStatus.description" style="margin-top: 5px; font-size: 12px;">
+              {{ testSmsStatus.description }}
+            </div>
+          </div>
         </div>
 
-        <!-- Bottom Status (duplicate for visibility) -->
-        <transition name="fade">
-          <div v-if="status.success || status.error" 
-               v-bind:class="{ 'alert-success': status.success, 'alert-danger': status.error, 'fade-out': statusFading }" 
-               class="alert" 
-               role="alert" 
-               style="margin-top: 0;">
-            <button type="button" class="close" @click="clearStatus">&times;</button>
-            <strong>{{ status.success ? '✓' : '✗' }}</strong> {{ status.success || status.error }}
-          </div>
-        </transition>
+        <!-- Bottom Status (for SAVE action) -->
+        <div v-if="status.success || status.error" 
+             v-bind:class="{ 'alert-success': status.success, 'alert-danger': status.error, 'fade-out': statusFading }" 
+             class="alert" 
+             role="alert">
+          <button type="button" class="close" @click="clearStatus">&times;</button>
+          <strong>{{ status.success ? '✓' : '✗' }}</strong> {{ status.success || status.error }}
+        </div>
       </form>
     </div>
     
@@ -694,10 +689,6 @@ Opt-out reply STOP"></textarea>
       if(!instance.send_mode){
         instance.send_mode = "all";
       }
-
-      console.log('=== Initial Data ===');
-      console.log('Instance:', instance);
-      console.log('Merge fields:', merge_fields_initial);
 
       Vue.component('v-select', VueSelect.VueSelect);
       
@@ -754,11 +745,9 @@ Opt-out reply STOP"></textarea>
           selectedCDOField: '',
           cdoMergeFields: [],
           
-          // Test SMS specific
+          // Test SMS - simplified
           testSmsStatus: {},
-          testingSms: false,
-          testSmsFading: false,
-          testSmsTimeout: null
+          testingSms: false
         },
         computed: {
           messageLength: function() {
@@ -779,44 +768,7 @@ Opt-out reply STOP"></textarea>
               vm.status = {};
               vm.fade = false;
               vm.statusFading = false;
-            }, 500);
-          },
-          
-          clearTestSmsStatus: function() {
-            var vm = this;
-            
-            // Clear any pending timeout
-            if (vm.testSmsTimeout) {
-              clearTimeout(vm.testSmsTimeout);
-              vm.testSmsTimeout = null;
-            }
-            
-            vm.testSmsFading = true;
-            setTimeout(function() {
-              vm.testSmsStatus = {};
-              vm.testSmsFading = false;
-            }, 500);
-          },
-          
-          autoHideTestSmsStatus: function(duration) {
-            var vm = this;
-            
-            // Clear any existing timeout
-            if (vm.testSmsTimeout) {
-              clearTimeout(vm.testSmsTimeout);
-            }
-            
-            // Start fade out animation before clearing
-            vm.testSmsTimeout = setTimeout(function() {
-              vm.testSmsFading = true;
-              
-              // Actually clear after fade animation completes
-              setTimeout(function() {
-                vm.testSmsStatus = {};
-                vm.testSmsFading = false;
-                vm.testSmsTimeout = null;
-              }, 500);
-            }, duration);
+            }, 300);
           },
           
           insertMerge: function(value) {
@@ -841,7 +793,6 @@ Opt-out reply STOP"></textarea>
               textarea.setSelectionRange(newPos, newPos);
             });
             
-            // Reset selections
             this.selectedContactField = '';
             this.selectedCDOField = '';
           },
@@ -853,7 +804,6 @@ Opt-out reply STOP"></textarea>
             }
             
             var vm = this;
-            console.log('Loading CDO fields for merge:', cdo.id);
             
             axios.get('/eloqua/action/ajax/customobject/' + this.consumer.installId + '/' + this.consumer.SiteId + '/' + cdo.id)
               .then(function(response) {
@@ -869,8 +819,6 @@ Opt-out reply STOP"></textarea>
                     }
                   });
                 }
-                
-                console.log('CDO merge fields loaded:', vm.cdoMergeFields.length);
               })
               .catch(function(error) {
                 console.error('Error loading CDO fields:', error);
@@ -1050,13 +998,8 @@ Opt-out reply STOP"></textarea>
             var vm = this;
             var testmessage = vm.instance.message || '';
             
-            // Clear previous status and timeout
+            // Clear previous status
             vm.testSmsStatus = {};
-            vm.testSmsFading = false;
-            if (vm.testSmsTimeout) {
-              clearTimeout(vm.testSmsTimeout);
-              vm.testSmsTimeout = null;
-            }
             
             // Validation
             if (!testmessage.trim()) {
@@ -1064,7 +1007,6 @@ Opt-out reply STOP"></textarea>
                 error: 'Message is required',
                 description: 'Please enter a message before sending test SMS'
               };
-              vm.autoHideTestSmsStatus(8000);
               return;
             }
             
@@ -1073,7 +1015,6 @@ Opt-out reply STOP"></textarea>
                 error: 'Phone number is required',
                 description: 'Please enter a phone number'
               };
-              vm.autoHideTestSmsStatus(8000);
               return;
             }
             
@@ -1092,13 +1033,6 @@ Opt-out reply STOP"></textarea>
               });
             }
             
-            console.log('Sending test SMS:', {
-              message: testmessage,
-              messageLength: testmessage.length,
-              hasTrackedLink: !!vm.instance.tracked_link,
-              phone: vm.instance.test_phone
-            });
-            
             var data = {
               "message": testmessage,
               "caller_id": vm.instance.caller_id || ''
@@ -1110,35 +1044,22 @@ Opt-out reply STOP"></textarea>
             
             axios.post('/eloqua/action/ajax/testsms/' + vm.consumer.installId + '/' + vm.consumer.SiteId + '/' + vm.consumer.default_country + '/' + encodeURIComponent(vm.instance.test_phone), data)
               .then(function(response){
-                console.log('Test SMS sent:', response.data);
-                
                 vm.testSmsStatus = {
                   success: 'Test SMS sent successfully!',
                   details: {
                     messageId: response.data.messageId,
                     to: response.data.to,
-                    messageLength: response.data.messageLength,
-                    callbacks: response.data.callbacks
+                    messageLength: response.data.messageLength
                   }
                 };
-                
                 vm.testingSms = false;
-                
-                // Auto-hide after 10 seconds with smooth fade
-                vm.autoHideTestSmsStatus(5000);
               })
               .catch(function (error) {
-                console.error('Test SMS error:', error.response?.data);
-                
                 vm.testSmsStatus = {
                   error: error.response?.data?.error || 'Failed to send test SMS',
                   description: error.response?.data?.description || error.message
                 };
-                
                 vm.testingSms = false;
-                
-                // Auto-hide after 10 seconds with smooth fade
-                vm.autoHideTestSmsStatus(5000);
               });
           },
           
@@ -1163,63 +1084,53 @@ Opt-out reply STOP"></textarea>
                   vm.fade = true;
                   vm.status = { success: 'Configuration successfully updated' };
                   
-                  // Scroll to top to see message
                   window.scrollTo({ top: 0, behavior: 'smooth' });
                   
-                  // Auto-hide after 5 seconds with fade
                   setTimeout(function() {
                     vm.statusFading = true;
                     setTimeout(function() {
                       vm.fade = false;
                       vm.status = {};
                       vm.statusFading = false;
-                    }, 1500);
-                  }, 3000);
+                    }, 300);
+                  }, 5000);
                 })
                 .catch(function (error) {
                   vm.saving = false;
                   vm.fade = true;
                   vm.status = { error: error.response?.data?.message || 'Failed to update instance!' };
                   
-                  // Scroll to top to see message
                   window.scrollTo({ top: 0, behavior: 'smooth' });
                   
-                  // Auto-hide after 5 seconds with fade
                   setTimeout(function() {
                     vm.statusFading = true;
                     setTimeout(function() {
                       vm.fade = false;
                       vm.status = {};
                       vm.statusFading = false;
-                    }, 1500);
-                  }, 3000);
+                    }, 300);
+                  }, 5000);
                 });
             }
             else{
               vm.status = { error: 'Message is required' };
               vm.fade = true;
               
-              // Scroll to top to see message
               window.scrollTo({ top: 0, behavior: 'smooth' });
               
-              // Auto-hide after 5 seconds with fade
               setTimeout(function() {
                 vm.statusFading = true;
                 setTimeout(function() {
                   vm.fade = false;
                   vm.status = {};
                   vm.statusFading = false;
-                }, 1500);
-              }, 3000);
+                }, 300);
+              }, 5000);
             }
           }
         },
         mounted: function () {
           var vm = this;
-          console.log('=== Action Config Mounted ===');
-          console.log('Consumer:', vm.consumer);
-          console.log('Instance:', vm.instance);
-          console.log('Contact Fields:', vm.contactFields.length);
           
           vm.previousCustomObjectId = vm.instance.custom_object_id || null;
           
@@ -1230,12 +1141,6 @@ Opt-out reply STOP"></textarea>
           }
           
           vm.getProgramFields();
-        },
-        beforeDestroy: function() {
-          // Clean up timeout when component is destroyed
-          if (this.testSmsTimeout) {
-            clearTimeout(this.testSmsTimeout);
-          }
         }
       });
     </script>
