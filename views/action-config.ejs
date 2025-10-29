@@ -1037,10 +1037,8 @@ Opt-out reply STOP"></textarea>
                 };
                 
                 setTimeout(function() {
-                  if (vm.testSmsStatus.success) {
-                    vm.testSmsStatus = {};
-                    vm.testingSms = false;
-                  }
+                  vm.testSmsStatus = {};
+                  vm.testingSms = false;
                 }, 10000);
               });
           },
