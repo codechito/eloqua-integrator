@@ -2,6 +2,8 @@ const auth = require('./auth');
 const errorHandler = require('./errorHandler');
 const requestLogger = require('./requestLogger');
 const validateRequest = require('./validateRequest');
+const sessionAuth = require('./sessionAuth');
+const handleReauth = require('./handleReauth');
 
 module.exports = {
     // Auth middleware
@@ -10,6 +12,12 @@ module.exports = {
     verifyTransmitSmsCredentials: auth.verifyTransmitSmsCredentials,
     verifyWebhookSignature: auth.verifyWebhookSignature,
     rateLimit: auth.rateLimit,
+    
+    // Session-based auth for AJAX
+    sessionAuth,
+    
+    // Re-authorization handler
+    handleReauth,
     
     // Error handling
     errorHandler: errorHandler.errorHandler,

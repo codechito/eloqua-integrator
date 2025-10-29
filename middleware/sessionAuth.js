@@ -37,16 +37,21 @@ async function sessionAuth(req, res, next) {
         if (!consumer.oauth_token) {
             return res.status(401).json({ 
                 error: 'Unauthorized',
-                message: 'OAuth token not found. Please re-authorize.' 
+                message: 'OAuth token not found. Please re-authorize.',
+                code: 'REAUTH_REQUIRED',
+                reAuthUrl: `/eloqua/app/install?installId=${consumer.installId}&siteId=${consumer.SiteId}`
             });
         }
 
         // Check if token is expired
         if (consumer.oauth_expires_at && new Date() >= consumer.oauth_expires_at) {
-            return res.status(401).json({ 
-                error: 'Token Expired',
-                message: 'OAuth token expired. Please re-authorize.' 
+            logger.warn('OAuth token expired in session auth', {
+                installId: consumer.installId,
+                expiresAt: consumer.oauth_expires_at
             });
+            
+            // Token is expired but we'll let EloquaService handle the refresh
+            // Just log it here for visibility
         }
 
         // Store installId in session for future requests

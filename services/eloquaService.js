@@ -1,27 +1,38 @@
 const axios = require('axios');
 const Consumer = require('../models/Consumer');
 const { logger, buildQueryString } = require('../utils');
+const eloquaConfig = require('../config/eloqua');
 
 class EloquaService {
     constructor(installId, siteId) {
         this.installId = installId;
         this.siteId = siteId;
-        this.baseUrl = null; // Will be set dynamically
+        this.baseUrl = null;
+        this.retryCount = 0;
+        this.maxRetries = 1; // Only retry once after token refresh
     }
 
     /**
-     * Get Eloqua base URL from site ID or discover it
+     * Get Eloqua base URL
      */
     async getBaseUrl() {
         if (this.baseUrl) {
             return this.baseUrl;
         }
 
-        // Method 1: Try to get from login API (most reliable)
+        const consumer = await Consumer.findOne({ installId: this.installId });
+        
+        if (consumer && consumer.eloqua_base_url) {
+            this.baseUrl = consumer.eloqua_base_url;
+            logger.debug('Using stored base URL', { 
+                installId: this.installId,
+                baseUrl: this.baseUrl 
+            });
+            return this.baseUrl;
+        }
+
         try {
             const token = await this.getAccessToken();
-            
-            // Call the login API to get the correct base URL
             const response = await axios.get('https://login.eloqua.com/id', {
                 headers: {
                     'Authorization': `Bearer ${token}`
@@ -30,30 +41,32 @@ class EloquaService {
 
             if (response.data && response.data.urls && response.data.urls.base) {
                 this.baseUrl = response.data.urls.base;
-                logger.info('Eloqua base URL discovered', { 
+                
+                if (consumer) {
+                    consumer.eloqua_base_url = this.baseUrl;
+                    consumer.eloqua_apis_url = response.data.urls.apis;
+                    await consumer.save();
+                }
+                
+                logger.info('Eloqua base URL discovered and stored', { 
                     installId: this.installId,
                     baseUrl: this.baseUrl 
                 });
                 return this.baseUrl;
             }
         } catch (error) {
-            logger.warn('Could not discover base URL from login API', {
+            logger.error('Could not discover base URL', {
+                installId: this.installId,
                 error: error.message
             });
         }
 
-        // Method 2: Fallback to constructing from siteId
-        // SiteId format is usually like "1234" where first 1-2 digits might indicate pod
-        // But this is unreliable, better to use Method 1
-        const podNumber = this.siteId ? this.siteId.substring(0, 2).padStart(2, '0') : '01';
-        this.baseUrl = `https://secure.p${podNumber}.eloqua.com`;
-        
-        logger.warn('Using fallback base URL', {
+        this.baseUrl = 'https://secure.eloqua.com';
+        logger.warn('Using default base URL', {
             installId: this.installId,
-            siteId: this.siteId,
             baseUrl: this.baseUrl
         });
-
+        
         return this.baseUrl;
     }
 
@@ -68,9 +81,18 @@ class EloquaService {
             throw new Error('OAuth token not found. Please authenticate the app.');
         }
 
-        // Check if token needs refresh
-        if (consumer.needsTokenRefresh()) {
-            logger.info('OAuth token needs refresh', { installId: this.installId });
+        // Check if token is expired or about to expire (within 5 minutes)
+        const now = new Date();
+        const expiresAt = consumer.oauth_expires_at;
+        const fiveMinutesFromNow = new Date(now.getTime() + 5 * 60 * 1000);
+
+        if (expiresAt && expiresAt <= fiveMinutesFromNow) {
+            logger.info('OAuth token expired or expiring soon, refreshing', { 
+                installId: this.installId,
+                expiresAt,
+                now
+            });
+            
             return await this.refreshToken(consumer);
         }
 
@@ -83,6 +105,10 @@ class EloquaService {
     async refreshToken(consumer) {
         try {
             logger.info('Refreshing OAuth token', { installId: this.installId });
+
+            if (!consumer.oauth_refresh_token) {
+                throw new Error('Refresh token not found. Re-authorization required.');
+            }
 
             const credentials = Buffer.from(
                 `${process.env.ELOQUA_CLIENT_ID}:${process.env.ELOQUA_CLIENT_SECRET}`
@@ -100,30 +126,53 @@ class EloquaService {
                     headers: {
                         'Authorization': `Basic ${credentials}`,
                         'Content-Type': 'application/x-www-form-urlencoded'
-                    }
+                    },
+                    timeout: 30000
                 }
             );
 
             // Update consumer with new tokens
             consumer.oauth_token = response.data.access_token;
-            consumer.oauth_refresh_token = response.data.refresh_token;
-            consumer.oauth_expires_at = new Date(Date.now() + response.data.expires_in * 1000);
+            
+            // Refresh token might be rotated (new one provided) or stay the same
+            if (response.data.refresh_token) {
+                consumer.oauth_refresh_token = response.data.refresh_token;
+            }
+            
+            const expiresIn = response.data.expires_in || 28800; // Default 8 hours
+            consumer.oauth_expires_at = new Date(Date.now() + expiresIn * 1000);
+            
             await consumer.save();
 
-            logger.info('OAuth token refreshed successfully', { installId: this.installId });
+            logger.info('OAuth token refreshed successfully', { 
+                installId: this.installId,
+                expiresAt: consumer.oauth_expires_at
+            });
 
             return response.data.access_token;
         } catch (error) {
             logger.error('Error refreshing OAuth token', {
                 installId: this.installId,
-                error: error.message
+                error: error.message,
+                errorCode: error.response?.data?.error
             });
-            throw new Error('Failed to refresh OAuth token: ' + error.message);
+
+            // If refresh fails, clear tokens
+            if (error.response?.status === 400 || error.response?.status === 401) {
+                consumer.oauth_token = null;
+                consumer.oauth_refresh_token = null;
+                consumer.oauth_expires_at = null;
+                await consumer.save();
+                
+                throw new Error('REAUTH_REQUIRED');
+            }
+
+            throw new Error(`Failed to refresh OAuth token: ${error.message}`);
         }
     }
 
     /**
-     * Make API request to Eloqua
+     * Make API request to Eloqua with automatic token refresh
      */
     async makeRequest(method, endpoint, data = null, params = {}) {
         try {
@@ -151,7 +200,8 @@ class EloquaService {
             logger.debug(`Eloqua API ${method} ${endpoint}`, { 
                 baseUrl,
                 params, 
-                hasData: !!data 
+                hasData: !!data,
+                retryCount: this.retryCount
             });
 
             const response = await axios(config);
@@ -160,7 +210,11 @@ class EloquaService {
                 installId: this.installId
             });
 
+            // Reset retry count on success
+            this.retryCount = 0;
+
             return response.data;
+
         } catch (error) {
             const errorMessage = error.response?.data?.message || error.message;
             const statusCode = error.response?.status;
@@ -169,11 +223,75 @@ class EloquaService {
                 installId: this.installId,
                 status: statusCode,
                 error: errorMessage,
-                baseUrl: this.baseUrl
+                baseUrl: this.baseUrl,
+                retryCount: this.retryCount
             });
 
-            throw new Error(`Eloqua API Error (${statusCode || 'Network'}): ${errorMessage}`);
+            // Handle 401 Unauthorized - Token expired
+            if (statusCode === 401 && this.retryCount < this.maxRetries) {
+                logger.warn('Received 401, attempting token refresh', {
+                    installId: this.installId,
+                    retryCount: this.retryCount
+                });
+
+                this.retryCount++;
+
+                try {
+                    // Get fresh consumer data
+                    const consumer = await Consumer.findOne({ installId: this.installId })
+                        .select('+oauth_token +oauth_refresh_token +oauth_expires_at');
+                    
+                    if (!consumer) {
+                        throw new Error('REAUTH_REQUIRED');
+                    }
+
+                    // Force token refresh
+                    await this.refreshToken(consumer);
+
+                    // Retry the original request
+                    logger.info('Retrying request with new token', {
+                        installId: this.installId,
+                        endpoint
+                    });
+
+                    return await this.makeRequest(method, endpoint, data, params);
+
+                } catch (refreshError) {
+                    if (refreshError.message === 'REAUTH_REQUIRED') {
+                        // Build re-authorization URL
+                        const reAuthUrl = this.buildReAuthUrl();
+                        
+                        logger.error('Token refresh failed, re-authorization required', {
+                            installId: this.installId,
+                            reAuthUrl
+                        });
+
+                        const error = new Error('Re-authorization required');
+                        error.code = 'REAUTH_REQUIRED';
+                        error.reAuthUrl = reAuthUrl;
+                        throw error;
+                    }
+
+                    throw refreshError;
+                }
+            }
+
+            // If we've already retried or it's not a 401, throw the error
+            const finalError = new Error(`Eloqua API Error (${statusCode || 'Network'}): ${errorMessage}`);
+            finalError.statusCode = statusCode;
+            finalError.originalError = error;
+            
+            throw finalError;
         }
+    }
+
+    /**
+     * Build re-authorization URL
+     */
+    buildReAuthUrl() {
+        const baseUrl = process.env.APP_BASE_URL || 'https://eloqua-integrator.onrender.com';
+        const installUrl = `${baseUrl}/eloqua/app/install?installId=${this.installId}&siteId=${this.siteId}`;
+        return installUrl;
     }
 
     /**
@@ -246,11 +364,8 @@ class EloquaService {
     /**
      * Get contact fields
      */
-    async getContactFields(limit = 1000) {
-        const params = { 
-            limit,
-            offset: 0
-        };
+    async getContactFields(count = 200) {
+        const params = { count };
         return await this.makeRequest('GET', '/api/bulk/2.0/contacts/fields', null, params);
     }
 

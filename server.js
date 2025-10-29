@@ -208,6 +208,9 @@ app.use('/webhooks', webhookRoutes);
 // 404 handler
 app.use(notFoundHandler);
 
+const { handleReauth } = require('./middleware');
+app.use(handleReauth);
+
 // Error handler
 app.use(errorHandler);
 
