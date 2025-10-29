@@ -248,14 +248,45 @@
     <div id="sendsmsaction" class="container" style="width: 600px; padding: 20px;">
       <form method="post">
         <h4 style="font-size: 20px; font-weight: bold; text-align: center; margin-bottom: 20px;">
-          <img src="/eloqua-service/assets/images/send-sms-el-icon.png" onerror="this.style.display='none'" style="vertical-align: middle;">&nbsp;Create your Text Message
+          <img src="/eloqua-service/assets/send-sms-el-icon.png" onerror="this.style.display='none'" style="vertical-align: middle;">&nbsp;Create your Text Message
         </h4>
         
         <div v-if="status.success || status.error" v-bind:class="{ 'alert-success': status.success, 'alert-danger': status.error, 'in': fade }" class="alert fade" role="alert">
           {{ status.success || status.error }}
         </div>
 
-        <!-- Row 1: Sender ID | Recipient Field -->
+        <!-- Row 1: Custom Object (LEFT) | Recipient Field (RIGHT) -->
+        <div class="two-column-row">
+          <div class="column-left">
+            <div class="form-group">
+              <label>Custom Object Mapping</label>
+              <v-select
+                :key="'co-action'"
+                label="name"
+                v-model="selectedCustomObject"
+                :options="comap"
+                @search="fetchOptionsmap"
+                @input="onCustomObjectChange"
+                placeholder="Select Custom Object">
+                <template #no-options>
+                  <span v-if="loadingCustomObjects">Loading...</span>
+                  <span v-else>Type to search</span>
+                </template>
+              </v-select>
+            </div>
+          </div>
+          <div class="column-right">
+            <div class="form-group">
+              <label>Recipient Field</label>
+              <select v-model="instance.recipient_field" class="form-control">
+                <option value="">-- Select Field --</option>
+                <option v-for="field in fields" v-bind:value="field.id ? field.id + '__' + field.internalName : field.internalName" :key="field.internalName">{{ field.name }}</option>
+              </select>
+            </div>
+          </div>
+        </div>
+
+        <!-- Row 2: Sender ID (LEFT) | Country Field (RIGHT) -->
         <div class="two-column-row">
           <div class="column-left">
             <div class="form-group">
@@ -279,38 +310,9 @@
           </div>
           <div class="column-right">
             <div class="form-group">
-              <label>Recipient Field</label>
-              <select v-model="instance.recipient_field" class="form-control">
-                <option v-for="field in fields" v-bind:value="field.id ? field.id + '__' + field.internalName : field.internalName" :key="field.internalName">{{ field.name }}</option>
-              </select>
-            </div>
-          </div>
-        </div>
-
-        <!-- Row 2: Custom Object | Country Field -->
-        <div class="two-column-row">
-          <div class="column-left">
-            <div class="form-group">
-              <label>Custom Object Mapping</label>
-              <v-select
-                :key="'co-action'"
-                label="name"
-                v-model="selectedCustomObject"
-                :options="comap"
-                @search="fetchOptionsmap"
-                @input="onCustomObjectChange"
-                placeholder="Select Custom Object">
-                <template #no-options>
-                  <span v-if="loadingCustomObjects">Loading...</span>
-                  <span v-else>Type to search</span>
-                </template>
-              </v-select>
-            </div>
-          </div>
-          <div class="column-right">
-            <div class="form-group">
               <label>Country Field</label>
               <select v-model="instance.country_field" class="form-control">
+                <option value="">-- Select Field --</option>
                 <option v-if="instance.program_coid" value="Country">Contact Country</option>
                 <option v-for="field in countryfields" v-bind:value="field.id ? field.id + '__' + field.internalName : field.internalName" :key="field.internalName">{{ field.name }}</option>
               </select>
@@ -456,6 +458,9 @@
 Standardised opt out message can be removed if not legally required. Please see your local SPAM compliance rules on use.
 
 Opt-out reply STOP"></textarea>
+            <p style="font-size: 11px; color: #666; margin-top: 5px;">
+              <i>Characters: {{ messageLength }} | Segments: {{ messageSegments }}</i>
+            </p>
           </div>
         </div>
 
@@ -467,7 +472,10 @@ Opt-out reply STOP"></textarea>
               v-model="instance.tracked_link" 
               class="form-control" 
               rows="2" 
-              placeholder="Add [tracked-link] to your message and place your url here to use tracked link feature"></textarea>
+              placeholder="Enter URL here (e.g., https://example.com)"></textarea>
+            <p style="font-size: 11px; margin-top: 5px;" :style="{ color: trackedLinkStatus.color }">
+              <i>{{ trackedLinkStatus.message }}</i>
+            </p>
           </div>
         </div>
 
@@ -521,469 +529,500 @@ Opt-out reply STOP"></textarea>
     <script src="/eloqua-service/assets/js/axios.min.js"></script>
     <script src="https://unpkg.com/vue-select@3.0.0"></script>
 
-
     <script type="text/javascript">
-  var instance = <%-JSON.stringify(instance)%>;
-  var custom_objects = <%-JSON.stringify(custom_objects)%>;
-  var merge_fields_initial = <%-JSON.stringify(merge_fields)%>;
+      var instance = <%-JSON.stringify(instance)%>;
+      var custom_objects = <%-JSON.stringify(custom_objects)%>;
+      var merge_fields_initial = <%-JSON.stringify(merge_fields)%>;
+      var sender_ids_initial = <%-JSON.stringify(sender_ids)%>;
 
-  if(!instance.send_mode){
-    instance.send_mode = "all";
-  }
+      if(!instance.send_mode){
+        instance.send_mode = "all";
+      }
 
-  console.log('=== Initial Data ===');
-  console.log('Instance:', instance);
-  console.log('Custom objects:', custom_objects);
+      console.log('=== Initial Data ===');
+      console.log('Instance:', instance);
+      console.log('Merge fields:', merge_fields_initial);
 
-  Vue.component('v-select', VueSelect.VueSelect);
-  
-  var comap = JSON.parse(JSON.stringify(custom_objects.elements || []));
-  var comerge = JSON.parse(JSON.stringify(custom_objects.elements || []));
+      Vue.component('v-select', VueSelect.VueSelect);
+      
+      var comap = JSON.parse(JSON.stringify(custom_objects.elements || []));
+      var comerge = JSON.parse(JSON.stringify(custom_objects.elements || []));
 
-  var app = new Vue({
-    el: '#sendsmsaction',
-    data: {
-      instance: instance,
-      consumer: <%-JSON.stringify(consumer)%>,
-      status: {},
-      countries: <%-JSON.stringify(countries)%>,
-      custom_objects: custom_objects,
-      comap: comap,
-      comerge: comerge,
-      fields: [],
-      cdofields: [],
-      recipientfields: [],
-      countryfields: [],
-      fade: false,
-      saving: false,
-      loadingCustomObjects: false,
-      loadingFields: false,
-      loadingSenderIds: false,
-      loadingContactFields: false,
-      sender_ids: <%-JSON.stringify(sender_ids)%>,
-      selectedCustomObject: null,
-      previousCustomObjectId: null,
-      customObjectsCache: {},
-      fieldsCache: {},
-      showMerge: false,
-      contactFields: [
+      // Build contact fields for merge
+      var contactFieldsArray = [
+        {name: 'Choose field', value: ''},
         {name: 'Tracked Link', value: '[tracked-link]'},
         {name: 'Unsub Reply Link', value: '[unsub-reply-link]'}
-      ],
-      selectedContactField: '',
-      selectedMergeCDO: null,
-      selectedCDOField: '',
-      cdoMergeFields: []
-    },
-    methods: {
-      loadContactFields: function() {
-        var vm = this;
-        vm.loadingContactFields = true;
-        
-        console.log('Loading contact fields from Eloqua...');
-        
-        axios.get('/eloqua/action/ajax/contactfields/' + vm.consumer.installId + '/' + vm.consumer.SiteId)
-          .then(function(response) {
-            console.log('Contact fields response:', response.data);
-            
-            if (response.data.items && Array.isArray(response.data.items)) {
-              console.log('Processing', response.data.items.length, 'contact fields');
-              
-              // Reset contact fields
-              vm.contactFields = [
-                {name: 'Tracked Link', value: '[tracked-link]'},
-                {name: 'Unsub Reply Link', value: '[unsub-reply-link]'}
-              ];
-              
-              // Add contact fields
-              response.data.items.forEach(function(field) {
-                if (field && field.name && field.internalName) {
-                  vm.contactFields.push({
-                    name: field.name, 
-                    value: '[' + field.internalName + ']'
-                  });
-                }
-              });
-              
-              // Set fields for recipient and country dropdowns
-              vm.fields = response.data.items;
-              vm.recipientfields = response.data.items;
-              vm.countryfields = response.data.items;
-              
-              console.log('Contact fields loaded:', vm.contactFields.length, 'fields');
-            } else {
-              console.error('Invalid contact fields response structure');
-            }
-            
-            vm.loadingContactFields = false;
-          })
-          .catch(function(error) {
-            console.error('Error loading contact fields:', error);
-            vm.loadingContactFields = false;
-            
-            // Use empty fallback
-            vm.fields = [];
-            vm.recipientfields = [];
-            vm.countryfields = [];
-          });
-      },
+      ];
       
-      loadSenderIds: function() {
-        var vm = this;
-        vm.loadingSenderIds = true;
-        
-        console.log('Loading sender IDs...');
-        
-        axios.get('/eloqua/action/ajax/sender-ids/' + vm.consumer.installId + '/' + vm.consumer.SiteId)
-          .then(function(response) {
-            console.log('Sender IDs response:', response.data);
-            
-            if (response.data && response.data['Virtual Number']) {
-              vm.sender_ids = response.data;
-              console.log('Sender IDs loaded:', vm.sender_ids);
-            } else if (response.data.result && response.data.result.caller_ids) {
-              vm.sender_ids = response.data.result.caller_ids;
-              console.log('Sender IDs loaded from result:', vm.sender_ids);
-            }
-            
-            vm.loadingSenderIds = false;
-          })
-          .catch(function(error) {
-            console.error('Error loading sender IDs:', error);
-            vm.loadingSenderIds = false;
-          });
-      },
-      
-      insertMerge: function(value) {
-        if (!value) return;
-        
-        var textarea = this.$refs.messageTextarea;
-        if (!textarea) {
-          console.error('Message textarea not found');
-          return;
-        }
-        
-        var startPos = textarea.selectionStart || 0;
-        var endPos = textarea.selectionEnd || 0;
-        var currentText = this.instance.message || '';
-        
-        this.instance.message = currentText.substring(0, startPos) + value + currentText.substring(endPos);
-        
-        var vm = this;
-        this.$nextTick(function() {
-          textarea.focus();
-          var newPos = startPos + value.length;
-          textarea.setSelectionRange(newPos, newPos);
-        });
-        
-        // Reset selections
-        this.selectedContactField = '';
-        this.selectedCDOField = '';
-      },
-      
-      loadMergeCDOFields: function(cdo) {
-        if (!cdo) {
-          this.cdoMergeFields = [];
-          return;
-        }
-        
-        var vm = this;
-        console.log('Loading CDO fields for merge, CDO ID:', cdo.id);
-        
-        axios.get('/eloqua/action/ajax/customobject/' + this.consumer.installId + '/' + this.consumer.SiteId + '/' + cdo.id)
-          .then(function(response) {
-            console.log('CDO fields response:', response.data);
-            vm.cdoMergeFields = [];
-            
-            if (response.data.fields && Array.isArray(response.data.fields)) {
-              response.data.fields.forEach(function(field) {
-                if (field && field.name && field.id) {
-                  vm.cdoMergeFields.push({
-                    name: field.name,
-                    value: '{{CustomObject<' + cdo.id + '>.Field<' + field.id + '>}}'
-                  });
-                }
-              });
-            }
-            
-            console.log('CDO merge fields loaded:', vm.cdoMergeFields.length);
-          })
-          .catch(function(error) {
-            console.error('Error loading CDO fields:', error);
-            vm.cdoMergeFields = [];
-          });
-      },
-      
-      fetchOptionsmerge: function(search, loading) {
-        var vm = this;
-        
-        axios.get('/eloqua/action/ajax/customobjects/' + this.consumer.installId + '/' + this.consumer.SiteId + '/customObject?search=' + encodeURIComponent(search || ''))
-          .then(function(response) {
-            vm.comerge = response.data.elements || [];
-          })
-          .catch(function(error) {
-            vm.comerge = JSON.parse(JSON.stringify(custom_objects.elements || []));
-          });
-      },
-      
-      fetchOptionsmap: function(search, loading){
-        var vm = this;
-        
-        var cacheKey = search || 'all';
-        if (vm.customObjectsCache[cacheKey]) {
-          vm.comap = vm.customObjectsCache[cacheKey];
-          if (loading) loading(false);
-          vm.resolveSelectedObject();
-          return;
-        }
-        
-        if (loading) loading(true);
-        vm.loadingCustomObjects = true;
-
-        axios.get('/eloqua/action/ajax/customobjects/' + vm.consumer.installId + '/' + vm.consumer.SiteId + '/customObject?search=' + encodeURIComponent(search || ''))
-          .then(function(response){
-            vm.comap = response.data.elements || [];
-            vm.customObjectsCache[cacheKey] = vm.comap;
-            vm.resolveSelectedObject();
-            if (loading) loading(false);
-            vm.loadingCustomObjects = false;
-          })
-          .catch(function (error) {
-            console.error("Error loading custom objects:", error);
-            vm.comap = JSON.parse(JSON.stringify(custom_objects.elements || []));
-            if (loading) loading(false);
-            vm.loadingCustomObjects = false;
-          });
-      },
-      
-      resolveSelectedObject: function() {
-        var vm = this;
-        var customObjectId = vm.instance.custom_object_id;
-        
-        if (customObjectId && !vm.selectedCustomObject) {
-          var found = vm.comap.find(function(co) {
-            return co.id == customObjectId;
-          });
-          
-          if (found) {
-            vm.selectedCustomObject = found;
-          } else {
-            vm.fetchSingleCustomObject(customObjectId);
+      if (Array.isArray(merge_fields_initial)) {
+        merge_fields_initial.forEach(function(field){
+          if (field && field.name && field.internalName) {
+            contactFieldsArray.push({
+              name: field.name, 
+              value: '[C_' + field.internalName + ']'
+            });
           }
-        }
-      },
-      
-      fetchSingleCustomObject: function(customObjectId) {
-        var vm = this;
-        
-        axios.get('/eloqua/action/ajax/customobject/' + vm.consumer.installId + '/' + vm.consumer.SiteId + '/' + customObjectId)
-          .then(function(response) {
-            var customObject = {
-              id: response.data.id,
-              name: response.data.name
+        });
+      }
+
+      var app = new Vue({
+        el: '#sendsmsaction',
+        data: {
+          instance: instance,
+          consumer: <%-JSON.stringify(consumer)%>,
+          status: {},
+          countries: <%-JSON.stringify(countries)%>,
+          custom_objects: custom_objects,
+          comap: comap,
+          comerge: comerge,
+          fields: merge_fields_initial || [],
+          cdofields: [],
+          recipientfields: merge_fields_initial || [],
+          countryfields: merge_fields_initial || [],
+          fade: false,
+          saving: false,
+          loadingCustomObjects: false,
+          loadingFields: false,
+          loadingSenderIds: false,
+          sender_ids: sender_ids_initial || {'Virtual Number': [], 'Business Name': [], 'Mobile Number': []},
+          selectedCustomObject: null,
+          previousCustomObjectId: null,
+          customObjectsCache: {},
+          fieldsCache: {},
+          showMerge: false,
+          contactFields: contactFieldsArray,
+          selectedContactField: '',
+          selectedMergeCDO: null,
+          selectedCDOField: '',
+          cdoMergeFields: []
+        },
+        computed: {
+          messageLength: function() {
+            return (this.instance.message || '').length;
+          },
+          messageSegments: function() {
+            var len = this.messageLength;
+            if (len === 0) return 0;
+            if (len <= 160) return 1;
+            return Math.ceil(len / 153);
+          },
+          trackedLinkStatus: function() {
+            var url = this.instance.tracked_link;
+            if (!url || !url.trim()) {
+              return {
+                message: 'Enter a URL and [tracked-link] will be automatically added to your message.',
+                color: '#666'
+              };
+            }
+            
+            try {
+              var urlObj = new URL(url.trim());
+              if (urlObj.protocol === 'http:' || urlObj.protocol === 'https:') {
+                return {
+                  message: '✓ Valid URL - [tracked-link] placeholder added to message',
+                  color: '#3c763d'
+                };
+              }
+            } catch (e) {
+              // Invalid URL
+            }
+            
+            return {
+              message: '⚠ Invalid URL - Must start with http:// or https://',
+              color: '#a94442'
+            };
+          }
+        },
+        watch: {
+          'instance.tracked_link': function(newValue, oldValue) {
+            this.updateTrackedLinkInMessage(newValue);
+          }
+        },
+        methods: {
+          // Auto-append [tracked-link] when valid URL is entered
+          updateTrackedLinkInMessage: function(trackedLinkUrl) {
+            var vm = this;
+            var message = vm.instance.message || '';
+            var hasPlaceholder = message.includes('[tracked-link]');
+            
+            // Validate URL
+            var isValidUrl = false;
+            if (trackedLinkUrl && trackedLinkUrl.trim()) {
+              try {
+                var url = new URL(trackedLinkUrl.trim());
+                isValidUrl = url.protocol === 'http:' || url.protocol === 'https:';
+              } catch (e) {
+                isValidUrl = false;
+              }
+            }
+            
+            console.log('Tracked link changed:', {
+              url: trackedLinkUrl,
+              isValid: isValidUrl,
+              hasPlaceholder: hasPlaceholder
+            });
+            
+            if (isValidUrl && !hasPlaceholder) {
+              // Add [tracked-link] to message
+              if (message && message.trim()) {
+                vm.instance.message = message.trim() + '\n\n[tracked-link]';
+              } else {
+                vm.instance.message = '[tracked-link]';
+              }
+              console.log('[tracked-link] added to message');
+            } else if (!isValidUrl && hasPlaceholder) {
+              // Remove [tracked-link] from message
+              vm.instance.message = message.replace(/\n*\[tracked-link\]\n*/g, '').trim();
+              console.log('[tracked-link] removed from message');
+            }
+          },
+          
+          insertMerge: function(value) {
+            if (!value) return;
+            
+            var textarea = this.$refs.messageTextarea;
+            if (!textarea) {
+              console.error('Message textarea not found');
+              return;
+            }
+            
+            var startPos = textarea.selectionStart || 0;
+            var endPos = textarea.selectionEnd || 0;
+            var currentText = this.instance.message || '';
+            
+            this.instance.message = currentText.substring(0, startPos) + value + currentText.substring(endPos);
+            
+            var vm = this;
+            this.$nextTick(function() {
+              textarea.focus();
+              var newPos = startPos + value.length;
+              textarea.setSelectionRange(newPos, newPos);
+            });
+            
+            // Reset selections
+            this.selectedContactField = '';
+            this.selectedCDOField = '';
+          },
+          
+          loadMergeCDOFields: function(cdo) {
+            if (!cdo) {
+              this.cdoMergeFields = [];
+              return;
+            }
+            
+            var vm = this;
+            console.log('Loading CDO fields for merge:', cdo.id);
+            
+            axios.get('/eloqua/action/ajax/customobject/' + this.consumer.installId + '/' + this.consumer.SiteId + '/' + cdo.id)
+              .then(function(response) {
+                vm.cdoMergeFields = [];
+                
+                if (response.data.fields && Array.isArray(response.data.fields)) {
+                  response.data.fields.forEach(function(field) {
+                    if (field && field.name && field.id) {
+                      vm.cdoMergeFields.push({
+                        name: field.name,
+                        value: '{{CustomObject<' + cdo.id + '>.Field<' + field.id + '>}}'
+                      });
+                    }
+                  });
+                }
+                
+                console.log('CDO merge fields loaded:', vm.cdoMergeFields.length);
+              })
+              .catch(function(error) {
+                console.error('Error loading CDO fields:', error);
+                vm.cdoMergeFields = [];
+              });
+          },
+          
+          fetchOptionsmerge: function(search, loading) {
+            var vm = this;
+            
+            axios.get('/eloqua/action/ajax/customobjects/' + this.consumer.installId + '/' + this.consumer.SiteId + '/customObject?search=' + encodeURIComponent(search || ''))
+              .then(function(response) {
+                vm.comerge = response.data.elements || [];
+              })
+              .catch(function(error) {
+                vm.comerge = JSON.parse(JSON.stringify(custom_objects.elements || []));
+              });
+          },
+          
+          fetchOptionsmap: function(search, loading){
+            var vm = this;
+            
+            var cacheKey = search || 'all';
+            if (vm.customObjectsCache[cacheKey]) {
+              vm.comap = vm.customObjectsCache[cacheKey];
+              if (loading) loading(false);
+              vm.resolveSelectedObject();
+              return;
+            }
+            
+            if (loading) loading(true);
+            vm.loadingCustomObjects = true;
+
+            axios.get('/eloqua/action/ajax/customobjects/' + vm.consumer.installId + '/' + vm.consumer.SiteId + '/customObject?search=' + encodeURIComponent(search || ''))
+              .then(function(response){
+                vm.comap = response.data.elements || [];
+                vm.customObjectsCache[cacheKey] = vm.comap;
+                vm.resolveSelectedObject();
+                if (loading) loading(false);
+                vm.loadingCustomObjects = false;
+              })
+              .catch(function (error) {
+                console.error("Error loading custom objects:", error);
+                vm.comap = JSON.parse(JSON.stringify(custom_objects.elements || []));
+                if (loading) loading(false);
+                vm.loadingCustomObjects = false;
+              });
+          },
+          
+          resolveSelectedObject: function() {
+            var vm = this;
+            var customObjectId = vm.instance.custom_object_id;
+            
+            if (customObjectId && !vm.selectedCustomObject) {
+              var found = vm.comap.find(function(co) {
+                return co.id == customObjectId;
+              });
+              
+              if (found) {
+                vm.selectedCustomObject = found;
+              } else {
+                vm.fetchSingleCustomObject(customObjectId);
+              }
+            }
+          },
+          
+          fetchSingleCustomObject: function(customObjectId) {
+            var vm = this;
+            
+            axios.get('/eloqua/action/ajax/customobject/' + vm.consumer.installId + '/' + vm.consumer.SiteId + '/' + customObjectId)
+              .then(function(response) {
+                var customObject = {
+                  id: response.data.id,
+                  name: response.data.name
+                };
+                
+                vm.selectedCustomObject = customObject;
+                
+                var exists = vm.comap.find(function(co) {
+                  return co.id == customObject.id;
+                });
+                
+                if (!exists) {
+                  vm.comap.push(customObject);
+                }
+              })
+              .catch(function(error) {
+                console.error('Error fetching single custom object:', error);
+              });
+          },
+          
+          onCustomObjectChange: function(selectedObject) {
+            var vm = this;
+            var customObjectId = selectedObject ? selectedObject.id : null;
+            var previousId = vm.previousCustomObjectId;
+            
+            vm.$set(vm.instance, 'custom_object_id', customObjectId);
+            vm.selectedCustomObject = selectedObject;
+            
+            if (!customObjectId) {
+              vm.clearFieldMappings();
+              vm.cdofields = [];
+              vm.previousCustomObjectId = null;
+              return;
+            }
+            
+            if (customObjectId !== previousId) {
+              vm.clearFieldMappings();
+              vm.cdofields = [];
+              vm.previousCustomObjectId = customObjectId;
+            }
+            
+            vm.getFields();
+          },
+          
+          clearFieldMappings: function() {
+            this.$set(this.instance, 'mobile_field', null);
+            this.$set(this.instance, 'email_field', null);
+            this.$set(this.instance, 'title_field', null);
+            this.$set(this.instance, 'notification_field', null);
+            this.$set(this.instance, 'outgoing_field', null);
+            this.$set(this.instance, 'vn_field', null);
+          },
+          
+          getFields: function(){
+            var vm = this;
+            var customObjectId = vm.instance.custom_object_id;
+            
+            if(!customObjectId){
+              vm.cdofields = [];
+              return;
+            }
+            
+            if (vm.fieldsCache[customObjectId]) {
+              vm.cdofields = vm.fieldsCache[customObjectId];
+              return;
+            }
+            
+            vm.loadingFields = true;
+            
+            axios.get('/eloqua/action/ajax/customobject/' + vm.consumer.installId + '/' + vm.consumer.SiteId + '/' + customObjectId)
+              .then(function(response){
+                vm.cdofields = response.data.fields || [];
+                vm.fieldsCache[customObjectId] = vm.cdofields;
+                vm.loadingFields = false;
+              })
+              .catch(function (error) {
+                console.error("Error fetching fields:", error);
+                vm.cdofields = [];
+                vm.loadingFields = false;
+              });
+          },
+          
+          getProgramFields: function(){
+            var vm = this;
+            if(this.instance.program_coid){
+              axios.get('/eloqua/action/ajax/customobject/' + this.consumer.installId + '/' + this.consumer.SiteId + '/' + this.instance.program_coid)
+                .then(function(response){
+                  if(vm.instance.country_setting == "cf"){
+                    vm.countryfields = response.data.fields;
+                  }
+                  else{
+                    vm.countryfields = vm.recipientfields;
+                  }
+                  vm.fields = response.data.fields;
+                })
+                .catch(function (error) {
+                  console.error("Error:", error);
+                });
+            }
+            else{
+              vm.countryfields = vm.fields;
+            }
+          },
+          
+          testSMS: function(){
+            var vm = this;
+            var testmessage = vm.instance.message || '';
+            
+            if (!testmessage.trim()) {
+              alert('Please enter a message');
+              return;
+            }
+            
+            if (!vm.instance.test_phone || !vm.instance.test_phone.trim()) {
+              alert('Please enter a phone number');
+              return;
+            }
+            
+            // Process merge fields for test
+            var templated_fields = testmessage.match(/\[C_[^\]]+\]/g);
+            if (templated_fields) {
+              templated_fields.forEach(function (field) {
+                if(field.indexOf('tracked-link') == -1 && field.indexOf('unsub-reply-link') == -1){
+                  var fieldName = field.replace('[C_', '').replace(']', '');
+                  var nfield = field.replace(/[-\/\\^$*+?.()|[\]{}]/g, '\\$&');
+                  var msgrgex = new RegExp(nfield, "g");
+                  testmessage = testmessage.replace(msgrgex, fieldName);
+                }
+              });
+            }
+            
+            console.log('Sending test SMS:', {
+              message: testmessage,
+              messageLength: testmessage.length,
+              hasTrackedLink: !!vm.instance.tracked_link,
+              phone: vm.instance.test_phone
+            });
+            
+            var data = {
+              "message": testmessage,
+              "caller_id": vm.instance.caller_id || ''
             };
             
-            vm.selectedCustomObject = customObject;
-            
-            var exists = vm.comap.find(function(co) {
-              return co.id == customObject.id;
-            });
-            
-            if (!exists) {
-              vm.comap.push(customObject);
+            if(vm.instance.tracked_link && vm.instance.tracked_link.trim()){
+              data.tracked_link_url = vm.instance.tracked_link.trim();
             }
-          })
-          .catch(function(error) {
-            console.error('Error fetching single custom object:', error);
-          });
-      },
-      
-      onCustomObjectChange: function(selectedObject) {
-        var vm = this;
-        var customObjectId = selectedObject ? selectedObject.id : null;
-        var previousId = vm.previousCustomObjectId;
-        
-        vm.$set(vm.instance, 'custom_object_id', customObjectId);
-        vm.selectedCustomObject = selectedObject;
-        
-        if (!customObjectId) {
-          vm.clearFieldMappings();
-          vm.cdofields = [];
-          vm.previousCustomObjectId = null;
-          return;
-        }
-        
-        if (customObjectId !== previousId) {
-          vm.clearFieldMappings();
-          vm.cdofields = [];
-          vm.previousCustomObjectId = customObjectId;
-        }
-        
-        vm.getFields();
-      },
-      
-      clearFieldMappings: function() {
-        this.$set(this.instance, 'mobile_field', null);
-        this.$set(this.instance, 'email_field', null);
-        this.$set(this.instance, 'title_field', null);
-        this.$set(this.instance, 'notification_field', null);
-        this.$set(this.instance, 'outgoing_field', null);
-        this.$set(this.instance, 'vn_field', null);
-      },
-      
-      getFields: function(){
-        var vm = this;
-        var customObjectId = vm.instance.custom_object_id;
-        
-        if(!customObjectId){
-          vm.cdofields = [];
-          return;
-        }
-        
-        if (vm.fieldsCache[customObjectId]) {
-          vm.cdofields = vm.fieldsCache[customObjectId];
-          return;
-        }
-        
-        vm.loadingFields = true;
-        
-        axios.get('/eloqua/action/ajax/customobject/' + vm.consumer.installId + '/' + vm.consumer.SiteId + '/' + customObjectId)
-          .then(function(response){
-            vm.cdofields = response.data.fields || [];
-            vm.fieldsCache[customObjectId] = vm.cdofields;
-            vm.loadingFields = false;
-          })
-          .catch(function (error) {
-            console.error("Error fetching fields:", error);
-            vm.cdofields = [];
-            vm.loadingFields = false;
-          });
-      },
-      
-      getProgramFields: function(){
-        var vm = this;
-        if(this.instance.program_coid){
-          axios.get('/eloqua/action/ajax/customobject/' + this.consumer.installId + '/' + this.consumer.SiteId + '/' + this.instance.program_coid)
-            .then(function(response){
-              if(vm.instance.country_setting == "cf"){
-                vm.countryfields = response.data.fields;
-              }
-              else{
-                vm.countryfields = vm.recipientfields;
-              }
-              vm.fields = response.data.fields;
-            })
-            .catch(function (error) {
-              console.error("Error:", error);
-            });
-        }
-        else{
-          vm.countryfields = vm.fields;
-        }
-      },
-      
-      testSMS: function(){
-        var testmessage = this.instance.message || '';
-        var templated_fields = testmessage.match(/[^[\]]+(?=])/g);
-        if (templated_fields) {
-          templated_fields.forEach(function (field) {
-            if(field.indexOf("tracked-link") == -1 && field.indexOf("unsub-reply-link") == -1){
-              var nfield = "\\[" + field + "\\]";
-              var msgrgex = new RegExp(nfield, "g");
-              testmessage = testmessage.replace(msgrgex, field.replace("C_", "").replace(/^[A-Z]_/, ""));
-            }
-          });
-        }
-        
-        var data = {
-          "message": testmessage,
-          "caller_id": this.instance.caller_id
-        };
-        
-        if(this.instance.tracked_link){
-          data.tracked_link_url = this.instance.tracked_link;
-        }
-        
-        axios.post('/eloqua/action/ajax/testsms/' + this.consumer.installId + '/' + this.consumer.SiteId + '/' + this.consumer.default_country + '/' + this.instance.test_phone, data)
-          .then(function(response){
-            alert("Message sent successfully!");
-          })
-          .catch(function (error) {
-            var errorMsg = error.response?.data?.description || error.message || 'Failed to send test SMS';
-            alert(errorMsg);
-          });
-      },
-      
-      saveInstance: function(){
-        var vm = this;
-
-        if(!vm.instance.custom_object_id){
-          vm.instance.email_field = null;
-          vm.instance.mobile_field = null;
-          vm.instance.title_field = null;
-          vm.instance.notification_field = null;
-          vm.instance.outgoing_field = null;
-          vm.instance.vn_field = null;
-        }
-
-        if(vm.instance.message){
-          vm.saving = true;
+            
+            axios.post('/eloqua/action/ajax/testsms/' + vm.consumer.installId + '/' + vm.consumer.SiteId + '/' + vm.consumer.default_country + '/' + encodeURIComponent(vm.instance.test_phone), data)
+              .then(function(response){
+                console.log('Test SMS sent:', response.data);
+                alert("Message sent successfully!");
+              })
+              .catch(function (error) {
+                console.error('Test SMS error:', error.response?.data);
+                var errorMsg = error.response?.data?.description || error.response?.data?.error || error.message || 'Failed to send test SMS';
+                alert('Error: ' + errorMsg);
+              });
+          },
           
-          axios.post(location.pathname + location.search, {"instance": vm.instance})
-            .then(function(response){
-              vm.saving = false;
+          saveInstance: function(){
+            var vm = this;
+
+            if(!vm.instance.custom_object_id){
+              vm.instance.email_field = null;
+              vm.instance.mobile_field = null;
+              vm.instance.title_field = null;
+              vm.instance.notification_field = null;
+              vm.instance.outgoing_field = null;
+              vm.instance.vn_field = null;
+            }
+
+            if(vm.instance.message){
+              vm.saving = true;
+              
+              axios.post(location.pathname + location.search, {"instance": vm.instance})
+                .then(function(response){
+                  vm.saving = false;
+                  vm.fade = true;
+                  vm.status = { success: 'Configuration successfully updated' };
+                  setTimeout(function() {
+                    vm.fade = false;
+                    vm.status = {};
+                  }, 3000);
+                })
+                .catch(function (error) {
+                  vm.saving = false;
+                  vm.fade = true;
+                  vm.status = { error: error.response?.data?.message || 'Failed to update instance!' };
+                  setTimeout(function() {
+                    vm.fade = false;
+                    vm.status = {};
+                  }, 3000);
+                });
+            }
+            else{
+              vm.status = { error: 'Message is required' };
               vm.fade = true;
-              vm.status = { success: 'Configuration successfully updated' };
               setTimeout(function() {
                 vm.fade = false;
                 vm.status = {};
               }, 3000);
-            })
-            .catch(function (error) {
-              vm.saving = false;
-              vm.fade = true;
-              vm.status = { error: error.response?.data?.message || 'Failed to update instance!' };
-              setTimeout(function() {
-                vm.fade = false;
-                vm.status = {};
-              }, 3000);
-            });
+            }
+          }
+        },
+        mounted: function () {
+          var vm = this;
+          console.log('=== Action Config Mounted ===');
+          console.log('Consumer:', vm.consumer);
+          console.log('Instance:', vm.instance);
+          console.log('Contact Fields:', vm.contactFields.length);
+          
+          vm.previousCustomObjectId = vm.instance.custom_object_id || null;
+          
+          vm.fetchOptionsmap('', null);
+          
+          if (vm.instance.custom_object_id) {
+            vm.getFields();
+          }
+          
+          vm.getProgramFields();
         }
-        else{
-          vm.status = { error: 'Message is required' };
-          vm.fade = true;
-          setTimeout(function() {
-            vm.fade = false;
-            vm.status = {};
-          }, 3000);
-        }
-      }
-    },
-    mounted: function () {
-      var vm = this;
-      console.log('=== Action Config Mounted ===');
-      console.log('Consumer:', vm.consumer);
-      console.log('Instance:', vm.instance);
-      
-      vm.previousCustomObjectId = vm.instance.custom_object_id || null;
-      
-      // Load contact fields from Eloqua
-      vm.loadContactFields();
-      
-      // Load sender IDs
-      vm.loadSenderIds();
-      
-      // Load custom objects
-      vm.fetchOptionsmap('', null);
-      
-      // Load CDO fields if already selected
-      if (vm.instance.custom_object_id) {
-        vm.getFields();
-      }
-      
-      vm.getProgramFields();
-    }
-  });
-</script>
+      });
+    </script>
   </body>
 </html>

@@ -22,7 +22,8 @@ class ActionController {
 
         logger.info('Fetching sender IDs', { installId, siteId });
 
-        const consumer = await Consumer.findOne({ installId });
+        const consumer = await Consumer.findOne({ installId })
+            .select('+transmitsms_api_key +transmitsms_api_secret');
         
         if (!consumer) {
             return res.status(404).json({ error: 'Consumer not found' });
@@ -85,6 +86,7 @@ class ActionController {
             });
         }
     });
+
     /**
      * Create action instance
      * GET /eloqua/action/create
@@ -158,15 +160,17 @@ class ActionController {
             'Mobile Number': []
         };
 
-        try {
-            const transmitSmsService = new TransmitSmsService(
-                consumer.transmitsms_api_key,
-                consumer.transmitsms_api_secret
-            );
-            
-            sender_ids = await transmitSmsService.getSenderIds();
-        } catch (error) {
-            logger.warn('Could not fetch sender IDs', { error: error.message });
+        if (consumer.transmitsms_api_key && consumer.transmitsms_api_secret) {
+            try {
+                const transmitSmsService = new TransmitSmsService(
+                    consumer.transmitsms_api_key,
+                    consumer.transmitsms_api_secret
+                );
+                
+                sender_ids = await transmitSmsService.getSenderIds();
+            } catch (error) {
+                logger.warn('Could not fetch sender IDs', { error: error.message });
+            }
         }
 
         // Get custom objects
@@ -178,13 +182,23 @@ class ActionController {
             logger.warn('Could not fetch custom objects', { error: error.message });
         }
 
+        // Get contact fields for merge
+        let merge_fields = [];
+        try {
+            const eloquaService = new EloquaService(installId, siteId);
+            const contactFieldsResponse = await eloquaService.getContactFields(200);
+            merge_fields = contactFieldsResponse.elements || [];
+        } catch (error) {
+            logger.warn('Could not fetch contact fields', { error: error.message });
+        }
+
         res.render('action-config', {
             consumer: consumer.toObject(),
             instance,
             custom_objects,
             countries,
             sender_ids,
-            merge_fields: [] // Will be loaded via AJAX
+            merge_fields
         });
     });
 
@@ -237,7 +251,9 @@ class ActionController {
             return res.status(404).json({ error: 'Instance not found' });
         }
 
-        const consumer = await Consumer.findOne({ installId: instance.installId });
+        const consumer = await Consumer.findOne({ installId: instance.installId })
+            .select('+transmitsms_api_key +transmitsms_api_secret');
+        
         if (!consumer) {
             return res.status(404).json({ error: 'Consumer not found' });
         }
@@ -306,11 +322,38 @@ class ActionController {
                 // Format phone number
                 const formattedNumber = formatPhoneNumber(
                     mobileNumber, 
-                    consumer.default_country
+                    consumer.default_country || 'Australia'
                 );
 
                 // Process message with merge fields
                 let message = replaceMergeFields(instance.message, record);
+
+                // Handle tracked link
+                let trackedLinkData = null;
+                if (instance.tracked_link && message.includes('[tracked-link]')) {
+                    try {
+                        const linkResponse = await smsService.addTrackedLink(
+                            instance.tracked_link,
+                            instance.assetName || 'SMS Campaign'
+                        );
+                        
+                        if (linkResponse && linkResponse.short_url) {
+                            message = message.replace(/\[tracked-link\]/g, linkResponse.short_url);
+                            trackedLinkData = {
+                                shortUrl: linkResponse.short_url,
+                                originalUrl: instance.tracked_link
+                            };
+                        } else {
+                            message = message.replace(/\[tracked-link\]/g, '');
+                        }
+                    } catch (error) {
+                        logger.error('Error creating tracked link', { error: error.message });
+                        message = message.replace(/\[tracked-link\]/g, '');
+                    }
+                }
+
+                // Clean up message
+                message = message.replace(/\n\n+/g, '\n\n').trim();
 
                 // Send SMS
                 const smsOptions = {
@@ -319,7 +362,7 @@ class ActionController {
                 };
 
                 if (instance.message_expiry === 'YES') {
-                    smsOptions.validity = instance.message_validity;
+                    smsOptions.validity = parseInt(instance.message_validity) * 60;
                 }
 
                 const smsResponse = await smsService.sendSms(
@@ -535,16 +578,40 @@ class ActionController {
     });
 
     /**
-     * Test SMS
+     * Test SMS - FIXED VERSION
      * POST /eloqua/action/ajax/testsms/:installId/:siteId/:country/:phone
      */
     static testSms = asyncHandler(async (req, res) => {
         const { installId, siteId, country, phone } = req.params;
         const { message, caller_id, tracked_link_url } = req.body;
 
-        logger.info('Testing SMS', { installId, phone });
+        logger.info('Test SMS request', { 
+            installId, 
+            country, 
+            phone,
+            hasMessage: !!message,
+            messageLength: message?.length || 0,
+            hasTrackedLink: !!tracked_link_url
+        });
 
-        const consumer = await Consumer.findOne({ installId });
+        // Validate inputs
+        if (!message || !message.trim()) {
+            return res.status(400).json({ 
+                error: 'Message is required',
+                description: 'Message field cannot be empty' 
+            });
+        }
+
+        if (!phone || !phone.trim()) {
+            return res.status(400).json({ 
+                error: 'Phone number is required',
+                description: 'Phone number field cannot be empty' 
+            });
+        }
+
+        const consumer = await Consumer.findOne({ installId })
+            .select('+transmitsms_api_key +transmitsms_api_secret');
+
         if (!consumer) {
             return res.status(404).json({ 
                 error: 'Consumer not found',
@@ -555,32 +622,109 @@ class ActionController {
         if (!consumer.transmitsms_api_key || !consumer.transmitsms_api_secret) {
             return res.status(400).json({ 
                 error: 'Not configured',
-                description: 'TransmitSMS API not configured' 
+                description: 'TransmitSMS API credentials not configured. Please configure them first.' 
             });
         }
 
-        const smsService = new TransmitSmsService(
-            consumer.transmitsms_api_key,
-            consumer.transmitsms_api_secret
-        );
+        try {
+            const smsService = new TransmitSmsService(
+                consumer.transmitsms_api_key,
+                consumer.transmitsms_api_secret
+            );
 
-        const formattedNumber = formatPhoneNumber(phone, country);
+            // Format phone number
+            const formattedNumber = formatPhoneNumber(phone, country);
+            
+            logger.info('Formatted phone number for test', { 
+                original: phone, 
+                formatted: formattedNumber,
+                country 
+            });
 
-        let finalMessage = message;
+            let finalMessage = message;
 
-        const response = await smsService.sendSms(
-            formattedNumber,
-            finalMessage,
-            { from: caller_id || undefined }
-        );
+            // Handle tracked link
+            if (tracked_link_url && tracked_link_url.trim()) {
+                try {
+                    logger.info('Adding tracked link for test SMS', { url: tracked_link_url });
+                    
+                    const linkResponse = await smsService.addTrackedLink(
+                        tracked_link_url,
+                        'Test SMS Link'
+                    );
+                    
+                    if (linkResponse && linkResponse.short_url) {
+                        finalMessage = finalMessage.replace(/\[tracked-link\]/g, linkResponse.short_url);
+                        
+                        logger.info('Tracked link created for test', { 
+                            shortUrl: linkResponse.short_url,
+                            originalUrl: tracked_link_url
+                        });
+                    } else {
+                        logger.warn('No short URL returned from TransmitSMS');
+                        finalMessage = finalMessage.replace(/\[tracked-link\]/g, '');
+                    }
+                } catch (error) {
+                    logger.error('Error creating tracked link for test', { 
+                        error: error.message,
+                        url: tracked_link_url 
+                    });
+                    finalMessage = finalMessage.replace(/\[tracked-link\]/g, '');
+                }
+            } else {
+                finalMessage = finalMessage.replace(/\[tracked-link\]/g, '');
+            }
 
-        logger.sms('test_sent', { to: formattedNumber });
+            // Clean up message
+            finalMessage = finalMessage.replace(/\n\n+/g, '\n\n').trim();
 
-        res.json({
-            success: true,
-            message: 'Test SMS sent successfully',
-            response
-        });
+            if (!finalMessage) {
+                return res.status(400).json({ 
+                    error: 'Message is empty after processing',
+                    description: 'Message cannot be empty' 
+                });
+            }
+
+            logger.info('Sending test SMS', { 
+                to: formattedNumber,
+                messageLength: finalMessage.length,
+                from: caller_id || 'default'
+            });
+
+            // Send SMS
+            const response = await smsService.sendSms(
+                formattedNumber,
+                finalMessage,
+                { from: caller_id || undefined }
+            );
+
+            logger.sms('test_sent', { 
+                to: formattedNumber,
+                messageId: response.message_id
+            });
+
+            res.json({
+                success: true,
+                message: 'Test SMS sent successfully',
+                messageId: response.message_id,
+                to: formattedNumber,
+                messageLength: finalMessage.length,
+                response
+            });
+
+        } catch (error) {
+            logger.error('Error sending test SMS', {
+                error: error.message,
+                stack: error.stack,
+                phone,
+                country
+            });
+
+            res.status(500).json({
+                error: 'Failed to send test SMS',
+                description: error.message
+            });
+        }
     });
 
     /**
@@ -598,7 +742,6 @@ class ActionController {
             count 
         });
 
-        // Use auth from session middleware
         const eloquaService = new EloquaService(installId, siteId);
         
         try {
@@ -675,7 +818,7 @@ class ActionController {
             const contactFields = await eloquaService.getContactFields(1000);
 
             logger.debug('Contact fields fetched', { 
-                count: contactFields.items?.length || 0 
+                count: contactFields.elements?.length || 0 
             });
 
             res.json(contactFields);
@@ -688,7 +831,7 @@ class ActionController {
             res.status(500).json({
                 error: 'Failed to fetch contact fields',
                 message: error.message,
-                items: []
+                elements: []
             });
         }
     });
