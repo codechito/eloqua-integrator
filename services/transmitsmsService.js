@@ -70,8 +70,8 @@ class TransmitSmsService {
 
             return response.data;
         } catch (error) {
-            const errorMessage = error.response?.data?.error?.description || error.message;
-            const statusCode = error.response?.status;
+            const errorMessage = JSON.stringify(error.response?.data?.error?.description || error.message);
+            const statusCode = JSON.stringify(error.response?.status);
 
             logger.error(`TransmitSMS API Error: ${method} ${endpoint}`, {
                 status: statusCode,
