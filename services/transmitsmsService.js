@@ -241,7 +241,7 @@ class TransmitSmsService {
         try {
             logger.debug('Fetching sender IDs from TransmitSMS');
 
-            const response = await this.makeRequest('GET', '/get-numbers.json');
+            const response = await this.makeRequest('GET', '/get-sender-ids.json');
 
             const senderIds = {
                 'Virtual Number': [],
