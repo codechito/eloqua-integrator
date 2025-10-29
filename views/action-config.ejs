@@ -1018,12 +1018,13 @@ Opt-out reply STOP"></textarea>
                   }
                 };
                 
-                vm.testingSms = false;
+                
                 
                 // Auto-hide after 10 seconds
                 setTimeout(function() {
                   if (vm.testSmsStatus.success) {
-                    //vm.testSmsStatus = {};
+                    vm.testSmsStatus = {};
+                    vm.testingSms = false;
                   }
                 }, 10000);
               })
@@ -1035,7 +1036,12 @@ Opt-out reply STOP"></textarea>
                   description: error.response?.data?.description || error.message
                 };
                 
-                vm.testingSms = false;
+                setTimeout(function() {
+                  if (vm.testSmsStatus.success) {
+                    vm.testSmsStatus = {};
+                    vm.testingSms = false;
+                  }
+                }, 10000);
               });
           },
           
