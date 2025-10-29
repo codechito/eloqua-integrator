@@ -34,7 +34,7 @@ const {
 const { logger } = require('./utils');
 
 // Import SMS Worker
-const ScheduledSmsWorker = require('./workers/scheduledWorker');
+const SmsWorker = require('./workers/smsWorker');
 
 // Initialize Express app
 const app = express();
@@ -244,7 +244,7 @@ async function initializeWorker() {
         logger.info('Initializing SMS Worker...');
         
         // Create worker instance
-        smsWorker = new ScheduledSmsWorker();
+        smsWorker = new SmsWorker();
         
         // Store globally for health checks
         global.smsWorker = smsWorker;
