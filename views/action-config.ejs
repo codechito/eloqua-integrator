@@ -768,6 +768,7 @@ Opt-out reply STOP"></textarea>
               vm.status = {};
               vm.fade = false;
               vm.statusFading = false;
+              vm.testingSms = false;
             }, 300);
           },
           
@@ -1080,29 +1081,24 @@ Opt-out reply STOP"></textarea>
               
               axios.post(location.pathname + location.search, {"instance": vm.instance})
                 .then(function(response){
-                  vm.saving = false;
-                  vm.fade = true;
                   vm.status = { success: 'Configuration successfully updated' };
                   
-                  window.scrollTo({ top: 0, behavior: 'smooth' });
+                  window.scrollTo({ bottom: 0, behavior: 'smooth' });
                   
                   
                 })
                 .catch(function (error) {
-                  vm.saving = false;
-                  vm.fade = true;
                   vm.status = { error: error.response?.data?.message || 'Failed to update instance!' };
                   
-                  window.scrollTo({ top: 0, behavior: 'smooth' });
+                  window.scrollTo({ bottom: 0, behavior: 'smooth' });
                   
                  
                 });
             }
             else{
               vm.status = { error: 'Message is required' };
-              vm.fade = true;
               
-              window.scrollTo({ top: 0, behavior: 'smooth' });
+              window.scrollTo({ bottom: 0, behavior: 'smooth' });
               
               
             }
