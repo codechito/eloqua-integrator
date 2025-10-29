@@ -1086,14 +1086,7 @@ Opt-out reply STOP"></textarea>
                   
                   window.scrollTo({ top: 0, behavior: 'smooth' });
                   
-                  setTimeout(function() {
-                    vm.statusFading = true;
-                    setTimeout(function() {
-                      vm.fade = false;
-                      vm.status = {};
-                      vm.statusFading = false;
-                    }, 300);
-                  }, 5000);
+                  
                 })
                 .catch(function (error) {
                   vm.saving = false;
@@ -1102,14 +1095,7 @@ Opt-out reply STOP"></textarea>
                   
                   window.scrollTo({ top: 0, behavior: 'smooth' });
                   
-                  setTimeout(function() {
-                    vm.statusFading = true;
-                    setTimeout(function() {
-                      vm.fade = false;
-                      vm.status = {};
-                      vm.statusFading = false;
-                    }, 300);
-                  }, 5000);
+                 
                 });
             }
             else{
@@ -1118,14 +1104,7 @@ Opt-out reply STOP"></textarea>
               
               window.scrollTo({ top: 0, behavior: 'smooth' });
               
-              setTimeout(function() {
-                vm.statusFading = true;
-                setTimeout(function() {
-                  vm.fade = false;
-                  vm.status = {};
-                  vm.statusFading = false;
-                }, 300);
-              }, 5000);
+              
             }
           }
         },
