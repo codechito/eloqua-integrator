@@ -248,7 +248,7 @@
     <div id="sendsmsaction" class="container" style="width: 600px; padding: 20px;">
       <form method="post">
         <h4 style="font-size: 20px; font-weight: bold; text-align: center; margin-bottom: 20px;">
-          <img src="/eloqua-service/assets/send-sms-el-icon.png" onerror="this.style.display='none'" style="vertical-align: middle;">&nbsp;Create your Text Message
+          <img src="/eloqua-service/assets/images/send-sms-el-icon.png" onerror="this.style.display='none'" style="vertical-align: middle;">&nbsp;Create your Text Message
         </h4>
         
         <div v-if="status.success || status.error" v-bind:class="{ 'alert-success': status.success, 'alert-danger': status.error, 'in': fade }" class="alert fade" role="alert">
@@ -256,37 +256,6 @@
         </div>
 
         <!-- Row 1: Custom Object (LEFT) | Recipient Field (RIGHT) -->
-        <div class="two-column-row">
-          <div class="column-left">
-            <div class="form-group">
-              <label>Custom Object Mapping</label>
-              <v-select
-                :key="'co-action'"
-                label="name"
-                v-model="selectedCustomObject"
-                :options="comap"
-                @search="fetchOptionsmap"
-                @input="onCustomObjectChange"
-                placeholder="Select Custom Object">
-                <template #no-options>
-                  <span v-if="loadingCustomObjects">Loading...</span>
-                  <span v-else>Type to search</span>
-                </template>
-              </v-select>
-            </div>
-          </div>
-          <div class="column-right">
-            <div class="form-group">
-              <label>Recipient Field</label>
-              <select v-model="instance.recipient_field" class="form-control">
-                <option value="">-- Select Field --</option>
-                <option v-for="field in fields" v-bind:value="field.id ? field.id + '__' + field.internalName : field.internalName" :key="field.internalName">{{ field.name }}</option>
-              </select>
-            </div>
-          </div>
-        </div>
-
-        <!-- Row 2: Sender ID (LEFT) | Country Field (RIGHT) -->
         <div class="two-column-row">
           <div class="column-left">
             <div class="form-group">
@@ -307,6 +276,40 @@
                 </optgroup>
               </select>
             </div>
+
+            
+          </div>
+          <div class="column-right">
+            <div class="form-group">
+              <label>Recipient Field</label>
+              <select v-model="instance.recipient_field" class="form-control">
+                <option value="">-- Select Field --</option>
+                <option v-for="field in fields" v-bind:value="field.id ? field.id + '__' + field.internalName : field.internalName" :key="field.internalName">{{ field.name }}</option>
+              </select>
+            </div>
+          </div>
+        </div>
+
+        <!-- Row 2: Sender ID (LEFT) | Country Field (RIGHT) -->
+        <div class="two-column-row">
+          <div class="column-left">
+            <div class="form-group">
+              <label>Custom Object Mapping</label>
+              <v-select
+                :key="'co-action'"
+                label="name"
+                v-model="selectedCustomObject"
+                :options="comap"
+                @search="fetchOptionsmap"
+                @input="onCustomObjectChange"
+                placeholder="Select Custom Object">
+                <template #no-options>
+                  <span v-if="loadingCustomObjects">Loading...</span>
+                  <span v-else>Type to search</span>
+                </template>
+              </v-select>
+            </div>
+            
           </div>
           <div class="column-right">
             <div class="form-group">
