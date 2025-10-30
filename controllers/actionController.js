@@ -245,8 +245,10 @@ class ActionController {
 
         logger.info('Action notify received', { 
             instanceId, 
-            recordCount: executionData.records?.length || 0 
+            recordCount: executionData.items?.length || 0 
         });
+
+        logger.info('Action notify content', executionData);
 
         const instance = await ActionInstance.findOne({ instanceId });
         if (!instance) {
@@ -291,7 +293,7 @@ class ActionController {
      */
     static async queueSmsJobs(instance, consumer, executionData) {
         const results = [];
-        const records = executionData.records || [];
+        const records = executionData.items || [];
 
         const baseUrl = process.env.APP_BASE_URL || 'https://eloqua-integrator.onrender.com';
 
