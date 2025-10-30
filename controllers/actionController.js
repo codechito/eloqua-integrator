@@ -293,11 +293,26 @@ class ActionController {
      * Update Eloqua instance with recordDefinition
      */
     static async updateEloquaInstance(instance) {
+        let eloquaService;
+        
         try {
-            const eloquaService = new EloquaService(instance.installId, instance.SiteId);
+            logger.info('Creating Eloqua service for instance update', {
+                instanceId: instance.instanceId,
+                installId: instance.installId,
+                SiteId: instance.SiteId
+            });
+
+            eloquaService = new EloquaService(instance.installId, instance.SiteId);
+            
+            // Explicitly initialize the service
+            await eloquaService.initialize();
+
+            logger.info('Eloqua service initialized, building recordDefinition', {
+                instanceId: instance.instanceId
+            });
 
             // Build recordDefinition based on configuration
-            const recordDefinition = await ActionController.buildRecordDefinition(instance);
+            const recordDefinition = await ActionController.buildRecordDefinition(instance, eloquaService);
 
             // Prepare update payload
             const updatePayload = {
@@ -305,7 +320,7 @@ class ActionController {
                 requiresConfiguration: instance.requiresConfiguration
             };
 
-            logger.info('Updating Eloqua instance', {
+            logger.info('Updating Eloqua instance with payload', {
                 instanceId: instance.instanceId,
                 recordDefinition,
                 requiresConfiguration: instance.requiresConfiguration
@@ -314,7 +329,7 @@ class ActionController {
             // Call Eloqua API to update instance
             await eloquaService.updateActionInstance(instance.instanceId, updatePayload);
 
-            logger.info('Eloqua instance updated', {
+            logger.info('Eloqua instance updated successfully', {
                 instanceId: instance.instanceId
             });
 
@@ -322,7 +337,9 @@ class ActionController {
             logger.error('Error updating Eloqua instance', {
                 instanceId: instance.instanceId,
                 error: error.message,
-                stack: error.stack
+                stack: error.stack,
+                installId: instance.installId,
+                siteId: instance.SiteId
             });
             throw error;
         }
@@ -331,7 +348,7 @@ class ActionController {
     /**
      * Build recordDefinition object for Eloqua
      */
-    static async buildRecordDefinition(instance) {
+    static async buildRecordDefinition(instance, eloquaService = null) {
         const recordDefinition = {};
 
         // Always include contact basic fields
@@ -340,41 +357,50 @@ class ActionController {
 
         // Add custom object fields if configured
         if (instance.custom_object_id) {
-            const eloquaService = new EloquaService(instance.installId, instance.SiteId);
+            if (!eloquaService) {
+                eloquaService = new EloquaService(instance.installId, instance.SiteId);
+                await eloquaService.initialize();
+            }
             
             try {
                 // Get custom object details to get field names
                 const customObject = await eloquaService.getCustomObject(instance.custom_object_id);
                 
+                logger.debug('Custom object fetched for recordDefinition', {
+                    customObjectId: instance.custom_object_id,
+                    name: customObject.name,
+                    fieldCount: customObject.fields?.length || 0
+                });
+
                 // Map configured fields
                 if (instance.mobile_field) {
                     const field = customObject.fields.find(f => f.internalName === instance.mobile_field);
-                    recordDefinition[field?.name || instance.mobile_field] = instance.mobile_field;
+                    recordDefinition[field?.name || 'Mobile'] = instance.mobile_field;
                 }
 
                 if (instance.email_field) {
                     const field = customObject.fields.find(f => f.internalName === instance.email_field);
-                    recordDefinition[field?.name || instance.email_field] = instance.email_field;
+                    recordDefinition[field?.name || 'Email'] = instance.email_field;
                 }
 
                 if (instance.title_field) {
                     const field = customObject.fields.find(f => f.internalName === instance.title_field);
-                    recordDefinition[field?.name || instance.title_field] = instance.title_field;
+                    recordDefinition[field?.name || 'Title'] = instance.title_field;
                 }
 
                 if (instance.notification_field) {
                     const field = customObject.fields.find(f => f.internalName === instance.notification_field);
-                    recordDefinition[field?.name || instance.notification_field] = instance.notification_field;
+                    recordDefinition[field?.name || 'Notification'] = instance.notification_field;
                 }
 
                 if (instance.outgoing_field) {
                     const field = customObject.fields.find(f => f.internalName === instance.outgoing_field);
-                    recordDefinition[field?.name || instance.outgoing_field] = instance.outgoing_field;
+                    recordDefinition[field?.name || 'Message'] = instance.outgoing_field;
                 }
 
                 if (instance.vn_field) {
                     const field = customObject.fields.find(f => f.internalName === instance.vn_field);
-                    recordDefinition[field?.name || instance.vn_field] = instance.vn_field;
+                    recordDefinition[field?.name || 'VirtualNumber'] = instance.vn_field;
                 }
 
             } catch (error) {

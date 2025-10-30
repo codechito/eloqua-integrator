@@ -1,15 +1,114 @@
 const axios = require('axios');
-const Consumer = require('../models/Consumer');
-const { logger, buildQueryString } = require('../utils');
-const eloquaConfig = require('../config/eloqua');
+const { logger } = require('../utils');
+const { Consumer } = require('../models');
 
 class EloquaService {
     constructor(installId, siteId) {
         this.installId = installId;
         this.siteId = siteId;
-        this.baseUrl = null;
-        this.retryCount = 0;
-        this.maxRetries = 1; // Only retry once after token refresh
+        this.baseURL = null;
+        this.client = null;
+        this.initialized = false;
+    }
+
+    /**
+     * Initialize the Eloqua client with OAuth token
+     */
+    async initialize() {
+        if (this.initialized) {
+            return; // Already initialized
+        }
+
+        try {
+            logger.debug('Initializing Eloqua client', {
+                installId: this.installId,
+                siteId: this.siteId
+            });
+
+            // Get consumer with OAuth token
+            const consumer = await Consumer.findOne({ installId: this.installId })
+                .select('+oauth_token +oauth_expires_at');
+
+            if (!consumer) {
+                throw new Error(`Consumer not found for installId: ${this.installId}`);
+            }
+
+            if (!consumer.oauth_token) {
+                throw new Error('OAuth token not found for consumer');
+            }
+
+            // Check if token is expired
+            if (consumer.oauth_expires_at && new Date() >= consumer.oauth_expires_at) {
+                throw new Error('OAuth token expired');
+            }
+
+            // Set base URL - extract site number from siteId
+            const siteNumber = this.siteId.substring(0, 2);
+            this.baseURL = `https://secure.p${siteNumber}.eloqua.com`;
+
+            logger.debug('Eloqua base URL set', {
+                baseURL: this.baseURL,
+                siteId: this.siteId
+            });
+
+            // Create axios client
+            this.client = axios.create({
+                baseURL: this.baseURL,
+                headers: {
+                    'Authorization': `Bearer ${consumer.oauth_token}`,
+                    'Content-Type': 'application/json'
+                },
+                timeout: 30000
+            });
+
+            // Add response interceptor for error handling
+            this.client.interceptors.response.use(
+                response => {
+                    logger.debug('Eloqua API response', {
+                        status: response.status,
+                        url: response.config.url
+                    });
+                    return response;
+                },
+                error => {
+                    logger.error('Eloqua API error', {
+                        status: error.response?.status,
+                        statusText: error.response?.statusText,
+                        data: error.response?.data,
+                        url: error.config?.url,
+                        method: error.config?.method
+                    });
+                    throw error;
+                }
+            );
+
+            this.initialized = true;
+
+            logger.info('Eloqua client initialized successfully', {
+                installId: this.installId,
+                baseURL: this.baseURL
+            });
+
+        } catch (error) {
+            logger.error('Failed to initialize Eloqua client', {
+                installId: this.installId,
+                error: error.message,
+                stack: error.stack
+            });
+            throw error;
+        }
+    }
+
+    /**
+     * Ensure client is initialized before making requests
+     */
+    async ensureInitialized() {
+        if (!this.initialized || !this.client) {
+            logger.debug('Client not initialized, initializing now', {
+                installId: this.installId
+            });
+            await this.initialize();
+        }
     }
 
     /**
@@ -17,11 +116,17 @@ class EloquaService {
      * PUT /api/cloud/1.0/actions/instances/{id}
      */
     async updateActionInstance(instanceId, updatePayload) {
+        await this.ensureInitialized();
+        
+        if (!this.client) {
+            throw new Error('Eloqua client is not initialized');
+        }
+
         const url = `/api/cloud/1.0/actions/instances/${instanceId}`;
         
         logger.info('Updating Eloqua action instance', {
             instanceId,
-            url,
+            fullUrl: `${this.baseURL}${url}`,
             payload: updatePayload
         });
 
@@ -30,6 +135,7 @@ class EloquaService {
             
             logger.info('Eloqua action instance updated successfully', {
                 instanceId,
+                status: response.status,
                 requiresConfiguration: updatePayload.requiresConfiguration
             });
             
@@ -39,7 +145,9 @@ class EloquaService {
                 instanceId,
                 error: error.message,
                 status: error.response?.status,
-                response: error.response?.data
+                statusText: error.response?.statusText,
+                responseData: error.response?.data,
+                stack: error.stack
             });
             throw error;
         }
@@ -50,11 +158,17 @@ class EloquaService {
      * PUT /api/cloud/1.0/decisions/instances/{id}
      */
     async updateDecisionInstance(instanceId, updatePayload) {
+        await this.ensureInitialized();
+        
+        if (!this.client) {
+            throw new Error('Eloqua client is not initialized');
+        }
+
         const url = `/api/cloud/1.0/decisions/instances/${instanceId}`;
         
         logger.info('Updating Eloqua decision instance', {
             instanceId,
-            url,
+            fullUrl: `${this.baseURL}${url}`,
             payload: updatePayload
         });
 
@@ -63,6 +177,7 @@ class EloquaService {
             
             logger.info('Eloqua decision instance updated successfully', {
                 instanceId,
+                status: response.status,
                 requiresConfiguration: updatePayload.requiresConfiguration
             });
             
@@ -72,7 +187,8 @@ class EloquaService {
                 instanceId,
                 error: error.message,
                 status: error.response?.status,
-                response: error.response?.data
+                responseData: error.response?.data,
+                stack: error.stack
             });
             throw error;
         }
@@ -83,11 +199,17 @@ class EloquaService {
      * PUT /api/cloud/1.0/content/instances/{id}
      */
     async updateFeederInstance(instanceId, updatePayload) {
+        await this.ensureInitialized();
+        
+        if (!this.client) {
+            throw new Error('Eloqua client is not initialized');
+        }
+
         const url = `/api/cloud/1.0/content/instances/${instanceId}`;
         
         logger.info('Updating Eloqua feeder instance', {
             instanceId,
-            url,
+            fullUrl: `${this.baseURL}${url}`,
             payload: updatePayload
         });
 
@@ -96,6 +218,7 @@ class EloquaService {
             
             logger.info('Eloqua feeder instance updated successfully', {
                 instanceId,
+                status: response.status,
                 requiresConfiguration: updatePayload.requiresConfiguration
             });
             
@@ -105,7 +228,8 @@ class EloquaService {
                 instanceId,
                 error: error.message,
                 status: error.response?.status,
-                response: error.response?.data
+                responseData: error.response?.data,
+                stack: error.stack
             });
             throw error;
         }
@@ -116,6 +240,8 @@ class EloquaService {
      * GET /api/cloud/1.0/actions/instances/{id}
      */
     async getActionInstance(instanceId) {
+        await this.ensureInitialized();
+        
         const url = `/api/cloud/1.0/actions/instances/${instanceId}`;
         
         try {
@@ -135,6 +261,8 @@ class EloquaService {
      * GET /api/cloud/1.0/decisions/instances/{id}
      */
     async getDecisionInstance(instanceId) {
+        await this.ensureInitialized();
+        
         const url = `/api/cloud/1.0/decisions/instances/${instanceId}`;
         
         try {
@@ -154,6 +282,8 @@ class EloquaService {
      * GET /api/cloud/1.0/content/instances/{id}
      */
     async getFeederInstance(instanceId) {
+        await this.ensureInitialized();
+        
         const url = `/api/cloud/1.0/content/instances/${instanceId}`;
         
         try {
@@ -168,394 +298,306 @@ class EloquaService {
         }
     }
 
-
-    /**
-     * Get Eloqua base URL
-     */
-    async getBaseUrl() {
-        if (this.baseUrl) {
-            return this.baseUrl;
-        }
-
-        const consumer = await Consumer.findOne({ installId: this.installId });
-        
-        if (consumer && consumer.eloqua_base_url) {
-            this.baseUrl = consumer.eloqua_base_url;
-            logger.debug('Using stored base URL', { 
-                installId: this.installId,
-                baseUrl: this.baseUrl 
-            });
-            return this.baseUrl;
-        }
-
-        try {
-            const token = await this.getAccessToken();
-            const response = await axios.get('https://login.eloqua.com/id', {
-                headers: {
-                    'Authorization': `Bearer ${token}`
-                }
-            });
-
-            if (response.data && response.data.urls && response.data.urls.base) {
-                this.baseUrl = response.data.urls.base;
-                
-                if (consumer) {
-                    consumer.eloqua_base_url = this.baseUrl;
-                    consumer.eloqua_apis_url = response.data.urls.apis;
-                    await consumer.save();
-                }
-                
-                logger.info('Eloqua base URL discovered and stored', { 
-                    installId: this.installId,
-                    baseUrl: this.baseUrl 
-                });
-                return this.baseUrl;
-            }
-        } catch (error) {
-            logger.error('Could not discover base URL', {
-                installId: this.installId,
-                error: error.message
-            });
-        }
-
-        this.baseUrl = 'https://secure.eloqua.com';
-        logger.warn('Using default base URL', {
-            installId: this.installId,
-            baseUrl: this.baseUrl
-        });
-        
-        return this.baseUrl;
-    }
-
-    /**
-     * Get access token from database
-     */
-    async getAccessToken() {
-        const consumer = await Consumer.findOne({ installId: this.installId })
-            .select('+oauth_token +oauth_refresh_token +oauth_expires_at');
-        
-        if (!consumer || !consumer.oauth_token) {
-            throw new Error('OAuth token not found. Please authenticate the app.');
-        }
-
-        // Check if token is expired or about to expire (within 5 minutes)
-        const now = new Date();
-        const expiresAt = consumer.oauth_expires_at;
-        const fiveMinutesFromNow = new Date(now.getTime() + 5 * 60 * 1000);
-
-        if (expiresAt && expiresAt <= fiveMinutesFromNow) {
-            logger.info('OAuth token expired or expiring soon, refreshing', { 
-                installId: this.installId,
-                expiresAt,
-                now
-            });
-            
-            return await this.refreshToken(consumer);
-        }
-
-        return consumer.oauth_token;
-    }
-
-    /**
-     * Refresh OAuth token
-     */
-    async refreshToken(consumer) {
-        try {
-            logger.info('Refreshing OAuth token', { installId: this.installId });
-
-            if (!consumer.oauth_refresh_token) {
-                throw new Error('Refresh token not found. Re-authorization required.');
-            }
-
-            const credentials = Buffer.from(
-                `${process.env.ELOQUA_CLIENT_ID}:${process.env.ELOQUA_CLIENT_SECRET}`
-            ).toString('base64');
-
-            const params = new URLSearchParams({
-                grant_type: 'refresh_token',
-                refresh_token: consumer.oauth_refresh_token
-            });
-
-            const response = await axios.post(
-                'https://login.eloqua.com/auth/oauth2/token',
-                params.toString(),
-                {
-                    headers: {
-                        'Authorization': `Basic ${credentials}`,
-                        'Content-Type': 'application/x-www-form-urlencoded'
-                    },
-                    timeout: 30000
-                }
-            );
-
-            // Update consumer with new tokens
-            consumer.oauth_token = response.data.access_token;
-            
-            // Refresh token might be rotated (new one provided) or stay the same
-            if (response.data.refresh_token) {
-                consumer.oauth_refresh_token = response.data.refresh_token;
-            }
-            
-            const expiresIn = response.data.expires_in || 28800; // Default 8 hours
-            consumer.oauth_expires_at = new Date(Date.now() + expiresIn * 1000);
-            
-            await consumer.save();
-
-            logger.info('OAuth token refreshed successfully', { 
-                installId: this.installId,
-                expiresAt: consumer.oauth_expires_at
-            });
-
-            return response.data.access_token;
-        } catch (error) {
-            logger.error('Error refreshing OAuth token', {
-                installId: this.installId,
-                error: error.message,
-                errorCode: error.response?.data?.error
-            });
-
-            // If refresh fails, clear tokens
-            if (error.response?.status === 400 || error.response?.status === 401) {
-                consumer.oauth_token = null;
-                consumer.oauth_refresh_token = null;
-                consumer.oauth_expires_at = null;
-                await consumer.save();
-                
-                throw new Error('REAUTH_REQUIRED');
-            }
-
-            throw new Error(`Failed to refresh OAuth token: ${error.message}`);
-        }
-    }
-
-    /**
-     * Make API request to Eloqua with automatic token refresh
-     */
-    async makeRequest(method, endpoint, data = null, params = {}) {
-        try {
-            const token = await this.getAccessToken();
-            const baseUrl = await this.getBaseUrl();
-            
-            const url = `${baseUrl}${endpoint}`;
-            const queryString = buildQueryString(params);
-            const fullUrl = queryString ? `${url}?${queryString}` : url;
-            
-            const config = {
-                method,
-                url: fullUrl,
-                headers: {
-                    'Authorization': `Bearer ${token}`,
-                    'Content-Type': 'application/json'
-                },
-                timeout: 30000
-            };
-
-            if (data && (method === 'POST' || method === 'PUT' || method === 'PATCH')) {
-                config.data = data;
-            }
-
-            logger.debug(`Eloqua API ${method} ${endpoint}`, { 
-                baseUrl,
-                params, 
-                hasData: !!data,
-                retryCount: this.retryCount
-            });
-
-            const response = await axios(config);
-
-            logger.api(endpoint, method, response.status, {
-                installId: this.installId
-            });
-
-            // Reset retry count on success
-            this.retryCount = 0;
-
-            return response.data;
-
-        } catch (error) {
-            const errorMessage = error.response?.data?.message || error.message;
-            const statusCode = error.response?.status;
-
-            logger.error(`Eloqua API Error: ${method} ${endpoint}`, {
-                installId: this.installId,
-                status: statusCode,
-                error: errorMessage,
-                baseUrl: this.baseUrl,
-                retryCount: this.retryCount
-            });
-
-            // Handle 401 Unauthorized - Token expired
-            if (statusCode === 401 && this.retryCount < this.maxRetries) {
-                logger.warn('Received 401, attempting token refresh', {
-                    installId: this.installId,
-                    retryCount: this.retryCount
-                });
-
-                this.retryCount++;
-
-                try {
-                    // Get fresh consumer data
-                    const consumer = await Consumer.findOne({ installId: this.installId })
-                        .select('+oauth_token +oauth_refresh_token +oauth_expires_at');
-                    
-                    if (!consumer) {
-                        throw new Error('REAUTH_REQUIRED');
-                    }
-
-                    // Force token refresh
-                    await this.refreshToken(consumer);
-
-                    // Retry the original request
-                    logger.info('Retrying request with new token', {
-                        installId: this.installId,
-                        endpoint
-                    });
-
-                    return await this.makeRequest(method, endpoint, data, params);
-
-                } catch (refreshError) {
-                    if (refreshError.message === 'REAUTH_REQUIRED') {
-                        // Build re-authorization URL
-                        const reAuthUrl = this.buildReAuthUrl();
-                        
-                        logger.error('Token refresh failed, re-authorization required', {
-                            installId: this.installId,
-                            reAuthUrl
-                        });
-
-                        const error = new Error('Re-authorization required');
-                        error.code = 'REAUTH_REQUIRED';
-                        error.reAuthUrl = reAuthUrl;
-                        throw error;
-                    }
-
-                    throw refreshError;
-                }
-            }
-
-            // If we've already retried or it's not a 401, throw the error
-            const finalError = new Error(`Eloqua API Error (${statusCode || 'Network'}): ${errorMessage}`);
-            finalError.statusCode = statusCode;
-            finalError.originalError = error;
-            
-            throw finalError;
-        }
-    }
-
-    /**
-     * Build re-authorization URL
-     */
-    buildReAuthUrl() {
-        const baseUrl = process.env.APP_BASE_URL || 'https://eloqua-integrator.onrender.com';
-        const installUrl = `${baseUrl}/eloqua/app/install?installId=${this.installId}&siteId=${this.siteId}`;
-        return installUrl;
-    }
-
     /**
      * Get custom objects
+     * GET /api/REST/2.0/assets/customObjects
      */
-    async getCustomObjects(search = '', count = 100) {
+    async getCustomObjects(search = '', count = 50) {
+        await this.ensureInitialized();
+        
         const params = {
-            search,
-            count,
-            orderBy: 'name'
+            count: count,
+            depth: 'minimal'
         };
-        return await this.makeRequest('GET', '/api/REST/2.0/assets/customObjects', null, params);
+
+        if (search) {
+            params.search = search;
+        }
+
+        try {
+            const response = await this.client.get('/api/REST/2.0/assets/customObjects', {
+                params
+            });
+
+            logger.debug('Custom objects fetched', {
+                count: response.data.elements?.length || 0,
+                search
+            });
+
+            return response.data;
+        } catch (error) {
+            logger.error('Failed to fetch custom objects', {
+                error: error.message,
+                status: error.response?.status
+            });
+            throw error;
+        }
     }
 
     /**
      * Get custom object by ID
+     * GET /api/REST/2.0/assets/customObject/{id}
      */
     async getCustomObject(customObjectId) {
-        return await this.makeRequest('GET', `/api/REST/2.0/assets/customObject/${customObjectId}`);
-    }
+        await this.ensureInitialized();
+        
+        try {
+            const response = await this.client.get(
+                `/api/REST/2.0/assets/customObject/${customObjectId}`,
+                {
+                    params: { depth: 'complete' }
+                }
+            );
 
-    /**
-     * Get custom object data
-     */
-    async getCustomObjectData(customObjectId, search = '', count = 100) {
-        const params = { search, count };
-        return await this.makeRequest('GET', `/api/REST/2.0/data/customObject/${customObjectId}/instances`, null, params);
+            logger.debug('Custom object fetched', {
+                customObjectId,
+                name: response.data.name,
+                fieldCount: response.data.fields?.length || 0
+            });
+
+            return response.data;
+        } catch (error) {
+            logger.error('Failed to fetch custom object', {
+                customObjectId,
+                error: error.message
+            });
+            throw error;
+        }
     }
 
     /**
      * Create custom object record
+     * POST /api/REST/2.0/data/customObject/{id}
      */
     async createCustomObjectRecord(customObjectId, data) {
-        return await this.makeRequest('POST', `/api/REST/2.0/data/customObject/${customObjectId}/instance`, data);
-    }
+        await this.ensureInitialized();
+        
+        try {
+            const response = await this.client.post(
+                `/api/REST/2.0/data/customObject/${customObjectId}`,
+                data
+            );
 
-    /**
-     * Update custom object record
-     */
-    async updateCustomObjectRecord(customObjectId, recordId, data) {
-        return await this.makeRequest('PUT', `/api/REST/2.0/data/customObject/${customObjectId}/instance/${recordId}`, data);
-    }
+            logger.debug('Custom object record created', {
+                customObjectId,
+                recordId: response.data.id
+            });
 
-    /**
-     * Delete custom object record
-     */
-    async deleteCustomObjectRecord(customObjectId, recordId) {
-        return await this.makeRequest('DELETE', `/api/REST/2.0/data/customObject/${customObjectId}/instance/${recordId}`);
-    }
-
-    /**
-     * Get contact by ID
-     */
-    async getContact(contactId) {
-        return await this.makeRequest('GET', `/api/REST/2.0/data/contact/${contactId}`);
-    }
-
-    /**
-     * Get contact by email
-     */
-    async getContactByEmail(email) {
-        const params = {
-            search: email,
-            count: 1
-        };
-        const response = await this.makeRequest('GET', '/api/REST/2.0/data/contacts', null, params);
-        return response.elements && response.elements.length > 0 ? response.elements[0] : null;
+            return response.data;
+        } catch (error) {
+            logger.error('Failed to create custom object record', {
+                customObjectId,
+                error: error.message,
+                response: error.response?.data
+            });
+            throw error;
+        }
     }
 
     /**
      * Get contact fields
+     * GET /api/REST/2.0/assets/contact/fields
      */
     async getContactFields(count = 200) {
-        const params = { count };
-        return await this.makeRequest('GET', '/api/bulk/2.0/contacts/fields', null, params);
+        await this.ensureInitialized();
+        
+        try {
+            const response = await this.client.get('/api/REST/2.0/assets/contact/fields', {
+                params: {
+                    count: count,
+                    depth: 'minimal'
+                }
+            });
+
+            logger.debug('Contact fields fetched', {
+                count: response.data.elements?.length || 0
+            });
+
+            // Transform to match expected format
+            return {
+                items: response.data.elements || [],
+                total: response.data.total || 0
+            };
+        } catch (error) {
+            logger.error('Failed to fetch contact fields', {
+                error: error.message
+            });
+            throw error;
+        }
+    }
+
+    /**
+     * Get contact by ID
+     * GET /api/REST/2.0/data/contact/{id}
+     */
+    async getContact(contactId) {
+        await this.ensureInitialized();
+        
+        try {
+            const response = await this.client.get(
+                `/api/REST/2.0/data/contact/${contactId}`,
+                {
+                    params: { depth: 'complete' }
+                }
+            );
+
+            return response.data;
+        } catch (error) {
+            logger.error('Failed to fetch contact', {
+                contactId,
+                error: error.message
+            });
+            throw error;
+        }
     }
 
     /**
      * Update contact
+     * PUT /api/REST/2.0/data/contact/{id}
      */
     async updateContact(contactId, data) {
-        return await this.makeRequest('PUT', `/api/REST/2.0/data/contact/${contactId}`, data);
+        await this.ensureInitialized();
+        
+        try {
+            const response = await this.client.put(
+                `/api/REST/2.0/data/contact/${contactId}`,
+                data
+            );
+
+            logger.debug('Contact updated', { contactId });
+
+            return response.data;
+        } catch (error) {
+            logger.error('Failed to update contact', {
+                contactId,
+                error: error.message
+            });
+            throw error;
+        }
     }
 
     /**
-     * Search contacts
+     * Get campaigns
+     * GET /api/REST/2.0/assets/campaigns
      */
-    async searchContacts(searchTerm, count = 100) {
+    async getCampaigns(search = '', count = 50) {
+        await this.ensureInitialized();
+        
         const params = {
-            search: searchTerm,
-            count
+            count: count,
+            depth: 'minimal'
         };
-        return await this.makeRequest('GET', '/api/REST/2.0/data/contacts', null, params);
+
+        if (search) {
+            params.search = search;
+        }
+
+        try {
+            const response = await this.client.get('/api/REST/2.0/assets/campaigns', {
+                params
+            });
+
+            return response.data;
+        } catch (error) {
+            logger.error('Failed to fetch campaigns', {
+                error: error.message
+            });
+            throw error;
+        }
     }
 
     /**
      * Get campaign by ID
+     * GET /api/REST/2.0/assets/campaign/{id}
      */
     async getCampaign(campaignId) {
-        return await this.makeRequest('GET', `/api/REST/2.0/assets/campaign/${campaignId}`);
+        await this.ensureInitialized();
+        
+        try {
+            const response = await this.client.get(
+                `/api/REST/2.0/assets/campaign/${campaignId}`,
+                {
+                    params: { depth: 'complete' }
+                }
+            );
+
+            return response.data;
+        } catch (error) {
+            logger.error('Failed to fetch campaign', {
+                campaignId,
+                error: error.message
+            });
+            throw error;
+        }
     }
 
     /**
-     * Get email by ID
+     * Search contacts
+     * GET /api/REST/2.0/data/contacts
      */
-    async getEmail(emailId) {
-        return await this.makeRequest('GET', `/api/REST/2.0/assets/email/${emailId}`);
+    async searchContacts(searchQuery, count = 50) {
+        await this.ensureInitialized();
+        
+        try {
+            const response = await this.client.get('/api/REST/2.0/data/contacts', {
+                params: {
+                    search: searchQuery,
+                    count: count,
+                    depth: 'minimal'
+                }
+            });
+
+            return response.data;
+        } catch (error) {
+            logger.error('Failed to search contacts', {
+                error: error.message
+            });
+            throw error;
+        }
+    }
+
+    /**
+     * Get activity types
+     * GET /api/REST/2.0/assets/visitor/activityTypes
+     */
+    async getActivityTypes() {
+        await this.ensureInitialized();
+        
+        try {
+            const response = await this.client.get('/api/REST/2.0/assets/visitor/activityTypes');
+            return response.data;
+        } catch (error) {
+            logger.error('Failed to fetch activity types', {
+                error: error.message
+            });
+            throw error;
+        }
+    }
+
+    /**
+     * Create activity
+     * POST /api/REST/2.0/data/activity
+     */
+    async createActivity(activityData) {
+        await this.ensureInitialized();
+        
+        try {
+            const response = await this.client.post(
+                '/api/REST/2.0/data/activity',
+                activityData
+            );
+
+            logger.debug('Activity created', {
+                activityType: activityData.type
+            });
+
+            return response.data;
+        } catch (error) {
+            logger.error('Failed to create activity', {
+                error: error.message
+            });
+            throw error;
+        }
     }
 }
 
