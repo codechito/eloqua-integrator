@@ -1,5 +1,6 @@
 const Consumer = require('../models/Consumer');
 const { logger } = require('../utils');
+const OAuthService = require('../services/oauthService');
 
 /**
  * Verify Eloqua installation
@@ -60,8 +61,8 @@ async function verifyInstallation(req, res, next) {
 }
 
 /**
- * Verify OAuth token exists
- * Checks if consumer has valid OAuth credentials
+ * Verify OAuth token exists and auto-refresh if expired
+ * Checks if consumer has valid OAuth credentials and refreshes if needed
  */
 async function verifyOAuthToken(req, res, next) {
     try {
@@ -74,42 +75,117 @@ async function verifyOAuthToken(req, res, next) {
             });
         }
 
-        // Fetch consumer with OAuth fields
+        // Fetch consumer with OAuth fields including refresh token
         const consumerWithToken = await Consumer.findById(consumer._id)
-            .select('+oauth_token +oauth_expires_at');
+            .select('+oauth_token +oauth_expires_at +oauth_refresh_token');
 
+        // Check if OAuth token exists
         if (!consumerWithToken.oauth_token) {
             logger.warn('Missing OAuth token', {
                 installId: consumer.installId
             });
-            return res.status(401).json({ 
-                error: 'Unauthorized',
-                message: 'OAuth authentication required. Please authorize the app.' 
-            });
+            
+            // Create reauth error
+            const reAuthError = new Error('OAuth authentication required');
+            reAuthError.code = 'REAUTH_REQUIRED';
+            reAuthError.reAuthUrl = `/eloqua/app/authorize?installId=${consumer.installId}`;
+            return next(reAuthError);
         }
 
-        // Check if token is expired
-        if (consumerWithToken.oauth_expires_at && 
-            new Date() >= consumerWithToken.oauth_expires_at) {
-            logger.warn('OAuth token expired', {
+        // Check if token is expired or about to expire (5 minutes buffer)
+        const tokenExpiryBuffer = 5 * 60 * 1000; // 5 minutes in milliseconds
+        const isExpiredOrExpiringSoon = consumerWithToken.oauth_expires_at && 
+            new Date() >= new Date(consumerWithToken.oauth_expires_at.getTime() - tokenExpiryBuffer);
+
+        if (isExpiredOrExpiringSoon) {
+            logger.info('OAuth token expired or expiring soon, attempting refresh', {
                 installId: consumer.installId,
-                expiredAt: consumerWithToken.oauth_expires_at
+                expiresAt: consumerWithToken.oauth_expires_at,
+                now: new Date()
             });
-            return res.status(401).json({ 
-                error: 'Unauthorized',
-                message: 'OAuth token expired. Please re-authorize the app.' 
+
+            // Check if refresh token exists
+            if (!consumerWithToken.oauth_refresh_token) {
+                logger.error('No refresh token available', {
+                    installId: consumer.installId
+                });
+                
+                // Create reauth error
+                const reAuthError = new Error('OAuth token expired and no refresh token available');
+                reAuthError.code = 'REAUTH_REQUIRED';
+                reAuthError.reAuthUrl = `/eloqua/app/authorize?installId=${consumer.installId}`;
+                return next(reAuthError);
+            }
+
+            try {
+                // Attempt to refresh the token
+                logger.info('Calling OAuthService.refreshAccessToken', {
+                    installId: consumer.installId
+                });
+
+                const tokenData = await OAuthService.refreshAccessToken(
+                    consumerWithToken.oauth_refresh_token
+                );
+
+                // Update consumer with new tokens
+                consumerWithToken.oauth_token = tokenData.access_token;
+                
+                // Update refresh token if a new one is provided
+                if (tokenData.refresh_token) {
+                    consumerWithToken.oauth_refresh_token = tokenData.refresh_token;
+                }
+                
+                // Calculate expiry time (expires_in is in seconds)
+                const expiresIn = tokenData.expires_in || 3600; // Default 1 hour
+                consumerWithToken.oauth_expires_at = new Date(Date.now() + (expiresIn * 1000));
+                
+                await consumerWithToken.save();
+
+                logger.info('Successfully refreshed OAuth token', {
+                    installId: consumer.installId,
+                    newExpiryAt: consumerWithToken.oauth_expires_at
+                });
+
+                // Update req.consumer with fresh token
+                req.consumer = consumerWithToken;
+
+            } catch (refreshError) {
+                logger.error('Failed to refresh OAuth token', {
+                    installId: consumer.installId,
+                    error: refreshError.message,
+                    stack: refreshError.stack
+                });
+                
+                // Create reauth error when refresh fails
+                const reAuthError = new Error('OAuth token refresh failed. Please re-authorize.');
+                reAuthError.code = 'REAUTH_REQUIRED';
+                reAuthError.reAuthUrl = `/eloqua/app/authorize?installId=${consumer.installId}`;
+                reAuthError.originalError = refreshError;
+                return next(reAuthError);
+            }
+        } else {
+            // Token is still valid, just update req.consumer with token data
+            req.consumer = consumerWithToken;
+            
+            logger.debug('OAuth token is valid', {
+                installId: consumer.installId,
+                expiresAt: consumerWithToken.oauth_expires_at
             });
         }
 
         next();
     } catch (error) {
         logger.error('Error verifying OAuth token', {
-            error: error.message
+            error: error.message,
+            stack: error.stack
         });
-        res.status(500).json({ 
-            error: 'Internal Server Error',
-            message: 'Failed to verify OAuth token' 
-        });
+        
+        // For unexpected errors, still try to trigger reauth
+        const reAuthError = new Error('Failed to verify OAuth token');
+        reAuthError.code = 'REAUTH_REQUIRED';
+        reAuthError.reAuthUrl = `/eloqua/app/authorize?installId=${req.consumer?.installId || req.query.installId}`;
+        reAuthError.originalError = error;
+        next(reAuthError);
     }
 }
 
