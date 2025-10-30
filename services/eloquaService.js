@@ -12,6 +12,43 @@ class EloquaService {
     }
 
     /**
+     * Extract pod number from siteId
+     * siteId format examples: "312", "1234", "45"
+     * We need the first 1-2 digits to form pod like "p03", "p01", "p04"
+     */
+    getPodFromSiteId(siteId) {
+        if (!siteId) {
+            logger.warn('No siteId provided, defaulting to p03');
+            return 'p03';
+        }
+
+        // Convert to string and get first 1-2 characters
+        const siteIdStr = String(siteId);
+        
+        // If siteId is 3 digits like "312", pod is "p03" (first digit = 3)
+        // If siteId is 4 digits like "1234", pod is "p01" (first digit = 1)
+        let podNumber;
+        
+        if (siteIdStr.length >= 3) {
+            // Take first digit for 3+ digit siteIds
+            podNumber = parseInt(siteIdStr.charAt(0));
+        } else {
+            // For 1-2 digit siteIds, use the whole number
+            podNumber = parseInt(siteIdStr);
+        }
+
+        // Pad with zero to make it 2 digits (1 -> 01, 3 -> 03)
+        const pod = `p${String(podNumber).padStart(2, '0')}`;
+        
+        logger.debug('Extracted pod from siteId', {
+            siteId: siteIdStr,
+            pod: pod
+        });
+
+        return pod;
+    }
+
+    /**
      * Initialize the Eloqua client with OAuth token
      */
     async initialize() {
@@ -42,13 +79,16 @@ class EloquaService {
                 throw new Error('OAuth token expired');
             }
 
-            // Set base URL - extract site number from siteId
-            const siteNumber = this.siteId.substring(0, 2);
-            this.baseURL = `https://secure.p${siteNumber}.eloqua.com`;
+            // Get pod from siteId
+            const pod = this.getPodFromSiteId(this.siteId);
+            
+            // Set base URL
+            this.baseURL = `https://secure.${pod}.eloqua.com`;
 
-            logger.debug('Eloqua base URL set', {
-                baseURL: this.baseURL,
-                siteId: this.siteId
+            logger.info('Eloqua base URL constructed', {
+                siteId: this.siteId,
+                pod: pod,
+                baseURL: this.baseURL
             });
 
             // Create axios client
@@ -76,7 +116,8 @@ class EloquaService {
                         statusText: error.response?.statusText,
                         data: error.response?.data,
                         url: error.config?.url,
-                        method: error.config?.method
+                        method: error.config?.method,
+                        baseURL: this.baseURL
                     });
                     throw error;
                 }
