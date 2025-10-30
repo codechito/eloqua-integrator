@@ -1,12 +1,13 @@
 const FeederInstance = require('../models/FeederInstance');
 const Consumer = require('../models/Consumer');
-const SmsReply = require('../models/SmsReply');
+const SmsLog = require('../models/SmsLog');
 const LinkHit = require('../models/LinkHit');
+const { EloquaService } = require('../services');
 const { logger, generateId } = require('../utils');
 const { asyncHandler } = require('../middleware');
-const { TransmitSmsService, EloquaService } = require('../services');
 
 class FeederController {
+
     /**
      * Create feeder instance
      * GET /eloqua/feeder/create
@@ -15,28 +16,19 @@ class FeederController {
         const { installId, siteId, assetId } = req.query;
         const instanceId = generateId();
 
-        // Determine feeder type from query param
-        const feederType = req.query.feederType || 'incoming_sms';
-
-        logger.info('Creating feeder instance', { 
-            installId, 
-            instanceId,
-            feederType 
-        });
+        logger.info('Creating feeder instance', { installId, instanceId });
 
         const instance = new FeederInstance({
             instanceId,
             installId,
             SiteId: siteId,
             assetId,
-            feederType,
-            senderIds: [],
-            fieldMappings: {}
+            requiresConfiguration: false // Feeder doesn't require configuration by default
         });
 
         await instance.save();
 
-        logger.info('Feeder instance created', { instanceId, feederType });
+        logger.info('Feeder instance created', { instanceId });
 
         res.json({
             success: true,
@@ -45,7 +37,7 @@ class FeederController {
     });
 
     /**
-     * Get feeder configuration page
+     * Get feeder configure page
      * GET /eloqua/feeder/configure
      */
     static configure = asyncHandler(async (req, res) => {
@@ -58,44 +50,18 @@ class FeederController {
             return res.status(404).send('Consumer not found');
         }
 
-        // Store in session
         req.session.installId = installId;
         req.session.siteId = siteId;
 
         let instance = await FeederInstance.findOne({ instanceId });
         
         if (!instance) {
-            // Create default instance
             instance = {
                 instanceId,
                 installId,
                 SiteId: siteId,
-                feederType: req.query.feederType || 'incoming_sms',
-                senderIds: [],
-                fieldMappings: {}
+                requiresConfiguration: false
             };
-        }
-
-        // Get sender IDs for incoming SMS feeder
-        let sender_ids = {
-            'Virtual Number': [],
-            'Business Name': [],
-            'Mobile Number': []
-        };
-
-        if (instance.feederType === 'incoming_sms' && 
-            consumer.transmitsms_api_key && 
-            consumer.transmitsms_api_secret) {
-            try {
-                const transmitSmsService = new TransmitSmsService(
-                    consumer.transmitsms_api_key,
-                    consumer.transmitsms_api_secret
-                );
-                
-                sender_ids = await transmitSmsService.getSenderIds();
-            } catch (error) {
-                logger.warn('Could not fetch sender IDs', { error: error.message });
-            }
         }
 
         // Get custom objects
@@ -107,28 +73,22 @@ class FeederController {
             logger.warn('Could not fetch custom objects', { error: error.message });
         }
 
-        // Render appropriate view based on feeder type
-        const viewName = instance.feederType === 'incoming_sms' 
-            ? 'feeder-incoming-sms' 
-            : 'feeder-link-hits';
-
-        res.render(viewName, {
+        res.render('feeder-config', {
             consumer: consumer.toObject(),
             instance,
-            sender_ids,
             custom_objects
         });
     });
 
     /**
-     * Save feeder configuration
+     * Save configuration and update Eloqua instance
      * POST /eloqua/feeder/configure
      */
     static saveConfiguration = asyncHandler(async (req, res) => {
         const { instanceId } = req.query;
         const { instance: instanceData } = req.body;
 
-        logger.info('Saving feeder configuration', { instanceId, feederType: instanceData.feederType });
+        logger.info('Saving feeder configuration', { instanceId });
 
         let instance = await FeederInstance.findOne({ instanceId });
         
@@ -141,306 +101,417 @@ class FeederController {
             Object.assign(instance, instanceData);
         }
 
+        // Validate configuration
+        const isConfigured = FeederController.validateConfiguration(instance);
+        instance.requiresConfiguration = !isConfigured;
+
         await instance.save();
 
-        // If incoming SMS feeder, configure forward URLs for sender IDs
-        if (instance.feederType === 'incoming_sms' && 
-            instance.senderIds && 
-            instance.senderIds.length > 0) {
-            
-            await FeederController.configureForwardUrls(instance);
-        }
-
-        logger.info('Feeder configuration saved', { instanceId });
-
-        res.json({
-            success: true,
-            message: 'Configuration saved successfully'
+        logger.info('Feeder configuration saved', { 
+            instanceId,
+            requiresConfiguration: instance.requiresConfiguration
         });
+
+        // Update Eloqua instance with recordDefinition
+        try {
+            await FeederController.updateEloquaInstance(instance);
+            
+            logger.info('Eloqua feeder instance updated successfully', { instanceId });
+
+            res.json({
+                success: true,
+                message: 'Configuration saved successfully',
+                requiresConfiguration: instance.requiresConfiguration
+            });
+
+        } catch (error) {
+            logger.error('Failed to update Eloqua feeder instance', {
+                instanceId,
+                error: error.message
+            });
+
+            res.json({
+                success: true,
+                message: 'Configuration saved locally, but failed to update Eloqua',
+                warning: error.message,
+                requiresConfiguration: instance.requiresConfiguration
+            });
+        }
     });
 
     /**
-     * Configure forward URLs for sender IDs in TransmitSMS
+     * Validate if configuration is complete
      */
-    static async configureForwardUrls(instance) {
+    static validateConfiguration(instance) {
+        // Feeder service can work with or without custom object mapping
+        // If custom object is configured, check required mappings
+        if (instance.custom_object_id) {
+            if (!instance.email_field || !instance.mobile_field) {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    /**
+     * Update Eloqua feeder instance with recordDefinition
+     */
+    static async updateEloquaInstance(instance) {
         try {
-            const consumer = await Consumer.findOne({ installId: instance.installId })
-                .select('+transmitsms_api_key +transmitsms_api_secret');
+            const eloquaService = new EloquaService(instance.installId, instance.SiteId);
 
-            if (!consumer || !consumer.transmitsms_api_key) {
-                logger.warn('Cannot configure forward URLs - no TransmitSMS credentials');
-                return;
-            }
+            // Build recordDefinition based on configuration
+            const recordDefinition = await FeederController.buildRecordDefinition(instance);
 
-            const transmitSmsService = new TransmitSmsService(
-                consumer.transmitsms_api_key,
-                consumer.transmitsms_api_secret
-            );
+            // Prepare update payload
+            const updatePayload = {
+                recordDefinition: recordDefinition,
+                requiresConfiguration: instance.requiresConfiguration
+            };
 
-            const baseUrl = process.env.APP_BASE_URL || 'https://eloqua-integrator.onrender.com';
-            const forwardUrl = `${baseUrl}/eloqua/feeder/incomingsms?instanceId=${instance.instanceId}&installId=${instance.installId}`;
+            logger.info('Updating Eloqua feeder instance', {
+                instanceId: instance.instanceId,
+                recordDefinition,
+                requiresConfiguration: instance.requiresConfiguration
+            });
 
-            for (const senderId of instance.senderIds) {
-                try {
-                    await transmitSmsService.configureNumberForwarding(senderId, forwardUrl);
-                    
-                    logger.info('Configured forward URL for sender ID', {
-                        senderId,
-                        forwardUrl
-                    });
-                } catch (error) {
-                    logger.error('Error configuring forward URL', {
-                        senderId,
-                        error: error.message
-                    });
-                }
-            }
-        } catch (error) {
-            logger.error('Error in configureForwardUrls', {
-                error: error.message,
+            // Call Eloqua API to update instance
+            await eloquaService.updateFeederInstance(instance.instanceId, updatePayload);
+
+            logger.info('Eloqua feeder instance updated', {
                 instanceId: instance.instanceId
             });
+
+        } catch (error) {
+            logger.error('Error updating Eloqua feeder instance', {
+                instanceId: instance.instanceId,
+                error: error.message,
+                stack: error.stack
+            });
+            throw error;
         }
     }
 
     /**
-     * Notify - Get feeder data
+     * Build recordDefinition object for Eloqua
+     */
+    static async buildRecordDefinition(instance) {
+        const recordDefinition = {};
+
+        // Always include contact basic fields
+        recordDefinition.ContactID = 'ContactID';
+        recordDefinition.EmailAddress = 'EmailAddress';
+        recordDefinition.MobileNumber = 'MobileNumber';
+
+        // Add custom object fields if configured
+        if (instance.custom_object_id) {
+            const eloquaService = new EloquaService(instance.installId, instance.SiteId);
+            
+            try {
+                // Get custom object details to get field names
+                const customObject = await eloquaService.getCustomObject(instance.custom_object_id);
+                
+                // Map configured fields
+                if (instance.mobile_field) {
+                    const field = customObject.fields.find(f => f.internalName === instance.mobile_field);
+                    recordDefinition[field?.name || 'Mobile'] = instance.mobile_field;
+                }
+
+                if (instance.email_field) {
+                    const field = customObject.fields.find(f => f.internalName === instance.email_field);
+                    recordDefinition[field?.name || 'Email'] = instance.email_field;
+                }
+
+                if (instance.title_field) {
+                    const field = customObject.fields.find(f => f.internalName === instance.title_field);
+                    recordDefinition[field?.name || 'Title'] = instance.title_field;
+                }
+
+                if (instance.url_field) {
+                    const field = customObject.fields.find(f => f.internalName === instance.url_field);
+                    recordDefinition[field?.name || 'URL'] = instance.url_field;
+                }
+
+                if (instance.originalurl_field) {
+                    const field = customObject.fields.find(f => f.internalName === instance.originalurl_field);
+                    recordDefinition[field?.name || 'OriginalURL'] = instance.originalurl_field;
+                }
+
+                if (instance.link_hits_field) {
+                    const field = customObject.fields.find(f => f.internalName === instance.link_hits_field);
+                    recordDefinition[field?.name || 'LinkHits'] = instance.link_hits_field;
+                }
+
+                if (instance.vn_field) {
+                    const field = customObject.fields.find(f => f.internalName === instance.vn_field);
+                    recordDefinition[field?.name || 'VirtualNumber'] = instance.vn_field;
+                }
+
+            } catch (error) {
+                logger.warn('Could not fetch custom object for recordDefinition', {
+                    customObjectId: instance.custom_object_id,
+                    error: error.message
+                });
+
+                // Fallback to internal names
+                if (instance.mobile_field) recordDefinition.Mobile = instance.mobile_field;
+                if (instance.email_field) recordDefinition.Email = instance.email_field;
+                if (instance.title_field) recordDefinition.Title = instance.title_field;
+                if (instance.url_field) recordDefinition.URL = instance.url_field;
+                if (instance.originalurl_field) recordDefinition.OriginalURL = instance.originalurl_field;
+                if (instance.link_hits_field) recordDefinition.LinkHits = instance.link_hits_field;
+                if (instance.vn_field) recordDefinition.VirtualNumber = instance.vn_field;
+            }
+        }
+
+        logger.debug('Built recordDefinition for feeder', {
+            instanceId: instance.instanceId,
+            recordDefinition
+        });
+
+        return recordDefinition;
+    }
+
+    /**
+     * Notify (Execute feeder) - Provide link hit data
      * POST /eloqua/feeder/notify
      */
     static notify = asyncHandler(async (req, res) => {
         const { instanceId } = req.query;
-        const { maxRows = 100, offset = 0 } = req.body;
+        const executionData = req.body;
 
-        logger.info('Feeder notify called', { instanceId, maxRows, offset });
+        logger.info('Feeder notify received', { 
+            instanceId, 
+            recordCount: executionData.items?.length || 0 
+        });
 
         const instance = await FeederInstance.findOne({ instanceId });
         if (!instance) {
             return res.status(404).json({ error: 'Instance not found' });
         }
 
-        let records = [];
+        const results = await FeederController.getLinkHitData(
+            instance,
+            executionData
+        );
 
-        if (instance.feederType === 'incoming_sms') {
-            records = await FeederController.getIncomingSmsRecords(instance, maxRows, offset);
-        } else if (instance.feederType === 'link_hits') {
-            records = await FeederController.getLinkHitsRecords(instance, maxRows, offset);
-        }
-
-        // Update stats
-        if (records.length > 0) {
-            await instance.incrementRecordsSent(records.length);
-        }
-
-        logger.info('Feeder notify complete', {
-            instanceId,
-            recordCount: records.length
+        logger.info('Feeder notify completed', { 
+            instanceId, 
+            recordsWithHits: results.filter(r => r.linkHits > 0).length,
+            totalHits: results.reduce((sum, r) => sum + (r.linkHits || 0), 0)
         });
 
         res.json({
             success: true,
-            count: records.length,
-            items: records
+            results
         });
     });
 
     /**
-     * Get incoming SMS records
+     * Get link hit data for each contact
      */
-    static async getIncomingSmsRecords(instance, maxRows, offset) {
-        try {
-            const query = {
-                installId: instance.installId,
-                processed: { $ne: true }
-            };
+    static async getLinkHitData(instance, executionData) {
+        const results = [];
+        const records = executionData.items || [];
 
-            // Filter by sender IDs if configured
-            if (instance.senderIds && instance.senderIds.length > 0) {
-                query.toNumber = { $in: instance.senderIds };
-            }
-
-            // Filter by keyword if configured
-            if (instance.textType === 'Keyword' && instance.keyword) {
-                query.message = { $regex: instance.keyword, $options: 'i' };
-            }
-
-            const replies = await SmsReply.find(query)
-                .sort({ receivedAt: 1 })
-                .skip(offset)
-                .limit(maxRows);
-
-            const records = [];
-
-            for (const reply of replies) {
-                const record = {};
-
-                // Map fields based on configuration
-                if (instance.fieldMappings.mobile) {
-                    record[instance.fieldMappings.mobile] = reply.fromNumber;
-                }
-                if (instance.fieldMappings.email) {
-                    record[instance.fieldMappings.email] = reply.emailAddress || '';
-                }
-                if (instance.fieldMappings.message) {
-                    record[instance.fieldMappings.message] = reply.message;
-                }
-                if (instance.fieldMappings.timestamp) {
-                    record[instance.fieldMappings.timestamp] = reply.receivedAt.toISOString();
-                }
-                if (instance.fieldMappings.messageId) {
-                    record[instance.fieldMappings.messageId] = reply.messageId || reply.responseId;
-                }
-                if (instance.fieldMappings.senderId) {
-                    record[instance.fieldMappings.senderId] = reply.toNumber;
+        for (const record of records) {
+            try {
+                const mobileNumber = FeederController.getFieldValue(record, 'mobilePhone');
+                const emailAddress = record.emailAddress;
+                
+                if (!mobileNumber && !emailAddress) {
+                    results.push({
+                        contactId: record.contactId,
+                        linkHits: 0,
+                        reason: 'No mobile number or email address'
+                    });
+                    continue;
                 }
 
-                // Mark as processed
-                reply.processed = true;
-                await reply.save();
+                // Find SMS logs for this contact
+                const smsQuery = {
+                    installId: instance.installId
+                };
 
-                records.push(record);
-            }
-
-            return records;
-        } catch (error) {
-            logger.error('Error getting incoming SMS records', {
-                error: error.message,
-                instanceId: instance.instanceId
-            });
-            return [];
-        }
-    }
-
-    /**
-     * Get link hits records
-     */
-    static async getLinkHitsRecords(instance, maxRows, offset) {
-        try {
-            const query = {
-                installId: instance.installId,
-                processed: { $ne: true }
-            };
-
-            const linkHits = await LinkHit.find(query)
-                .sort({ clickedAt: 1 })
-                .skip(offset)
-                .limit(maxRows);
-
-            const records = [];
-
-            for (const hit of linkHits) {
-                const record = {};
-
-                // Map fields based on configuration
-                if (instance.fieldMappings.mobile) {
-                    record[instance.fieldMappings.mobile] = hit.mobileNumber;
-                }
-                if (instance.fieldMappings.url) {
-                    record[instance.fieldMappings.url] = hit.shortUrl;
-                }
-                if (instance.fieldMappings.originalUrl) {
-                    record[instance.fieldMappings.originalUrl] = hit.originalUrl;
-                }
-                if (instance.fieldMappings.timestamp) {
-                    record[instance.fieldMappings.timestamp] = hit.clickedAt.toISOString();
-                }
-                if (instance.fieldMappings.linkHits) {
-                    record[instance.fieldMappings.linkHits] = 1; // Each record is one hit
-                }
-                if (instance.fieldMappings.email) {
-                    record[instance.fieldMappings.email] = hit.emailAddress || '';
+                if (mobileNumber) {
+                    smsQuery.mobileNumber = mobileNumber;
+                } else if (emailAddress) {
+                    smsQuery.emailAddress = emailAddress;
                 }
 
-                // Mark as processed
-                hit.processed = true;
-                await hit.save();
+                const smsLogs = await SmsLog.find(smsQuery)
+                    .sort({ createdAt: -1 })
+                    .limit(100); // Last 100 SMS
 
-                records.push(record);
-            }
+                if (smsLogs.length === 0) {
+                    results.push({
+                        contactId: record.contactId,
+                        linkHits: 0,
+                        reason: 'No SMS sent to this contact'
+                    });
+                    continue;
+                }
 
-            return records;
-        } catch (error) {
-            logger.error('Error getting link hits records', {
-                error: error.message,
-                instanceId: instance.instanceId
-            });
-            return [];
-        }
-    }
+                // Get all link hits for these SMS
+                const smsIds = smsLogs.map(sms => sms._id);
+                
+                const linkHits = await LinkHit.find({
+                    smsId: { $in: smsIds }
+                }).sort({ createdAt: -1 });
 
-    /**
-     * Handle incoming SMS webhook (for feeder)
-     * GET/POST /eloqua/feeder/incomingsms
-     */
-    static handleIncomingSms = asyncHandler(async (req, res) => {
-        const data = { ...req.query, ...req.body };
-        const { instanceId, installId } = req.query;
+                if (linkHits.length > 0) {
+                    // Get the most recent link hit
+                    const latestHit = linkHits[0];
 
-        logger.webhook('incoming_sms_feeder', {
-            instanceId,
-            from: data.mobile,
-            message: data.response
-        });
-
-        try {
-            // Find the instance to get contact info if available
-            let contactId = null;
-            let emailAddress = '';
-
-            if (instanceId) {
-                const instance = await FeederInstance.findOne({ instanceId });
-                if (instance && instance.customObjectId) {
-                    // Try to find linked SMS log
-                    const smsLog = await require('../models/SmsLog').findOne({
-                        installId: installId || data.installId || instance.installId,
-                        mobileNumber: data.mobile
-                    }).sort({ sentAt: -1 }).limit(1);
-
-                    if (smsLog) {
-                        contactId = smsLog.contactId;
-                        emailAddress = smsLog.emailAddress;
+                    // Update custom object if configured
+                    if (instance.custom_object_id) {
+                        const eloquaService = new EloquaService(instance.installId, instance.SiteId);
+                        await FeederController.updateCustomObject(
+                            eloquaService,
+                            instance,
+                            record,
+                            latestHit,
+                            linkHits.length
+                        );
                     }
+
+                    results.push({
+                        contactId: record.contactId,
+                        emailAddress: emailAddress,
+                        mobileNumber: mobileNumber,
+                        linkHits: linkHits.length,
+                        latestHitUrl: latestHit.tracked_url,
+                        originalUrl: latestHit.original_url,
+                        latestHitTime: latestHit.click_timestamp,
+                        allHits: linkHits.map(hit => ({
+                            url: hit.tracked_url,
+                            originalUrl: hit.original_url,
+                            timestamp: hit.click_timestamp,
+                            userAgent: hit.user_agent
+                        }))
+                    });
+                } else {
+                    results.push({
+                        contactId: record.contactId,
+                        emailAddress: emailAddress,
+                        mobileNumber: mobileNumber,
+                        linkHits: 0,
+                        reason: 'No link hits found'
+                    });
+                }
+
+            } catch (error) {
+                logger.error('Error getting link hit data', {
+                    instanceId: instance.instanceId,
+                    contactId: record.contactId,
+                    error: error.message
+                });
+
+                results.push({
+                    contactId: record.contactId,
+                    linkHits: 0,
+                    error: error.message
+                });
+            }
+        }
+
+        return results;
+    }
+
+    /**
+     * Update custom object with link hit data
+     */
+    static async updateCustomObject(eloquaService, instance, record, latestHit, totalHits) {
+        try {
+            const cdoData = {
+                fieldValues: []
+            };
+
+            if (instance.mobile_field) {
+                cdoData.fieldValues.push({
+                    id: instance.mobile_field,
+                    value: latestHit.mobile || record.mobilePhone || ''
+                });
+            }
+
+            if (instance.email_field) {
+                cdoData.fieldValues.push({
+                    id: instance.email_field,
+                    value: record.emailAddress || ''
+                });
+            }
+
+            if (instance.title_field) {
+                cdoData.fieldValues.push({
+                    id: instance.title_field,
+                    value: 'SMS Link Hit'
+                });
+            }
+
+            if (instance.url_field) {
+                cdoData.fieldValues.push({
+                    id: instance.url_field,
+                    value: latestHit.tracked_url
+                });
+            }
+
+            if (instance.originalurl_field) {
+                cdoData.fieldValues.push({
+                    id: instance.originalurl_field,
+                    value: latestHit.original_url || ''
+                });
+            }
+
+            if (instance.link_hits_field) {
+                cdoData.fieldValues.push({
+                    id: instance.link_hits_field,
+                    value: totalHits.toString()
+                });
+            }
+
+            if (instance.vn_field) {
+                // Get the original SMS to find virtual number
+                const sms = await SmsLog.findById(latestHit.smsId);
+                if (sms && sms.senderId) {
+                    cdoData.fieldValues.push({
+                        id: instance.vn_field,
+                        value: sms.senderId
+                    });
                 }
             }
 
-            // Create SMS reply record
-            const smsReply = new SmsReply({
-                installId: installId || data.installId,
-                contactId: contactId,
-                emailAddress: emailAddress,
-                fromNumber: data.mobile,
-                toNumber: data.longcode,
-                message: data.response,
-                messageId: data.message_id,
-                responseId: data.response_id,
-                receivedAt: data.datetime_entry ? new Date(data.datetime_entry) : new Date(),
-                isOptOut: data.is_optout === 'yes',
-                webhookData: data,
-                processed: false // Will be picked up by feeder
+            await eloquaService.createCustomObjectRecord(
+                instance.custom_object_id, 
+                cdoData
+            );
+
+            logger.debug('Custom object updated with link hit', {
+                customObjectId: instance.custom_object_id,
+                contactId: record.contactId
             });
 
-            await smsReply.save();
-
-            logger.info('Incoming SMS saved for feeder', {
-                replyId: smsReply._id,
-                instanceId
-            });
-
-            res.json({ 
-                success: true,
-                message: 'SMS received'
-            });
         } catch (error) {
-            logger.error('Error handling incoming SMS for feeder', {
+            logger.error('Error updating custom object with link hit', {
                 error: error.message,
-                data
-            });
-            
-            res.json({ 
-                success: false,
-                error: error.message
+                customObjectId: instance.custom_object_id
             });
         }
-    });
+    }
+
+    /**
+     * Get field value from record
+     */
+    static getFieldValue(record, fieldPath) {
+        if (!fieldPath) return null;
+        
+        const parts = fieldPath.split('__');
+        if (parts.length > 1) {
+            return record[parts[1]] || null;
+        }
+        
+        return record[fieldPath] || null;
+    }
 
     /**
      * Copy instance
@@ -461,10 +532,9 @@ class FeederController {
             ...instance.toObject(),
             _id: undefined,
             instanceId: newInstanceId,
-            totalRecordsSent: 0,
-            lastPolledAt: undefined,
             createdAt: undefined,
-            updatedAt: undefined
+            updatedAt: undefined,
+            requiresConfiguration: instance.custom_object_id ? true : false
         });
 
         await newInstance.save();
@@ -496,6 +566,132 @@ class FeederController {
         res.json({
             success: true,
             message: 'Instance deleted successfully'
+        });
+    });
+
+    /**
+     * Get custom objects (AJAX) with pagination and search
+     * GET /eloqua/feeder/ajax/customobjects/:installId/:siteId/customObject
+     */
+    static getCustomObjects = asyncHandler(async (req, res) => {
+        const { installId, siteId } = req.params;
+        const { search = '', page = 1, count = 50 } = req.query;
+
+        logger.debug('AJAX: Fetching custom objects', { 
+            installId, 
+            search, 
+            page, 
+            count 
+        });
+
+        const eloquaService = new EloquaService(installId, siteId);
+        
+        try {
+            const customObjects = await eloquaService.getCustomObjects(search, count);
+
+            logger.debug('Custom objects fetched', { 
+                count: customObjects.elements?.length || 0 
+            });
+
+            res.json(customObjects);
+        } catch (error) {
+            logger.error('Error fetching custom objects', {
+                installId,
+                error: error.message
+            });
+
+            res.status(500).json({
+                error: 'Failed to fetch custom objects',
+                message: error.message,
+                elements: []
+            });
+        }
+    });
+
+    /**
+     * Get custom object fields (AJAX)
+     * GET /eloqua/feeder/ajax/customobject/:installId/:siteId/:customObjectId
+     */
+    static getCustomObjectFields = asyncHandler(async (req, res) => {
+        const { installId, siteId, customObjectId } = req.params;
+
+        logger.debug('AJAX: Fetching custom object fields', { 
+            installId, 
+            customObjectId 
+        });
+
+        const eloquaService = new EloquaService(installId, siteId);
+        
+        try {
+            const customObject = await eloquaService.getCustomObject(customObjectId);
+
+            logger.debug('Custom object fields fetched', { 
+                fieldCount: customObject.fields?.length || 0 
+            });
+
+            res.json(customObject);
+        } catch (error) {
+            logger.error('Error fetching custom object fields', {
+                installId,
+                customObjectId,
+                error: error.message
+            });
+
+            res.status(500).json({
+                error: 'Failed to fetch fields',
+                message: error.message,
+                fields: []
+            });
+        }
+    });
+
+    /**
+     * Get link hit statistics
+     * GET /eloqua/feeder/stats
+     */
+    static getStats = asyncHandler(async (req, res) => {
+        const { installId, instanceId } = req.query;
+
+        logger.info('Getting feeder statistics', { installId, instanceId });
+
+        // Get total link hits
+        const totalHits = await LinkHit.countDocuments({ installId });
+
+        // Get unique contacts who clicked
+        const uniqueClickers = await LinkHit.distinct('mobile', { installId });
+
+        // Get recent hits
+        const recentHits = await LinkHit.find({ installId })
+            .sort({ createdAt: -1 })
+            .limit(20)
+            .populate('smsId', 'campaignTitle message');
+
+        // Get top clicked URLs
+        const topUrls = await LinkHit.aggregate([
+            { $match: { installId } },
+            {
+                $group: {
+                    _id: '$original_url',
+                    clicks: { $sum: 1 },
+                    uniqueClickers: { $addToSet: '$mobile' }
+                }
+            },
+            { $sort: { clicks: -1 } },
+            { $limit: 10 }
+        ]);
+
+        res.json({
+            success: true,
+            stats: {
+                totalHits,
+                uniqueClickers: uniqueClickers.length,
+                recentHits,
+                topUrls: topUrls.map(url => ({
+                    url: url._id,
+                    clicks: url.clicks,
+                    uniqueClickers: url.uniqueClickers.length
+                }))
+            }
         });
     });
 }

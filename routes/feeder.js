@@ -1,50 +1,56 @@
 const express = require('express');
 const router = express.Router();
-const { FeederController } = require('../controllers');
-const { 
-    verifyInstallation,
-    validateQueryParams 
-} = require('../middleware');
+const FeederController = require('../controllers/feederController');
+const { verifyInstallation, verifyOAuthToken } = require('../middleware/auth');
 
-// Feeder service lifecycle
+// Instance lifecycle endpoints
 router.get('/create', 
-    validateQueryParams('installId', 'siteId'),
     verifyInstallation,
     FeederController.create
 );
 
 router.get('/configure', 
-    validateQueryParams('installId', 'siteId', 'instanceId'),
     verifyInstallation,
+    verifyOAuthToken,
     FeederController.configure
 );
 
 router.post('/configure', 
-    validateQueryParams('instanceId'),
     verifyInstallation,
+    verifyOAuthToken,
     FeederController.saveConfiguration
 );
 
 router.post('/notify', 
-    validateQueryParams('instanceId'),
     verifyInstallation,
+    verifyOAuthToken,
     FeederController.notify
 );
 
 router.post('/copy', 
-    validateQueryParams('instanceId'),
     verifyInstallation,
     FeederController.copy
 );
 
 router.post('/delete', 
-    validateQueryParams('instanceId'),
     verifyInstallation,
     FeederController.delete
 );
 
-// Webhook endpoint for incoming SMS (for feeder)
-router.get('/incomingsms', FeederController.handleIncomingSms);
-router.post('/incomingsms', FeederController.handleIncomingSms);
+// AJAX endpoints for configuration
+router.get('/ajax/customobjects/:installId/:siteId/customObject',
+    FeederController.getCustomObjects
+);
+
+router.get('/ajax/customobject/:installId/:siteId/:customObjectId',
+    FeederController.getCustomObjectFields
+);
+
+// Statistics endpoint
+router.get('/stats',
+    verifyInstallation,
+    verifyOAuthToken,
+    FeederController.getStats
+);
 
 module.exports = router;

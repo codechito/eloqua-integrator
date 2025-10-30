@@ -13,6 +13,163 @@ class EloquaService {
     }
 
     /**
+     * Update action instance with recordDefinition
+     * PUT /api/cloud/1.0/actions/instances/{id}
+     */
+    async updateActionInstance(instanceId, updatePayload) {
+        const url = `/api/cloud/1.0/actions/instances/${instanceId}`;
+        
+        logger.info('Updating Eloqua action instance', {
+            instanceId,
+            url,
+            payload: updatePayload
+        });
+
+        try {
+            const response = await this.client.put(url, updatePayload);
+            
+            logger.info('Eloqua action instance updated successfully', {
+                instanceId,
+                requiresConfiguration: updatePayload.requiresConfiguration
+            });
+            
+            return response.data;
+        } catch (error) {
+            logger.error('Failed to update Eloqua action instance', {
+                instanceId,
+                error: error.message,
+                status: error.response?.status,
+                response: error.response?.data
+            });
+            throw error;
+        }
+    }
+
+    /**
+     * Update decision instance with recordDefinition
+     * PUT /api/cloud/1.0/decisions/instances/{id}
+     */
+    async updateDecisionInstance(instanceId, updatePayload) {
+        const url = `/api/cloud/1.0/decisions/instances/${instanceId}`;
+        
+        logger.info('Updating Eloqua decision instance', {
+            instanceId,
+            url,
+            payload: updatePayload
+        });
+
+        try {
+            const response = await this.client.put(url, updatePayload);
+            
+            logger.info('Eloqua decision instance updated successfully', {
+                instanceId,
+                requiresConfiguration: updatePayload.requiresConfiguration
+            });
+            
+            return response.data;
+        } catch (error) {
+            logger.error('Failed to update Eloqua decision instance', {
+                instanceId,
+                error: error.message,
+                status: error.response?.status,
+                response: error.response?.data
+            });
+            throw error;
+        }
+    }
+
+    /**
+     * Update feeder instance with recordDefinition
+     * PUT /api/cloud/1.0/content/instances/{id}
+     */
+    async updateFeederInstance(instanceId, updatePayload) {
+        const url = `/api/cloud/1.0/content/instances/${instanceId}`;
+        
+        logger.info('Updating Eloqua feeder instance', {
+            instanceId,
+            url,
+            payload: updatePayload
+        });
+
+        try {
+            const response = await this.client.put(url, updatePayload);
+            
+            logger.info('Eloqua feeder instance updated successfully', {
+                instanceId,
+                requiresConfiguration: updatePayload.requiresConfiguration
+            });
+            
+            return response.data;
+        } catch (error) {
+            logger.error('Failed to update Eloqua feeder instance', {
+                instanceId,
+                error: error.message,
+                status: error.response?.status,
+                response: error.response?.data
+            });
+            throw error;
+        }
+    }
+
+    /**
+     * Get action instance details
+     * GET /api/cloud/1.0/actions/instances/{id}
+     */
+    async getActionInstance(instanceId) {
+        const url = `/api/cloud/1.0/actions/instances/${instanceId}`;
+        
+        try {
+            const response = await this.client.get(url);
+            return response.data;
+        } catch (error) {
+            logger.error('Failed to get action instance', {
+                instanceId,
+                error: error.message
+            });
+            throw error;
+        }
+    }
+
+    /**
+     * Get decision instance details
+     * GET /api/cloud/1.0/decisions/instances/{id}
+     */
+    async getDecisionInstance(instanceId) {
+        const url = `/api/cloud/1.0/decisions/instances/${instanceId}`;
+        
+        try {
+            const response = await this.client.get(url);
+            return response.data;
+        } catch (error) {
+            logger.error('Failed to get decision instance', {
+                instanceId,
+                error: error.message
+            });
+            throw error;
+        }
+    }
+
+    /**
+     * Get feeder instance details
+     * GET /api/cloud/1.0/content/instances/{id}
+     */
+    async getFeederInstance(instanceId) {
+        const url = `/api/cloud/1.0/content/instances/${instanceId}`;
+        
+        try {
+            const response = await this.client.get(url);
+            return response.data;
+        } catch (error) {
+            logger.error('Failed to get feeder instance', {
+                instanceId,
+                error: error.message
+            });
+            throw error;
+        }
+    }
+
+
+    /**
      * Get Eloqua base URL
      */
     async getBaseUrl() {

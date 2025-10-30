@@ -1,6 +1,7 @@
 const ActionInstance = require('../models/ActionInstance');
 const Consumer = require('../models/Consumer');
 const SmsLog = require('../models/SmsLog');
+const SmsJob = require('../models/SmsJob');
 const { EloquaService, TransmitSmsService } = require('../services');
 const { 
     logger, 
@@ -106,7 +107,8 @@ class ActionController {
             recipient_field: 'mobilePhone',
             message_expiry: 'NO',
             message_validity: 1,
-            send_mode: 'all'
+            send_mode: 'all',
+            requiresConfiguration: true // Initially requires configuration
         });
 
         await instance.save();
@@ -146,7 +148,8 @@ class ActionController {
                 SiteId: siteId,
                 message_expiry: 'NO',
                 message_validity: 1,
-                send_mode: 'all'
+                send_mode: 'all',
+                requiresConfiguration: true
             };
         }
 
@@ -204,7 +207,7 @@ class ActionController {
     });
 
     /**
-     * Save configuration
+     * Save configuration and update Eloqua instance
      * POST /eloqua/action/configure
      */
     static saveConfiguration = asyncHandler(async (req, res) => {
@@ -224,15 +227,184 @@ class ActionController {
             Object.assign(instance, instanceData);
         }
 
+        // Check if configuration is complete
+        const isConfigured = ActionController.validateConfiguration(instance);
+        instance.requiresConfiguration = !isConfigured;
+
         await instance.save();
 
-        logger.info('Action configuration saved', { instanceId });
-
-        res.json({
-            success: true,
-            message: 'Configuration saved successfully'
+        logger.info('Action configuration saved', { 
+            instanceId,
+            requiresConfiguration: instance.requiresConfiguration
         });
+
+        // Update Eloqua instance with recordDefinition
+        try {
+            await ActionController.updateEloquaInstance(instance);
+            
+            logger.info('Eloqua instance updated successfully', { instanceId });
+
+            res.json({
+                success: true,
+                message: 'Configuration saved successfully',
+                requiresConfiguration: instance.requiresConfiguration
+            });
+
+        } catch (error) {
+            logger.error('Failed to update Eloqua instance', {
+                instanceId,
+                error: error.message
+            });
+
+            // Still return success for local save, but warn about Eloqua update
+            res.json({
+                success: true,
+                message: 'Configuration saved locally, but failed to update Eloqua',
+                warning: error.message,
+                requiresConfiguration: instance.requiresConfiguration
+            });
+        }
     });
+
+    /**
+     * Validate if configuration is complete
+     */
+    static validateConfiguration(instance) {
+        // Check required fields
+        if (!instance.message || !instance.message.trim()) {
+            return false;
+        }
+
+        if (!instance.recipient_field) {
+            return false;
+        }
+
+        // If custom object is configured, check required mappings
+        if (instance.custom_object_id) {
+            if (!instance.email_field || !instance.mobile_field) {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    /**
+     * Update Eloqua instance with recordDefinition
+     */
+    static async updateEloquaInstance(instance) {
+        try {
+            const eloquaService = new EloquaService(instance.installId, instance.SiteId);
+
+            // Build recordDefinition based on configuration
+            const recordDefinition = await ActionController.buildRecordDefinition(instance);
+
+            // Prepare update payload
+            const updatePayload = {
+                recordDefinition: recordDefinition,
+                requiresConfiguration: instance.requiresConfiguration
+            };
+
+            logger.info('Updating Eloqua instance', {
+                instanceId: instance.instanceId,
+                recordDefinition,
+                requiresConfiguration: instance.requiresConfiguration
+            });
+
+            // Call Eloqua API to update instance
+            await eloquaService.updateActionInstance(instance.instanceId, updatePayload);
+
+            logger.info('Eloqua instance updated', {
+                instanceId: instance.instanceId
+            });
+
+        } catch (error) {
+            logger.error('Error updating Eloqua instance', {
+                instanceId: instance.instanceId,
+                error: error.message,
+                stack: error.stack
+            });
+            throw error;
+        }
+    }
+
+    /**
+     * Build recordDefinition object for Eloqua
+     */
+    static async buildRecordDefinition(instance) {
+        const recordDefinition = {};
+
+        // Always include contact basic fields
+        recordDefinition.ContactID = instance.recipient_field || 'ContactID';
+        recordDefinition.EmailAddress = 'EmailAddress';
+
+        // Add custom object fields if configured
+        if (instance.custom_object_id) {
+            const eloquaService = new EloquaService(instance.installId, instance.SiteId);
+            
+            try {
+                // Get custom object details to get field names
+                const customObject = await eloquaService.getCustomObject(instance.custom_object_id);
+                
+                // Map configured fields
+                if (instance.mobile_field) {
+                    const field = customObject.fields.find(f => f.internalName === instance.mobile_field);
+                    recordDefinition[field?.name || instance.mobile_field] = instance.mobile_field;
+                }
+
+                if (instance.email_field) {
+                    const field = customObject.fields.find(f => f.internalName === instance.email_field);
+                    recordDefinition[field?.name || instance.email_field] = instance.email_field;
+                }
+
+                if (instance.title_field) {
+                    const field = customObject.fields.find(f => f.internalName === instance.title_field);
+                    recordDefinition[field?.name || instance.title_field] = instance.title_field;
+                }
+
+                if (instance.notification_field) {
+                    const field = customObject.fields.find(f => f.internalName === instance.notification_field);
+                    recordDefinition[field?.name || instance.notification_field] = instance.notification_field;
+                }
+
+                if (instance.outgoing_field) {
+                    const field = customObject.fields.find(f => f.internalName === instance.outgoing_field);
+                    recordDefinition[field?.name || instance.outgoing_field] = instance.outgoing_field;
+                }
+
+                if (instance.vn_field) {
+                    const field = customObject.fields.find(f => f.internalName === instance.vn_field);
+                    recordDefinition[field?.name || instance.vn_field] = instance.vn_field;
+                }
+
+            } catch (error) {
+                logger.warn('Could not fetch custom object for recordDefinition', {
+                    customObjectId: instance.custom_object_id,
+                    error: error.message
+                });
+
+                // Fallback to internal names
+                if (instance.mobile_field) recordDefinition.Mobile = instance.mobile_field;
+                if (instance.email_field) recordDefinition.Email = instance.email_field;
+                if (instance.title_field) recordDefinition.Title = instance.title_field;
+                if (instance.notification_field) recordDefinition.Notification = instance.notification_field;
+                if (instance.outgoing_field) recordDefinition.Message = instance.outgoing_field;
+                if (instance.vn_field) recordDefinition.VirtualNumber = instance.vn_field;
+            }
+        }
+
+        // Add country field if configured
+        if (instance.country_field) {
+            recordDefinition.Country = instance.country_field;
+        }
+
+        logger.debug('Built recordDefinition', {
+            instanceId: instance.instanceId,
+            recordDefinition
+        });
+
+        return recordDefinition;
+    }
 
 
     /**
@@ -747,7 +919,8 @@ class ActionController {
             totalFailed: 0,
             lastExecutedAt: undefined,
             createdAt: undefined,
-            updatedAt: undefined
+            updatedAt: undefined,
+            requiresConfiguration: true // New copy requires configuration
         });
 
         await newInstance.save();

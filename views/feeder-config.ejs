@@ -1,0 +1,274 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="utf-8">
+    <meta http-equiv="X-UA-Compatible" content="IE=edge">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+
+    <title>TransmitSMS: Link Hits Feeder Configuration</title>
+
+    <link href="/eloqua-service/assets/css/bootstrap.min.css" rel="stylesheet">
+    <link href="/eloqua-service/assets/css/main.css" rel="stylesheet">
+    <link rel="stylesheet" href="https://unpkg.com/vue-select@3.0.0/dist/vue-select.css">
+  </head>
+  <body>
+  <div class="disabler"></div>
+  <div class="container" id="feederconfig" style="width: 600px;">
+    <br/>
+    <br/>
+    <h4 style="font-size: 20px; font-weight: bold; text-align: center;">
+      <img src="/eloqua-service/assets/eloqua-sms-link-128.png" style="background-color:#73e073">&nbsp;SMS Link Hits Feeder
+    </h4>
+    <br/>
+    
+    <div v-if="status.success || status.error" v-bind:class="{ 'alert-success': status.success, 'alert-danger': status.error, 'in': fade }" class="alert alert-dismissible fade" role="alert">
+      {{ status.success || status.error }}
+    </div>
+
+    <div class="alert alert-info">
+      <strong>Note:</strong> This feeder tracks SMS link hits automatically. You can optionally map link hit data to a custom object for reporting.
+    </div>
+
+    <form method="post">
+      <div class="form-group">
+        <label>
+          <input type="checkbox" v-model="enableCustomObject"> 
+          Enable Custom Object Mapping (Optional)
+        </label>
+      </div>
+
+      <div v-if="enableCustomObject">
+        <div class="form-group">
+          <label for="custom_object_id">Custom Object for Link Hits</label>
+          <v-select  
+            label="name"
+            style="width: 100%;"
+            v-model="instance.custom_object_id" 
+            :reduce="element => element.id" 
+            :options="comap" 
+            @search="fetchOptionsmap" 
+            @input="getFields()" 
+            placeholder="Select custom object...">
+          </v-select>
+        </div>
+
+        <div v-if="instance.custom_object_id">
+          <div class="row">
+            <div class="col-md-6">
+              <div class="form-group">
+                <label>Map Mobile To</label>
+                <select v-model="instance.mobile_field" class="form-control">
+                  <option value="">-- Select Field --</option>
+                  <option v-for="field in cdofields" v-bind:value="field.internalName">
+                    {{ field.name }}
+                  </option>
+                </select>
+              </div>
+            </div>
+
+            <div class="col-md-6">
+              <div class="form-group">
+                <label>Map Email To</label>
+                <select v-model="instance.email_field" class="form-control">
+                  <option value="">-- Select Field --</option>
+                  <option v-for="field in cdofields" v-bind:value="field.internalName">
+                    {{ field.name }}
+                  </option>
+                </select>
+              </div>
+            </div>
+          </div>
+
+          <div class="row">
+            <div class="col-md-6">
+              <div class="form-group">
+                <label>Map Clicked URL To</label>
+                <select v-model="instance.url_field" class="form-control">
+                  <option value="">-- Select Field --</option>
+                  <option v-for="field in cdofields" v-bind:value="field.internalName">
+                    {{ field.name }}
+                  </option>
+                </select>
+              </div>
+            </div>
+
+            <div class="col-md-6">
+              <div class="form-group">
+                <label>Map Original URL To</label>
+                <select v-model="instance.originalurl_field" class="form-control">
+                  <option value="">-- Select Field --</option>
+                  <option v-for="field in cdofields" v-bind:value="field.internalName">
+                    {{ field.name }}
+                  </option>
+                </select>
+              </div>
+            </div>
+          </div>
+
+          <div class="row">
+            <div class="col-md-6">
+              <div class="form-group">
+                <label>Map Link Hit Count To</label>
+                <select v-model="instance.link_hits_field" class="form-control">
+                  <option value="">-- Select Field --</option>
+                  <option v-for="field in cdofields" v-bind:value="field.internalName">
+                    {{ field.name }}
+                  </option>
+                </select>
+              </div>
+            </div>
+
+            <div class="col-md-6">
+              <div class="form-group">
+                <label>Map Campaign Title To</label>
+                <select v-model="instance.title_field" class="form-control">
+                  <option value="">-- Select Field --</option>
+                  <option v-for="field in cdofields" v-bind:value="field.internalName">
+                    {{ field.name }}
+                  </option>
+                </select>
+              </div>
+            </div>
+          </div>
+
+          <div class="form-group">
+            <label>Map Virtual Number To</label>
+            <select v-model="instance.vn_field" class="form-control">
+              <option value="">-- Select Field --</option>
+              <option v-for="field in cdofields" v-bind:value="field.internalName">
+                {{ field.name }}
+              </option>
+            </select>
+          </div>
+        </div>
+      </div>
+
+      <div class="alert alert-warning" v-if="!enableCustomObject">
+        Link hits will be tracked but not synced to Eloqua custom objects. You can still view them in the SMS logs.
+      </div>
+
+      <button type="button" v-on:click="saveInstance()" class="btn btn-primary btn-block">
+        Save Configuration
+      </button>
+    </form>
+
+    <br/>
+    <div v-if="status.success || status.error" v-bind:class="{ 'alert-success': status.success, 'alert-danger': status.error, 'in': fade }" class="alert alert-dismissible fade" role="alert">
+      {{ status.success || status.error }}
+    </div>
+  </div>
+
+  <script src="https://cdn.jsdelivr.net/npm/vue@2.6.11"></script>
+  <script src="/eloqua-service/assets/js/axios.min.js"></script>
+  <script src="https://unpkg.com/vue-select@3.0.0"></script>
+
+  <script type="text/javascript">
+    var instance = <%-JSON.stringify(instance)%>;
+
+    Vue.component('v-select', VueSelect.VueSelect);
+    var custom_objects = <%-JSON.stringify(custom_objects)%>;
+    var comap = JSON.parse(JSON.stringify(custom_objects.elements));
+
+    var app = new Vue({
+      el: '#feederconfig',
+      data: {
+        instance: instance,
+        consumer: <%-JSON.stringify(consumer)%>,
+        status: {},
+        custom_objects: <%-JSON.stringify(custom_objects)%>,
+        comap: comap,
+        cdofields: [],
+        fade: false,
+        enableCustomObject: !!instance.custom_object_id
+      },
+      watch: {
+        enableCustomObject(newVal) {
+          if (!newVal) {
+            this.instance.custom_object_id = null;
+            this.instance.mobile_field = null;
+            this.instance.email_field = null;
+            this.instance.title_field = null;
+            this.instance.url_field = null;
+            this.instance.originalurl_field = null;
+            this.instance.link_hits_field = null;
+            this.instance.vn_field = null;
+          }
+        }
+      },
+      methods: {
+        fetchOptionsmap: function(search, loading) {
+          var vm = this;
+          const options = {
+            method: "GET",
+            url: "/eloqua/feeder/ajax/customobjects/" + this.consumer.installId + "/" + this.consumer.SiteId + "/customObject?search=" + search
+          };
+          axios(options)
+            .then(function(response) {
+              vm.comap = response.data.elements;
+            })
+            .catch(function (error) {
+              vm.comap = JSON.parse(JSON.stringify(custom_objects.elements)); 
+            });
+        },
+
+        getFields() {
+          var vm = this;
+          if (this.instance.custom_object_id) {
+            const options = {
+              method: "GET",
+              url: "/eloqua/feeder/ajax/customobject/" + this.consumer.installId + "/" + this.consumer.SiteId + "/" + this.instance.custom_object_id
+            };
+            axios(options)
+              .then(function(response) {
+                vm.cdofields = response.data.fields;
+              })
+              .catch(function (error) {
+                console.log(error);
+              });
+          }
+        },
+
+        saveInstance() {
+          var vm = this;
+
+          const options = {
+            method: "POST",
+            url: location.pathname + location.search,
+            headers: { 'Content-Type': 'application/json' },
+            data: JSON.stringify({ "instance": vm.instance })
+          };
+
+          axios(options)
+            .then(function(response) {
+              vm.fade = true;
+              vm.status = {
+                success: response.data.message || 'Configuration saved successfully'
+              };
+
+              setTimeout(() => {
+                vm.fade = false;
+                vm.status = {};
+              }, 3000);
+            })
+            .catch(function (error) {
+              vm.fade = true;
+              vm.status = {
+                error: error.response?.data?.message || 'Failed to save configuration'
+              };
+
+              setTimeout(() => {
+                vm.fade = false;
+                vm.status = {};
+              }, 3000);
+            });
+        }
+      },
+      mounted: function () {
+        if (this.instance.custom_object_id) {
+          this.getFields();
+        }
+      }
+    });
+  </script>
+  </body>
+</html>
