@@ -431,7 +431,6 @@ class AppController {
             error: oauthError
         });
 
-        // Handle OAuth errors from Eloqua
         if (oauthError) {
             logger.error('OAuth error from Eloqua', {
                 error: oauthError,
@@ -464,7 +463,6 @@ class AppController {
             
             const tokenData = await OAuthService.getAccessToken(code);
 
-            // Validate token response
             if (!tokenData.access_token) {
                 throw new Error('No access token received from Eloqua');
             }
@@ -473,7 +471,6 @@ class AppController {
                 hasAccessToken: !!tokenData.access_token,
                 hasRefreshToken: !!tokenData.refresh_token,
                 expiresIn: tokenData.expires_in,
-                tokenType: tokenData.tokenType,
                 tokenLength: tokenData.access_token?.length || 0,
                 tokenPreview: tokenData.access_token 
                     ? `${tokenData.access_token.substring(0, 15)}...${tokenData.access_token.substring(tokenData.access_token.length - 15)}`
@@ -481,7 +478,6 @@ class AppController {
                 isBase64: tokenData.access_token?.match(/^[A-Za-z0-9+/=]+$/) ? true : false
             });
 
-            // Get installId from state or session
             const installId = state || req.session.installId;
 
             if (!installId) {
@@ -489,7 +485,6 @@ class AppController {
                 return res.status(400).send('Installation ID missing');
             }
 
-            // Find and update consumer
             const consumer = await Consumer.findOne({ installId })
                 .select('+oauth_token +oauth_refresh_token');
 
@@ -504,11 +499,9 @@ class AppController {
                 SiteId: consumer.SiteId
             });
 
-            // Calculate and save token expiry
-            const expiresIn = tokenData.expires_in || 28800; // Default 8 hours
+            const expiresIn = tokenData.expires_in || 28800;
             const expiresAt = new Date(Date.now() + (expiresIn * 1000));
 
-            // Save tokens
             consumer.oauth_token = tokenData.access_token;
             consumer.oauth_refresh_token = tokenData.refresh_token;
             consumer.oauth_expires_at = expiresAt;
@@ -523,7 +516,6 @@ class AppController {
                 hasRefreshToken: !!tokenData.refresh_token
             });
 
-            // Verify tokens were actually saved
             const verifyConsumer = await Consumer.findOne({ installId })
                 .select('+oauth_token +oauth_refresh_token +oauth_expires_at');
 
@@ -554,18 +546,20 @@ class AppController {
             delete req.session.returnTo;
             delete req.session.eloquaCallbackUrl;
 
-            // Redirect based on context
+            // **FIX: Always redirect to Eloqua callback during install**
             if (eloquaCallbackUrl) {
-                // App install flow - return to Eloqua
-                logger.info('Redirecting to Eloqua callback URL', {
+                // App install flow - return to Eloqua to complete installation
+                logger.info('Redirecting to Eloqua callback URL to complete install', {
                     installId,
                     callbackUrl: eloquaCallbackUrl
                 });
-                res.redirect(eloquaCallbackUrl);
+                
+                // Redirect to Eloqua's callback to mark install as complete
+                return res.redirect(eloquaCallbackUrl);
             } else if (returnTo === 'config') {
                 // Configuration flow - go to config page
                 logger.info('Redirecting to config page', { installId });
-                res.redirect(`/eloqua/app/config?installId=${installId}&success=true`);
+                return res.redirect(`/eloqua/app/config?installId=${installId}&success=true`);
             } else {
                 // Default success page
                 res.send(`
