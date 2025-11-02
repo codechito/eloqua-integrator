@@ -11,36 +11,23 @@ class AppController {
      */
     static install = asyncHandler(async (req, res) => {
         // Eloqua sends data as query parameters even for POST requests
-        const params = { ...req.query, ...req.body };
-        
         const { 
             siteName, 
             siteId, 
             callback,
             callbackUrl,
             installId: existingInstallId 
-        } = params;
+        } = req.query;
 
         logger.info('App install request received', {
             method: req.method,
             siteName,
             siteId,
             callback,
-            callbackUrl,
-            existingInstallId,
-            hasExistingInstallId: !!existingInstallId,
-            queryParams: Object.keys(req.query),
-            bodyParams: Object.keys(req.body)
+            existingInstallId
         });
 
         if (!siteName || !siteId) {
-            logger.error('Missing required parameters', {
-                hasSiteName: !!siteName,
-                hasSiteId: !!siteId,
-                query: req.query,
-                body: req.body
-            });
-            
             return res.status(400).json({
                 error: 'Missing required parameters: siteName and siteId'
             });
@@ -51,19 +38,10 @@ class AppController {
 
         // Check if this is a reinstall
         if (existingInstallId) {
-            logger.info('Existing installId provided, checking for reinstall', {
-                installId: existingInstallId
-            });
-
             consumer = await Consumer.findOne({ installId: existingInstallId });
             
             if (consumer) {
-                logger.info('Found existing consumer, reactivating', {
-                    installId: existingInstallId,
-                    wasActive: consumer.isActive
-                });
-
-                // Reactivate consumer
+                logger.info('Reactivating existing consumer', { installId: existingInstallId });
                 consumer.isActive = true;
                 consumer.siteName = siteName;
                 consumer.siteId = siteId;
@@ -74,12 +52,8 @@ class AppController {
         // Create new consumer if not found
         if (!consumer) {
             installId = generateId();
-
-            logger.info('Creating new consumer', {
-                installId,
-                siteName,
-                siteId
-            });
+            
+            logger.info('Creating new consumer', { installId, siteName, siteId });
 
             consumer = new Consumer({
                 installId,
@@ -91,27 +65,15 @@ class AppController {
             await consumer.save();
         }
 
-        logger.info('Consumer ready, initiating OAuth', {
-            installId,
-            siteName,
-            siteId,
-            isNew: !existingInstallId
-        });
-
-        // Store callback URL and installId in session
+        // Store in session
         req.session.installId = installId;
         req.session.eloquaCallbackUrl = callback || callbackUrl;
 
-        // Generate OAuth URL
+        // Redirect to OAuth
         const authUrl = OAuthService.getAuthorizationUrl(installId);
         
-        logger.info('Redirecting to OAuth for install', {
-            installId,
-            authUrl,
-            callback: callback || callbackUrl
-        });
+        logger.info('Redirecting to OAuth', { installId, authUrl });
 
-        // Redirect to OAuth authorization
         res.redirect(authUrl);
     });
 
