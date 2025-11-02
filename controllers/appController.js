@@ -22,7 +22,8 @@ class AppController {
             method: req.method,
             siteName,
             siteId,
-            callback,
+            callback,  // This is the Eloqua callback URL
+            callbackUrl,
             existingInstallId
         });
 
@@ -40,7 +41,6 @@ class AppController {
         let installId = existingInstallId;
         let consumer;
 
-        // Check if this is a reinstall
         if (existingInstallId) {
             consumer = await Consumer.findOne({ installId: existingInstallId });
             
@@ -53,7 +53,7 @@ class AppController {
                 
                 consumer.isActive = true;
                 consumer.siteName = siteName;
-                consumer.SiteId = siteId;  // Use SiteId (capital S and I)
+                consumer.SiteId = siteId;
                 await consumer.save();
                 
                 logger.info('Consumer updated', {
@@ -64,7 +64,6 @@ class AppController {
             }
         }
 
-        // Create new consumer if not found
         if (!consumer) {
             installId = generateId();
             
@@ -77,13 +76,12 @@ class AppController {
             consumer = new Consumer({
                 installId,
                 siteName,
-                SiteId: siteId,  // Use SiteId (capital S and I)
+                SiteId: siteId,
                 isActive: true
             });
 
             await consumer.save();
             
-            // Verify it was saved
             const verifyConsumer = await Consumer.findOne({ installId });
             logger.info('Consumer created and verified', {
                 installId,
@@ -93,17 +91,24 @@ class AppController {
             });
         }
 
-        // Store in session
+        // **FIX: Store callback URL in session with logging**
         req.session.installId = installId;
         req.session.eloquaCallbackUrl = callback || callbackUrl;
 
-        // Redirect to OAuth
+        logger.info('Session data stored for OAuth', {
+            installId,
+            eloquaCallbackUrl: req.session.eloquaCallbackUrl,
+            hasCallback: !!(callback || callbackUrl),
+            sessionId: req.sessionID
+        });
+
         const authUrl = OAuthService.getAuthorizationUrl(installId);
         
         logger.info('Redirecting to OAuth', { 
             installId,
             SiteId: consumer.SiteId,
-            authUrl 
+            authUrl,
+            willRedirectBackTo: req.session.eloquaCallbackUrl || 'config page'
         });
 
         res.redirect(authUrl);
@@ -423,12 +428,19 @@ class AppController {
     static oauthCallback = asyncHandler(async (req, res) => {
         const { code, state, error: oauthError } = req.query;
 
+        // **FIX: Log session data immediately**
         logger.info('OAuth callback received', { 
             hasCode: !!code, 
             hasState: !!state,
             hasError: !!oauthError,
             state,
-            error: oauthError
+            error: oauthError,
+            sessionData: {
+                installId: req.session?.installId,
+                returnTo: req.session?.returnTo,
+                eloquaCallbackUrl: req.session?.eloquaCallbackUrl,
+                hasSession: !!req.session
+            }
         });
 
         if (oauthError) {
@@ -474,11 +486,10 @@ class AppController {
                 tokenLength: tokenData.access_token?.length || 0,
                 tokenPreview: tokenData.access_token 
                     ? `${tokenData.access_token.substring(0, 15)}...${tokenData.access_token.substring(tokenData.access_token.length - 15)}`
-                    : 'NO_TOKEN',
-                isBase64: tokenData.access_token?.match(/^[A-Za-z0-9+/=]+$/) ? true : false
+                    : 'NO_TOKEN'
             });
 
-            const installId = state || req.session.installId;
+            const installId = state || req.session?.installId;
 
             if (!installId) {
                 logger.error('No installId found in state or session');
@@ -516,105 +527,95 @@ class AppController {
                 hasRefreshToken: !!tokenData.refresh_token
             });
 
-            const verifyConsumer = await Consumer.findOne({ installId })
-                .select('+oauth_token +oauth_refresh_token +oauth_expires_at');
+            // **FIX: Get session data BEFORE cleanup**
+            const returnTo = req.session?.returnTo || 'config';
+            const eloquaCallbackUrl = req.session?.eloquaCallbackUrl;
 
-            const tokenMatches = verifyConsumer.oauth_token === tokenData.access_token;
-
-            logger.info('Verified tokens in database', {
+            logger.info('Redirect decision', {
                 installId,
-                hasToken: !!verifyConsumer.oauth_token,
-                hasRefreshToken: !!verifyConsumer.oauth_refresh_token,
-                tokenLength: verifyConsumer.oauth_token?.length || 0,
-                tokenMatches,
-                expiresAt: verifyConsumer.oauth_expires_at?.toISOString()
+                eloquaCallbackUrl,
+                hasEloquaCallbackUrl: !!eloquaCallbackUrl,
+                returnTo,
+                sessionStillExists: !!req.session
             });
 
-            if (!tokenMatches) {
-                logger.error('Token mismatch after save!', {
-                    installId,
-                    savedLength: verifyConsumer.oauth_token?.length,
-                    originalLength: tokenData.access_token.length
-                });
+            // **FIX: Clean up session AFTER getting values**
+            if (req.session) {
+                delete req.session.returnTo;
+                delete req.session.eloquaCallbackUrl;
             }
 
-            // Get return destination
-            const returnTo = req.session.returnTo || 'config';
-            const eloquaCallbackUrl = req.session.eloquaCallbackUrl;
-
-            // Clean up session
-            delete req.session.returnTo;
-            delete req.session.eloquaCallbackUrl;
-
-            // **FIX: Always redirect to Eloqua callback during install**
+            // **PRIORITY 1: If there's an Eloqua callback URL, redirect there**
             if (eloquaCallbackUrl) {
-                // App install flow - return to Eloqua to complete installation
-                logger.info('Redirecting to Eloqua callback URL to complete install', {
+                logger.info('Redirecting to Eloqua callback URL to complete installation', {
                     installId,
                     callbackUrl: eloquaCallbackUrl
                 });
                 
-                // Redirect to Eloqua's callback to mark install as complete
                 return res.redirect(eloquaCallbackUrl);
-            } else if (returnTo === 'config') {
-                // Configuration flow - go to config page
-                logger.info('Redirecting to config page', { installId });
-                return res.redirect(`/eloqua/app/config?installId=${installId}&success=true`);
-            } else {
-                // Default success page
-                res.send(`
-                    <html>
-                    <head>
-                        <title>Authorization Successful</title>
-                        <style>
-                            body {
-                                font-family: Arial, sans-serif;
-                                text-align: center;
-                                padding: 50px;
-                                background: #f5f5f5;
-                            }
-                            .success {
-                                background: white;
-                                padding: 40px;
-                                border-radius: 8px;
-                                box-shadow: 0 2px 10px rgba(0,0,0,0.1);
-                                max-width: 500px;
-                                margin: 0 auto;
-                            }
-                            .checkmark {
-                                color: #4CAF50;
-                                font-size: 60px;
-                            }
-                            h2 { color: #333; }
-                            p { color: #666; }
-                            .btn {
-                                display: inline-block;
-                                padding: 10px 20px;
-                                background: #4CAF50;
-                                color: white;
-                                text-decoration: none;
-                                border-radius: 4px;
-                                margin-top: 20px;
-                            }
-                        </style>
-                    </head>
-                    <body>
-                        <div class="success">
-                            <div class="checkmark">✓</div>
-                            <h2>Authorization Successful</h2>
-                            <p>Your app has been successfully connected to Eloqua.</p>
-                            <p>Token expires: ${expiresAt.toLocaleString()}</p>
-                            <a href="/eloqua/app/config?installId=${installId}" class="btn">Go to Configuration</a>
-                        </div>
-                        <script>
-                            if (window.opener) {
-                                setTimeout(() => window.close(), 3000);
-                            }
-                        </script>
-                    </body>
-                    </html>
-                `);
             }
+            
+            // **PRIORITY 2: Reauth flow - go to config**
+            if (returnTo === 'config') {
+                logger.info('No Eloqua callback - Redirecting to config page', { installId });
+                return res.redirect(`/eloqua/app/config?installId=${installId}&success=true`);
+            }
+            
+            // **PRIORITY 3: Default success page**
+            logger.info('No specific redirect - Showing success page', { installId });
+            
+            return res.send(`
+                <html>
+                <head>
+                    <title>Authorization Successful</title>
+                    <style>
+                        body {
+                            font-family: Arial, sans-serif;
+                            text-align: center;
+                            padding: 50px;
+                            background: #f5f5f5;
+                        }
+                        .success {
+                            background: white;
+                            padding: 40px;
+                            border-radius: 8px;
+                            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+                            max-width: 500px;
+                            margin: 0 auto;
+                        }
+                        .checkmark {
+                            color: #4CAF50;
+                            font-size: 60px;
+                        }
+                        h2 { color: #333; }
+                        p { color: #666; }
+                        .btn {
+                            display: inline-block;
+                            padding: 10px 20px;
+                            background: #4CAF50;
+                            color: white;
+                            text-decoration: none;
+                            border-radius: 4px;
+                            margin-top: 20px;
+                        }
+                    </style>
+                </head>
+                <body>
+                    <div class="success">
+                        <div class="checkmark">✓</div>
+                        <h2>Authorization Successful</h2>
+                        <p>Your app has been successfully connected to Eloqua.</p>
+                        <p>Token expires: ${expiresAt.toLocaleString()}</p>
+                        <a href="/eloqua/app/config?installId=${installId}" class="btn">Go to Configuration</a>
+                    </div>
+                    <script>
+                        if (window.opener) {
+                            setTimeout(() => window.close(), 3000);
+                        }
+                    </script>
+                </body>
+                </html>
+            `);
 
         } catch (error) {
             logger.error('OAuth callback error', {
@@ -624,7 +625,7 @@ class AppController {
                 status: error.response?.status
             });
 
-            res.status(500).send(`
+            return res.status(500).send(`
                 <html>
                 <head>
                     <title>Authorization Failed</title>
@@ -675,7 +676,7 @@ class AppController {
                         <h2>Authorization Failed</h2>
                         <p>Failed to complete OAuth authentication.</p>
                         <div class="details">${error.message}</div>
-                        <a href="/eloqua/app/authorize?installId=${state || req.session.installId}" class="btn">Try Again</a>
+                        <a href="/eloqua/app/authorize?installId=${state || req.session?.installId}" class="btn">Try Again</a>
                     </div>
                 </body>
                 </html>
