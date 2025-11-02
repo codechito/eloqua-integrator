@@ -13,8 +13,6 @@ class EloquaService {
 
     /**
      * Extract pod number from siteId
-     * siteId format examples: "312", "1234", "45"
-     * We need the first 1-2 digits to form pod like "p03", "p01", "p04"
      */
     getPodFromSiteId(siteId) {
         if (!siteId) {
@@ -22,22 +20,15 @@ class EloquaService {
             return 'p03';
         }
 
-        // Convert to string and get first 1-2 characters
         const siteIdStr = String(siteId);
         
-        // If siteId is 3 digits like "312", pod is "p03" (first digit = 3)
-        // If siteId is 4 digits like "1234", pod is "p01" (first digit = 1)
         let podNumber;
-        
         if (siteIdStr.length >= 3) {
-            // Take first digit for 3+ digit siteIds
             podNumber = parseInt(siteIdStr.charAt(0));
         } else {
-            // For 1-2 digit siteIds, use the whole number
             podNumber = parseInt(siteIdStr);
         }
 
-        // Pad with zero to make it 2 digits (1 -> 01, 3 -> 03)
         const pod = `p${String(podNumber).padStart(2, '0')}`;
         
         logger.debug('Extracted pod from siteId', {
@@ -53,7 +44,7 @@ class EloquaService {
      */
     async initialize() {
         if (this.initialized) {
-            return; // Already initialized
+            return;
         }
 
         try {
@@ -62,7 +53,6 @@ class EloquaService {
                 siteId: this.siteId
             });
 
-            // Get consumer with OAuth token
             const consumer = await Consumer.findOne({ installId: this.installId })
                 .select('+oauth_token +oauth_expires_at +oauth_refresh_token');
 
@@ -74,7 +64,6 @@ class EloquaService {
                 throw new Error('OAuth token not found for consumer');
             }
 
-            // Log token info (safely - only show first/last few chars)
             const tokenPreview = consumer.oauth_token 
                 ? `${consumer.oauth_token.substring(0, 10)}...${consumer.oauth_token.substring(consumer.oauth_token.length - 10)}`
                 : 'NO_TOKEN';
@@ -84,11 +73,9 @@ class EloquaService {
                 tokenPreview,
                 tokenLength: consumer.oauth_token?.length || 0,
                 expiresAt: consumer.oauth_expires_at,
-                isExpired: consumer.oauth_expires_at ? new Date() >= consumer.oauth_expires_at : 'NO_EXPIRY',
-                hasRefreshToken: !!consumer.oauth_refresh_token
+                isExpired: consumer.oauth_expires_at ? new Date() >= consumer.oauth_expires_at : 'NO_EXPIRY'
             });
 
-            // Check if token is expired
             if (consumer.oauth_expires_at && new Date() >= consumer.oauth_expires_at) {
                 logger.error('OAuth token is expired', {
                     installId: this.installId,
@@ -98,10 +85,7 @@ class EloquaService {
                 throw new Error('OAuth token expired');
             }
 
-            // Get pod from siteId
             const pod = this.getPodFromSiteId(this.siteId);
-            
-            // Set base URL
             this.baseURL = `https://secure.${pod}.eloqua.com`;
 
             logger.info('Eloqua base URL constructed', {
@@ -110,17 +94,19 @@ class EloquaService {
                 baseURL: this.baseURL
             });
 
-            // Create axios client
+            // **FIX: For App Cloud, use Basic Auth with the OAuth token**
+            // The token is already in the format: company:sessionId (Base64 encoded)
+            // We need to use it as Basic Auth, not Bearer
+            
             this.client = axios.create({
                 baseURL: this.baseURL,
                 headers: {
-                    'Authorization': `Bearer ${consumer.oauth_token}`,
+                    'Authorization': `Basic ${consumer.oauth_token}`,  // Changed from Bearer to Basic
                     'Content-Type': 'application/json'
                 },
                 timeout: 30000
             });
 
-            // Add request interceptor to log outgoing requests
             this.client.interceptors.request.use(
                 config => {
                     logger.debug('Eloqua API request', {
@@ -128,9 +114,7 @@ class EloquaService {
                         url: config.url,
                         baseURL: config.baseURL,
                         hasAuth: !!config.headers?.Authorization,
-                        authPreview: config.headers?.Authorization 
-                            ? `Bearer ${config.headers.Authorization.substring(7, 17)}...`
-                            : 'NO_AUTH'
+                        authType: config.headers?.Authorization?.substring(0, 10) || 'NO_AUTH'
                     });
                     return config;
                 },
@@ -142,10 +126,9 @@ class EloquaService {
                 }
             );
 
-            // Add response interceptor for error handling
             this.client.interceptors.response.use(
                 response => {
-                    logger.debug('Eloqua API response', {
+                    logger.debug('Eloqua API response success', {
                         status: response.status,
                         url: response.config.url
                     });
@@ -158,7 +141,8 @@ class EloquaService {
                         data: error.response?.data,
                         url: error.config?.url,
                         method: error.config?.method,
-                        baseURL: this.baseURL
+                        baseURL: this.baseURL,
+                        authHeader: error.config?.headers?.Authorization?.substring(0, 20) + '...'
                     });
                     throw error;
                 }
@@ -168,7 +152,8 @@ class EloquaService {
 
             logger.info('Eloqua client initialized successfully', {
                 installId: this.installId,
-                baseURL: this.baseURL
+                baseURL: this.baseURL,
+                authType: 'Basic'
             });
 
         } catch (error) {
@@ -181,9 +166,7 @@ class EloquaService {
         }
     }
 
-    /**
-     * Ensure client is initialized before making requests
-     */
+    // ... rest of the methods remain the same
     async ensureInitialized() {
         if (!this.initialized || !this.client) {
             logger.debug('Client not initialized, initializing now', {
@@ -193,10 +176,6 @@ class EloquaService {
         }
     }
 
-    /**
-     * Update action instance with recordDefinition
-     * PUT /api/cloud/1.0/actions/instances/{id}
-     */
     async updateActionInstance(instanceId, updatePayload) {
         await this.ensureInitialized();
         
@@ -235,10 +214,6 @@ class EloquaService {
         }
     }
 
-    /**
-     * Update decision instance with recordDefinition
-     * PUT /api/cloud/1.0/decisions/instances/{id}
-     */
     async updateDecisionInstance(instanceId, updatePayload) {
         await this.ensureInitialized();
         
@@ -276,10 +251,6 @@ class EloquaService {
         }
     }
 
-    /**
-     * Update feeder instance with recordDefinition
-     * PUT /api/cloud/1.0/content/instances/{id}
-     */
     async updateFeederInstance(instanceId, updatePayload) {
         await this.ensureInitialized();
         
@@ -317,73 +288,6 @@ class EloquaService {
         }
     }
 
-    /**
-     * Get action instance details
-     * GET /api/cloud/1.0/actions/instances/{id}
-     */
-    async getActionInstance(instanceId) {
-        await this.ensureInitialized();
-        
-        const url = `/api/cloud/1.0/actions/instances/${instanceId}`;
-        
-        try {
-            const response = await this.client.get(url);
-            return response.data;
-        } catch (error) {
-            logger.error('Failed to get action instance', {
-                instanceId,
-                error: error.message
-            });
-            throw error;
-        }
-    }
-
-    /**
-     * Get decision instance details
-     * GET /api/cloud/1.0/decisions/instances/{id}
-     */
-    async getDecisionInstance(instanceId) {
-        await this.ensureInitialized();
-        
-        const url = `/api/cloud/1.0/decisions/instances/${instanceId}`;
-        
-        try {
-            const response = await this.client.get(url);
-            return response.data;
-        } catch (error) {
-            logger.error('Failed to get decision instance', {
-                instanceId,
-                error: error.message
-            });
-            throw error;
-        }
-    }
-
-    /**
-     * Get feeder instance details
-     * GET /api/cloud/1.0/content/instances/{id}
-     */
-    async getFeederInstance(instanceId) {
-        await this.ensureInitialized();
-        
-        const url = `/api/cloud/1.0/content/instances/${instanceId}`;
-        
-        try {
-            const response = await this.client.get(url);
-            return response.data;
-        } catch (error) {
-            logger.error('Failed to get feeder instance', {
-                instanceId,
-                error: error.message
-            });
-            throw error;
-        }
-    }
-
-    /**
-     * Get custom objects
-     * GET /api/REST/2.0/assets/customObjects
-     */
     async getCustomObjects(search = '', count = 50) {
         await this.ensureInitialized();
         
@@ -416,10 +320,6 @@ class EloquaService {
         }
     }
 
-    /**
-     * Get custom object by ID
-     * GET /api/REST/2.0/assets/customObject/{id}
-     */
     async getCustomObject(customObjectId) {
         await this.ensureInitialized();
         
@@ -447,10 +347,6 @@ class EloquaService {
         }
     }
 
-    /**
-     * Create custom object record
-     * POST /api/REST/2.0/data/customObject/{id}
-     */
     async createCustomObjectRecord(customObjectId, data) {
         await this.ensureInitialized();
         
@@ -476,10 +372,6 @@ class EloquaService {
         }
     }
 
-    /**
-     * Get contact fields
-     * GET /api/REST/2.0/assets/contact/fields
-     */
     async getContactFields(count = 200) {
         await this.ensureInitialized();
         
@@ -495,7 +387,6 @@ class EloquaService {
                 count: response.data.elements?.length || 0
             });
 
-            // Transform to match expected format
             return {
                 items: response.data.elements || [],
                 total: response.data.total || 0
@@ -508,10 +399,6 @@ class EloquaService {
         }
     }
 
-    /**
-     * Get contact by ID
-     * GET /api/REST/2.0/data/contact/{id}
-     */
     async getContact(contactId) {
         await this.ensureInitialized();
         
@@ -533,10 +420,6 @@ class EloquaService {
         }
     }
 
-    /**
-     * Update contact
-     * PUT /api/REST/2.0/data/contact/{id}
-     */
     async updateContact(contactId, data) {
         await this.ensureInitialized();
         
@@ -558,10 +441,6 @@ class EloquaService {
         }
     }
 
-    /**
-     * Get campaigns
-     * GET /api/REST/2.0/assets/campaigns
-     */
     async getCampaigns(search = '', count = 50) {
         await this.ensureInitialized();
         
@@ -588,10 +467,6 @@ class EloquaService {
         }
     }
 
-    /**
-     * Get campaign by ID
-     * GET /api/REST/2.0/assets/campaign/{id}
-     */
     async getCampaign(campaignId) {
         await this.ensureInitialized();
         
@@ -613,10 +488,6 @@ class EloquaService {
         }
     }
 
-    /**
-     * Search contacts
-     * GET /api/REST/2.0/data/contacts
-     */
     async searchContacts(searchQuery, count = 50) {
         await this.ensureInitialized();
         
@@ -638,10 +509,6 @@ class EloquaService {
         }
     }
 
-    /**
-     * Get activity types
-     * GET /api/REST/2.0/assets/visitor/activityTypes
-     */
     async getActivityTypes() {
         await this.ensureInitialized();
         
@@ -656,10 +523,6 @@ class EloquaService {
         }
     }
 
-    /**
-     * Create activity
-     * POST /api/REST/2.0/data/activity
-     */
     async createActivity(activityData) {
         await this.ensureInitialized();
         
