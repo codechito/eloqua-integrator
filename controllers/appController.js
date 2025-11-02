@@ -7,15 +7,28 @@ class AppController {
 
     /**
      * Install app
-     * GET /eloqua/app/install
+     * GET or POST /eloqua/app/install
      */
     static install = asyncHandler(async (req, res) => {
-        const { siteName, siteId, callbackUrl } = req.query;
+        // Support both GET and POST
+        const params = req.method === 'POST' ? req.body : req.query;
+        
+        const { 
+            siteName, 
+            siteId, 
+            callback,
+            callbackUrl,
+            installId: existingInstallId 
+        } = params;
 
         logger.info('App install request received', {
+            method: req.method,
             siteName,
             siteId,
-            callbackUrl
+            callback,
+            callbackUrl,
+            existingInstallId,
+            hasExistingInstallId: !!existingInstallId
         });
 
         if (!siteName || !siteId) {
@@ -24,36 +37,85 @@ class AppController {
             });
         }
 
-        // Generate unique installId
-        const installId = generateId();
+        let installId = existingInstallId;
+        let consumer;
 
-        // Create new consumer
-        const consumer = new Consumer({
+        // Check if this is a reinstall
+        if (existingInstallId) {
+            logger.info('Existing installId provided, checking for reinstall', {
+                installId: existingInstallId
+            });
+
+            consumer = await Consumer.findOne({ installId: existingInstallId });
+            
+            if (consumer) {
+                logger.info('Found existing consumer, reactivating', {
+                    installId: existingInstallId,
+                    wasActive: consumer.isActive
+                });
+
+                // Reactivate consumer
+                consumer.isActive = true;
+                consumer.siteName = siteName;
+                consumer.siteId = siteId;
+                await consumer.save();
+            }
+        }
+
+        // Create new consumer if not found
+        if (!consumer) {
+            installId = generateId();
+
+            logger.info('Creating new consumer', {
+                installId,
+                siteName,
+                siteId
+            });
+
+            consumer = new Consumer({
+                installId,
+                siteName,
+                siteId,
+                isActive: true
+            });
+
+            await consumer.save();
+        }
+
+        logger.info('Consumer ready, initiating OAuth', {
             installId,
             siteName,
             siteId,
-            isActive: true
+            isNew: !existingInstallId
         });
 
-        await consumer.save();
-
-        logger.info('Consumer created, initiating OAuth', {
-            installId,
-            siteName,
-            siteId
-        });
-
-        // **FIX 1: Redirect to OAuth instead of returning JSON**
-        // Store callbackUrl in session for after OAuth
+        // Store callback URL and installId in session
         req.session.installId = installId;
-        req.session.eloquaCallbackUrl = callbackUrl;
+        req.session.eloquaCallbackUrl = callback || callbackUrl;
 
-        // Redirect to OAuth authorization
+        // Check if this is an AJAX/JSON request
+        const wantsJson = req.headers.accept?.includes('application/json') || 
+                        req.query.format === 'json';
+
+        if (wantsJson) {
+            // Return JSON for AJAX requests
+            logger.info('Returning JSON response for install', { installId });
+            
+            return res.json({
+                success: true,
+                installId,
+                authUrl: OAuthService.getAuthorizationUrl(installId),
+                message: 'Please complete OAuth authorization'
+            });
+        }
+
+        // Redirect to OAuth authorization for browser requests
         const authUrl = OAuthService.getAuthorizationUrl(installId);
         
-        logger.info('Redirecting to OAuth for new install', {
+        logger.info('Redirecting to OAuth for install', {
             installId,
-            authUrl
+            authUrl,
+            callback: callback || callbackUrl
         });
 
         res.redirect(authUrl);

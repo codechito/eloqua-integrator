@@ -1,46 +1,42 @@
 const express = require('express');
 const router = express.Router();
 const AppController = require('../controllers/appController');
-const { verifyInstallation, verifyOAuthToken } = require('../middleware/auth');
+const { verifyInstallation } = require('../middleware/auth');
+const sessionAuth = require('../middleware/sessionAuth');
 
-// App lifecycle endpoints
+// Install - accepts both GET and POST
 router.get('/install', AppController.install);
+router.post('/install', AppController.install);
 
-router.post('/uninstall', 
-    verifyInstallation,
-    AppController.uninstall
-);
+// Uninstall - accepts both GET and POST
+router.get('/uninstall', verifyInstallation, AppController.uninstall);
+router.post('/uninstall', verifyInstallation, AppController.uninstall);
 
-router.get('/status', 
-    verifyInstallation,
-    AppController.status
-);
+// Status
+router.get('/status', verifyInstallation, AppController.status);
 
-// Configuration endpoints
-router.get('/config', 
-    verifyInstallation,
-    AppController.getConfig
-);
+// Configuration
+router.get('/config', verifyInstallation, AppController.getConfig);
+router.post('/config', verifyInstallation, AppController.saveConfig);
 
-router.post('/config', 
-    verifyInstallation,
-    AppController.saveConfig
-);
-
-// OAuth endpoints
+// OAuth
 router.get('/authorize', AppController.authorize);
 router.get('/oauth/callback', AppController.oauthCallback);
 
-// Debug endpoints
-router.get('/debug/token/:installId', AppController.debugToken);
-router.post('/refresh-token', AppController.refreshToken);
+// Token management
+router.post('/refresh-token', verifyInstallation, AppController.refreshToken);
 
-// AJAX endpoints for configuration
+// Debug (remove in production)
+router.get('/debug/token/:installId', AppController.debugToken);
+
+// AJAX endpoints
 router.get('/ajax/customobjects/:installId/:siteId/customObject',
+    sessionAuth,
     AppController.getCustomObjects
 );
 
 router.get('/ajax/customobject/:installId/:siteId/:customObjectId',
+    sessionAuth,
     AppController.getCustomObjectFields
 );
 
