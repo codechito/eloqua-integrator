@@ -19,11 +19,31 @@ const ActionInstanceSchema = new mongoose.Schema({
     assetId: String,
     assetName: String,
     
-    // Configuration
+    // ADD THESE MISSING FIELDS:
+    serviceType: {
+        type: String,
+        default: 'action'
+    },
+    entity_type: String, // Campaign or Program
+    asset_id: String, // Alternative field name used in old code
+    entry_date: Date, // When action was first executed
+    configureAt: Date, // When configuration was saved
+    Status: {
+        type: String,
+        default: 'active'
+    },
+    RemoveAt: Date, // When instance was removed
+    
+    // Configuration fields
     caller_id: String,
     recipient_field: String,
     custom_object_id: String,
     country_field: String,
+    country_setting: { // ADD THIS: 'cc' = contact country, 'cf' = custom field
+        type: String,
+        default: 'cc'
+    },
+    program_coid: String, // ADD THIS: Program Custom Object ID
     mobile_field: String,
     email_field: String,
     title_field: String,

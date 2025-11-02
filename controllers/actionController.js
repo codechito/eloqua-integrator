@@ -1,7 +1,4 @@
-const ActionInstance = require('../models/ActionInstance');
-const Consumer = require('../models/Consumer');
-const SmsLog = require('../models/SmsLog');
-const SmsJob = require('../models/SmsJob');
+const { Consumer, ActionInstance, SmsJob, SmsLog } = require('../models');
 const { EloquaService, TransmitSmsService } = require('../services');
 const { 
     logger, 
@@ -93,22 +90,30 @@ class ActionController {
      * GET /eloqua/action/create
      */
     static create = asyncHandler(async (req, res) => {
-        const { installId, siteId, assetId } = req.query;
+        const { installId, siteId, assetId, assetName, assetType } = req.query;
         const instanceId = generateId();
 
-        logger.info('Creating action instance', { installId, instanceId });
+        logger.info('Creating action instance', { 
+            installId, 
+            instanceId,
+            assetType 
+        });
 
         const instance = new ActionInstance({
             instanceId,
             installId,
             SiteId: siteId,
             assetId,
+            assetName,
+            entity_type: assetType, // Campaign or Program
             message: '',
-            recipient_field: 'mobilePhone',
+            recipient_field: 'MobilePhone',
+            country_field: 'Country',
+            country_setting: 'cc', // cc = contact country
             message_expiry: 'NO',
             message_validity: 1,
             send_mode: 'all',
-            requiresConfiguration: true // Initially requires configuration
+            requiresConfiguration: true
         });
 
         await instance.save();
@@ -126,9 +131,14 @@ class ActionController {
      * GET /eloqua/action/configure
      */
     static configure = asyncHandler(async (req, res) => {
-        const { installId, siteId, instanceId } = req.query;
+        const { installId, siteId, instanceId, CustomObjectId, AssetType } = req.query;
 
-        logger.info('Loading action configuration page', { installId, instanceId });
+        logger.info('Loading action configuration page', { 
+            installId, 
+            instanceId,
+            CustomObjectId, // Program CDO ID if configuring from Program
+            AssetType
+        });
 
         const consumer = await Consumer.findOne({ installId });
         if (!consumer) {
@@ -151,6 +161,11 @@ class ActionController {
                 send_mode: 'all',
                 requiresConfiguration: true
             };
+        }
+
+        // If CustomObjectId is provided (from Program), set it
+        if (CustomObjectId) {
+            instance.program_coid = CustomObjectId;
         }
 
         // Get countries data
@@ -180,6 +195,7 @@ class ActionController {
         let custom_objects = { elements: [] };
         try {
             const eloquaService = new EloquaService(installId, siteId);
+            await eloquaService.initialize();
             custom_objects = await eloquaService.getCustomObjects('', 100);
         } catch (error) {
             logger.warn('Could not fetch custom objects', { error: error.message });
@@ -189,8 +205,8 @@ class ActionController {
         let merge_fields = [];
         try {
             const eloquaService = new EloquaService(installId, siteId);
+            await eloquaService.initialize();
             const contactFieldsResponse = await eloquaService.getContactFields(200);
-            logger.info('contactFieldsResponse', contactFieldsResponse);
             merge_fields = contactFieldsResponse.items || [];
         } catch (error) {
             logger.warn('Could not fetch contact fields', { error: error.message });
@@ -227,6 +243,9 @@ class ActionController {
             Object.assign(instance, instanceData);
         }
 
+        // Mark configuration date
+        instance.configureAt = new Date();
+
         // Check if configuration is complete
         const isConfigured = ActionController.validateConfiguration(instance);
         instance.requiresConfiguration = !isConfigured;
@@ -256,7 +275,6 @@ class ActionController {
                 error: error.message
             });
 
-            // Still return success for local save, but warn about Eloqua update
             res.json({
                 success: true,
                 message: 'Configuration saved locally, but failed to update Eloqua',
@@ -270,7 +288,6 @@ class ActionController {
      * Validate if configuration is complete
      */
     static validateConfiguration(instance) {
-        // Check required fields
         if (!instance.message || !instance.message.trim()) {
             return false;
         }
@@ -279,7 +296,6 @@ class ActionController {
             return false;
         }
 
-        // If custom object is configured, check required mappings
         if (instance.custom_object_id) {
             if (!instance.email_field || !instance.mobile_field) {
                 return false;
@@ -303,18 +319,14 @@ class ActionController {
             });
 
             eloquaService = new EloquaService(instance.installId, instance.SiteId);
-            
-            // Explicitly initialize the service
             await eloquaService.initialize();
 
             logger.info('Eloqua service initialized, building recordDefinition', {
                 instanceId: instance.instanceId
             });
 
-            // Build recordDefinition based on configuration
             const recordDefinition = await ActionController.buildRecordDefinition(instance, eloquaService);
 
-            // Prepare update payload
             const updatePayload = {
                 recordDefinition: recordDefinition,
                 requiresConfiguration: instance.requiresConfiguration
@@ -326,7 +338,6 @@ class ActionController {
                 requiresConfiguration: instance.requiresConfiguration
             });
 
-            // Call Eloqua API to update instance
             await eloquaService.updateActionInstance(instance.instanceId, updatePayload);
 
             logger.info('Eloqua instance updated successfully', {
@@ -337,9 +348,7 @@ class ActionController {
             logger.error('Error updating Eloqua instance', {
                 instanceId: instance.instanceId,
                 error: error.message,
-                stack: error.stack,
-                installId: instance.installId,
-                siteId: instance.SiteId
+                stack: error.stack
             });
             throw error;
         }
@@ -347,91 +356,123 @@ class ActionController {
 
     /**
      * Build recordDefinition object for Eloqua
+     * Based on old working code pattern - handles both Campaign and Program CDO scenarios
      */
     static async buildRecordDefinition(instance, eloquaService = null) {
         const recordDefinition = {};
 
-        // Always include contact basic fields
-        recordDefinition.ContactID = instance.recipient_field || 'ContactID';
-        recordDefinition.EmailAddress = 'EmailAddress';
-
-        // Add custom object fields if configured
-        if (instance.custom_object_id) {
-            if (!eloquaService) {
-                eloquaService = new EloquaService(instance.installId, instance.SiteId);
-                await eloquaService.initialize();
-            }
-            
-            try {
-                // Get custom object details to get field names
-                const customObject = await eloquaService.getCustomObject(instance.custom_object_id);
-                
-                logger.debug('Custom object fetched for recordDefinition', {
-                    customObjectId: instance.custom_object_id,
-                    name: customObject.name,
-                    fieldCount: customObject.fields?.length || 0
-                });
-
-                // Map configured fields
-                if (instance.mobile_field) {
-                    const field = customObject.fields.find(f => f.internalName === instance.mobile_field);
-                    recordDefinition[field?.name || 'Mobile'] = instance.mobile_field;
-                }
-
-                if (instance.email_field) {
-                    const field = customObject.fields.find(f => f.internalName === instance.email_field);
-                    recordDefinition[field?.name || 'Email'] = instance.email_field;
-                }
-
-                if (instance.title_field) {
-                    const field = customObject.fields.find(f => f.internalName === instance.title_field);
-                    recordDefinition[field?.name || 'Title'] = instance.title_field;
-                }
-
-                if (instance.notification_field) {
-                    const field = customObject.fields.find(f => f.internalName === instance.notification_field);
-                    recordDefinition[field?.name || 'Notification'] = instance.notification_field;
-                }
-
-                if (instance.outgoing_field) {
-                    const field = customObject.fields.find(f => f.internalName === instance.outgoing_field);
-                    recordDefinition[field?.name || 'Message'] = instance.outgoing_field;
-                }
-
-                if (instance.vn_field) {
-                    const field = customObject.fields.find(f => f.internalName === instance.vn_field);
-                    recordDefinition[field?.name || 'VirtualNumber'] = instance.vn_field;
-                }
-
-            } catch (error) {
-                logger.warn('Could not fetch custom object for recordDefinition', {
-                    customObjectId: instance.custom_object_id,
-                    error: error.message
-                });
-
-                // Fallback to internal names
-                if (instance.mobile_field) recordDefinition.Mobile = instance.mobile_field;
-                if (instance.email_field) recordDefinition.Email = instance.email_field;
-                if (instance.title_field) recordDefinition.Title = instance.title_field;
-                if (instance.notification_field) recordDefinition.Notification = instance.notification_field;
-                if (instance.outgoing_field) recordDefinition.Message = instance.outgoing_field;
-                if (instance.vn_field) recordDefinition.VirtualNumber = instance.vn_field;
-            }
-        }
-
-        // Add country field if configured
-        if (instance.country_field) {
-            recordDefinition.Country = instance.country_field;
-        }
-
-        logger.debug('Built recordDefinition', {
+        logger.debug('Building recordDefinition', {
             instanceId: instance.instanceId,
-            recordDefinition
+            hasProgramCDO: !!instance.program_coid,
+            recipientField: instance.recipient_field,
+            countryField: instance.country_field,
+            hasMessage: !!instance.message
+        });
+
+        // If using program CDO, add placeholder ContactID and EmailAddress
+        if (instance.program_coid) {
+            recordDefinition.ContactID = "{{CustomObject.Contact.Id}}";
+            recordDefinition.EmailAddress = "{{CustomObject.Contact.EmailAddress}}";
+        }
+
+        // Handle dynamic sender ID (caller_id with ## prefix means it's a contact field)
+        if (instance.caller_id && instance.caller_id.toString().indexOf("##") !== -1) {
+            const fieldName = instance.caller_id.split("##")[1];
+            if (!recordDefinition[fieldName]) {
+                recordDefinition[fieldName] = `{{Contact.Field(C_${fieldName})}}`;
+            }
+        }
+
+        // Handle recipient field (mobile number)
+        if (instance.recipient_field) {
+            if (instance.program_coid) {
+                // Using program CDO - check if field contains __ (fieldId__fieldName format)
+                const fields = instance.recipient_field.split("__");
+                if (fields.length > 1) {
+                    const fieldId = fields[0];
+                    const fieldName = fields[1];
+                    recordDefinition[fieldName] = `{{CustomObject[${instance.program_coid}].Field[${fieldId}]}}`;
+                } else {
+                    recordDefinition[instance.recipient_field] = `{{CustomObject[${instance.program_coid}].Contact.Field(C_${instance.recipient_field})}}`;
+                }
+            } else {
+                // Regular campaign - contact field
+                recordDefinition[instance.recipient_field] = `{{Contact.Field(C_${instance.recipient_field})}}`;
+            }
+        }
+
+        // Handle country field
+        if (instance.country_field) {
+            if (instance.program_coid) {
+                // Using program CDO
+                if (instance.country_setting === 'cc' || instance.country_field === 'Country') {
+                    // Contact country field
+                    recordDefinition[instance.country_field] = `{{CustomObject[${instance.program_coid}].Contact.Field(C_${instance.country_field})}}`;
+                } else {
+                    // CDO field for country
+                    const fieldId = instance.country_field.split("__")[0];
+                    const fieldName = instance.country_field.split("__")[1];
+                    recordDefinition[fieldName] = `{{CustomObject[${instance.program_coid}].Field[${fieldId}]}}`;
+                }
+            } else {
+                // Regular campaign - contact field
+                recordDefinition[instance.country_field] = `{{Contact.Field(C_${instance.country_field})}}`;
+            }
+        }
+
+        // Add Id field if using program CDO (CDO record ID)
+        if (instance.program_coid) {
+            recordDefinition["Id"] = "{{CustomObject.Id}}";
+        }
+
+        // Extract merge fields from message [FieldName] format
+        const templatedFields = instance.message ? instance.message.match(/\[([^\]]+)\]/g) : null;
+        if (templatedFields) {
+            templatedFields.forEach(function(field) {
+                const fieldName = field.replace(/[\[\]]/g, '');
+                
+                // Skip special fields
+                if (fieldName.indexOf("tracked-link") !== -1 || fieldName.indexOf("unsub-reply-link") !== -1) {
+                    return;
+                }
+
+                const cleanFieldName = fieldName.replace("C_", "");
+                
+                if (!recordDefinition[cleanFieldName]) {
+                    if (instance.program_coid) {
+                        recordDefinition[cleanFieldName] = `{{CustomObject[${instance.program_coid}].Contact.Field(${fieldName})}}`;
+                    } else {
+                        recordDefinition[cleanFieldName] = `{{Contact.Field(${fieldName})}}`;
+                    }
+                }
+            });
+        }
+
+        // Extract merge fields from tracked link URL [FieldName] format
+        const trackedLinkFields = instance.tracked_link ? instance.tracked_link.match(/\[([^\]]+)\]/g) : null;
+        if (trackedLinkFields) {
+            trackedLinkFields.forEach(function(field) {
+                const fieldName = field.replace(/[\[\]]/g, '');
+                const cleanFieldName = fieldName.replace("C_", "");
+                
+                if (!recordDefinition[cleanFieldName]) {
+                    if (instance.program_coid) {
+                        recordDefinition[cleanFieldName] = `{{CustomObject[${instance.program_coid}].Contact.Field(${fieldName})}}`;
+                    } else {
+                        recordDefinition[cleanFieldName] = `{{Contact.Field(${fieldName})}}`;
+                    }
+                }
+            });
+        }
+
+        logger.info('RecordDefinition built', {
+            instanceId: instance.instanceId,
+            recordDefinition,
+            fieldCount: Object.keys(recordDefinition).length
         });
 
         return recordDefinition;
     }
-
 
     /**
      * Notify (Execute action) - Queue SMS jobs
@@ -443,22 +484,23 @@ class ActionController {
 
         logger.info('Action notify received', { 
             instanceId, 
-            recordCount: executionData.items?.length || 0 
+            recordCount: executionData.items?.length || 0,
+            executionId: executionData.executionId,
+            hasMore: executionData.hasMore
         });
-
-        logger.info('Action notify content', executionData);
 
         const instance = await ActionInstance.findOne({ instanceId });
         if (!instance) {
             return res.status(404).json({ error: 'Instance not found' });
         }
 
-        const consumer = await Consumer.findOne({ installId: instance.installId });
+        const consumer = await Consumer.findOne({ installId: instance.installId })
+            .select('+transmitsms_api_key +transmitsms_api_secret');
+            
         if (!consumer) {
             return res.status(404).json({ error: 'Consumer not found' });
         }
 
-        // Validate configuration
         if (!consumer.transmitsms_api_key || !consumer.transmitsms_api_secret) {
             logger.error('TransmitSMS not configured', { instanceId });
             return res.status(400).json({ 
@@ -466,14 +508,19 @@ class ActionController {
             });
         }
 
-        // Queue SMS jobs instead of sending immediately
+        // Update instance entry date
+        instance.entry_date = new Date();
+        instance.asset_id = executionData.assetId || instance.assetId;
+        await instance.save();
+
+        // Queue SMS jobs
         const results = await ActionController.queueSmsJobs(
             instance, 
             consumer, 
             executionData
         );
 
-        logger.info('Action notify completed - jobs queued', { 
+        logger.info('Action notify completed', { 
             instanceId, 
             queuedCount: results.filter(r => r.success).length,
             failCount: results.filter(r => !r.success).length
@@ -488,24 +535,36 @@ class ActionController {
 
     /**
      * Queue SMS jobs for background processing
+     * Handles both regular contact fields and program CDO fields
      */
     static async queueSmsJobs(instance, consumer, executionData) {
         const results = [];
         const records = executionData.items || [];
-
         const baseUrl = process.env.APP_BASE_URL || 'https://eloqua-integrator.onrender.com';
+
+        // Parse field names (handle fieldId__fieldName format)
+        const recipientFieldName = ActionController.parseFieldName(instance.recipient_field);
+        const countryFieldName = instance.country_field ? ActionController.parseFieldName(instance.country_field) : null;
+
+        logger.debug('Field mappings for notify', {
+            recipientField: {
+                raw: instance.recipient_field,
+                parsed: recipientFieldName
+            },
+            countryField: {
+                raw: instance.country_field,
+                parsed: countryFieldName
+            }
+        });
 
         for (const record of records) {
             try {
                 // Get mobile number
-                const mobileNumber = ActionController.getFieldValue(
-                    record, 
-                    instance.recipient_field
-                );
+                const mobileNumber = record[recipientFieldName] || record.MobilePhone;
 
                 if (!mobileNumber) {
                     results.push({
-                        contactId: record.contactId,
+                        contactId: record.ContactID || record.Id,
                         success: false,
                         error: 'Mobile number not found'
                     });
@@ -514,8 +573,8 @@ class ActionController {
 
                 // Get country for formatting
                 let country = consumer.default_country || 'Australia';
-                if (instance.country_field) {
-                    const countryValue = ActionController.getFieldValue(record, instance.country_field);
+                if (countryFieldName) {
+                    const countryValue = record[countryFieldName] || record.Country;
                     if (countryValue) {
                         country = countryValue;
                     }
@@ -524,49 +583,86 @@ class ActionController {
                 // Format phone number
                 const formattedNumber = formatPhoneNumber(mobileNumber, country);
 
-                // Process message with merge fields
-                let message = replaceMergeFields(instance.message, record);
+                // Process message with merge fields [FieldName]
+                let message = instance.message;
+                const mergeFields = message.match(/\[([^\]]+)\]/g);
+                
+                if (mergeFields) {
+                    for (const field of mergeFields) {
+                        const fieldName = field.replace(/[\[\]]/g, '');
+                        
+                        // Skip special placeholders
+                        if (fieldName === 'tracked-link' || fieldName === 'unsub-reply-link') {
+                            continue;
+                        }
+                        
+                        // Get field value (remove C_ prefix if exists)
+                        const cleanFieldName = fieldName.replace('C_', '');
+                        const fieldValue = record[cleanFieldName] || '';
+                        message = message.replace(field, fieldValue);
+                    }
+                }
 
-                // Clean up message
-                message = message.replace(/\n\n+/g, '\n\n').trim();
+                // Process tracked link URL if exists
+                let trackedLinkUrl = null;
+                if (instance.tracked_link) {
+                    trackedLinkUrl = instance.tracked_link;
+                    const linkFields = trackedLinkUrl.match(/\[([^\]]+)\]/g);
+                    
+                    if (linkFields) {
+                        for (const field of linkFields) {
+                            const fieldName = field.replace(/[\[\]]/g, '');
+                            const cleanFieldName = fieldName.replace('C_', '');
+                            const fieldValue = record[cleanFieldName] || '';
+                            trackedLinkUrl = trackedLinkUrl.replace(field, fieldValue);
+                        }
+                    }
+                }
 
-                // Build callback URLs with tracking parameters
+                // Determine sender ID (handle dynamic ## prefix)
+                let senderId = instance.caller_id;
+                if (senderId && senderId.startsWith('##')) {
+                    const senderFieldName = senderId.replace('##', '');
+                    senderId = record[senderFieldName] || instance.caller_id;
+                }
+
+                // Build callback URLs
                 const callbackParams = new URLSearchParams({
                     installId: instance.installId,
                     instanceId: instance.instanceId,
-                    contactId: record.contactId,
-                    emailAddress: record.emailAddress || '',
+                    contactId: record.ContactID || record.Id,
+                    emailAddress: record.EmailAddress || '',
                     campaignId: instance.assetId || ''
                 }).toString();
 
                 // Build SMS options
                 const smsOptions = {
-                    from: instance.caller_id || undefined
+                    from: senderId || undefined
                 };
 
-                if (instance.message_expiry === 'YES') {
+                if (instance.message_expiry === 'YES' && instance.message_validity) {
                     smsOptions.validity = parseInt(instance.message_validity) * 60;
                 }
 
-                // Add tracked link URL if message contains [tracked-link]
-                if (message.includes('[tracked-link]') && instance.tracked_link) {
-                    smsOptions.tracked_link_url = instance.tracked_link;
+                // Add tracked link if message contains [tracked-link] placeholder
+                if (message.includes('[tracked-link]') && trackedLinkUrl) {
+                    smsOptions.tracked_link_url = trackedLinkUrl;
                 }
 
                 // Add callback URLs
                 if (consumer.dlr_callback) {
-                    smsOptions.dlr_callback = `${baseUrl}/webhooks/dlr?${callbackParams}`;
+                    smsOptions.dlr_callback = `${consumer.dlr_callback.replace('http:', 'https:')}?${callbackParams}`;
                 }
 
                 if (consumer.reply_callback) {
-                    smsOptions.reply_callback = `${baseUrl}/webhooks/reply?${callbackParams}`;
+                    smsOptions.reply_callback = `${consumer.reply_callback.replace('http:', 'https:')}?${callbackParams}`;
                 }
 
                 if (consumer.link_hits_callback) {
-                    smsOptions.link_hits_callback = `${baseUrl}/webhooks/linkhit?${callbackParams}`;
+                    smsOptions.link_hits_callback = `${consumer.link_hits_callback.replace('http:', 'https:')}?${callbackParams}`;
                 }
 
-                // Prepare custom object data
+                // Prepare custom object data if configured
                 const customObjectData = instance.custom_object_id ? {
                     customObjectId: instance.custom_object_id,
                     fieldMappings: {
@@ -586,11 +682,11 @@ class ActionController {
                     jobId,
                     installId: instance.installId,
                     instanceId: instance.instanceId,
-                    contactId: record.contactId,
-                    emailAddress: record.emailAddress || '',
+                    contactId: record.ContactID || record.Id,
+                    emailAddress: record.EmailAddress || '',
                     mobileNumber: formattedNumber,
                     message,
-                    senderId: instance.caller_id,
+                    senderId: senderId,
                     campaignId: instance.assetId,
                     campaignTitle: instance.assetName,
                     assetName: instance.assetName,
@@ -603,27 +699,26 @@ class ActionController {
                 await smsJob.save();
 
                 results.push({
-                    contactId: record.contactId,
+                    contactId: record.ContactID || record.Id,
                     success: true,
-                    jobId: jobId,
-                    message: 'SMS job queued'
+                    jobId: jobId
                 });
 
-                logger.info('SMS job queued', {
+                logger.debug('SMS job queued', {
                     jobId,
-                    contactId: record.contactId,
+                    contactId: record.ContactID || record.Id,
                     to: formattedNumber
                 });
 
             } catch (error) {
                 logger.error('Error queuing SMS job', {
                     instanceId: instance.instanceId,
-                    contactId: record.contactId,
+                    contactId: record.ContactID || record.Id,
                     error: error.message
                 });
 
                 results.push({
-                    contactId: record.contactId,
+                    contactId: record.ContactID || record.Id,
                     success: false,
                     error: error.message
                 });
@@ -638,7 +733,6 @@ class ActionController {
      */
     static async processSmsJob(job) {
         try {
-            // Mark as processing
             await job.markAsProcessing();
 
             logger.info('Processing SMS job', {
@@ -647,7 +741,6 @@ class ActionController {
                 to: job.mobileNumber
             });
 
-            // Get consumer credentials
             const consumer = await Consumer.findOne({ installId: job.installId })
                 .select('+transmitsms_api_key +transmitsms_api_secret');
 
@@ -660,17 +753,14 @@ class ActionController {
                 consumer.transmitsms_api_secret
             );
 
-            // Send SMS
             const smsResponse = await smsService.sendSms(
                 job.mobileNumber,
                 job.message,
                 job.smsOptions
             );
 
-            // Mark job as sent
             await job.markAsSent(smsResponse.message_id, smsResponse);
 
-            // Create SMS log
             const smsLog = new SmsLog({
                 installId: job.installId,
                 instanceId: job.instanceId,
@@ -692,15 +782,14 @@ class ActionController {
 
             await smsLog.save();
 
-            // Link smsLog to job
             job.smsLogId = smsLog._id;
             await job.save();
 
-            // Update custom object if configured
             if (job.customObjectData && job.customObjectData.customObjectId) {
                 const instance = await ActionInstance.findOne({ instanceId: job.instanceId });
                 if (instance) {
                     const eloquaService = new EloquaService(job.installId, instance.SiteId);
+                    await eloquaService.initialize();
                     await ActionController.updateCustomObjectForJob(
                         eloquaService,
                         job,
@@ -709,7 +798,6 @@ class ActionController {
                 }
             }
 
-            // Update instance stats
             const instance = await ActionInstance.findOne({ instanceId: job.instanceId });
             if (instance) {
                 await instance.incrementSent();
@@ -734,30 +822,15 @@ class ActionController {
                 stack: error.stack
             });
 
-            // Mark as failed
             await job.markAsFailed(error.message, error.code);
 
-            // Update instance stats
             const instance = await ActionInstance.findOne({ instanceId: job.instanceId });
             if (instance) {
                 await instance.incrementFailed();
             }
 
-            // Check if can retry
             if (job.canRetry()) {
-                logger.info('SMS job will be retried', {
-                    jobId: job.jobId,
-                    retryCount: job.retryCount,
-                    maxRetries: job.maxRetries
-                });
-
-                // Reset for retry (will be picked up again by worker)
                 await job.resetForRetry();
-            } else {
-                logger.error('SMS job failed after max retries', {
-                    jobId: job.jobId,
-                    retryCount: job.retryCount
-                });
             }
 
             return {
@@ -836,91 +909,37 @@ class ActionController {
         }
     }
 
-
-
-
     /**
-     * Get field value from record
+     * Retrieve instance configuration
+     * GET /eloqua/action/retrieve
      */
-    static getFieldValue(record, fieldPath) {
-        if (!fieldPath) return null;
-        
-        const parts = fieldPath.split('__');
-        if (parts.length > 1) {
-            return record[parts[1]] || null;
-        }
-        
-        return record[fieldPath] || null;
-    }
+    static retrieve = asyncHandler(async (req, res) => {
+        const { instanceId, installId, SiteId } = req.query;
 
-    /**
-     * Update custom object
-     */
-    static async updateCustomObject(eloquaService, instance, record, smsLog, status) {
-        try {
-            const cdoData = {
-                fieldValues: []
-            };
+        logger.info('Retrieving action instance', { 
+            instanceId, 
+            installId, 
+            SiteId 
+        });
 
-            if (instance.mobile_field) {
-                cdoData.fieldValues.push({
-                    id: instance.mobile_field,
-                    value: smsLog.mobileNumber
-                });
-            }
+        const instance = await ActionInstance.findOne({
+            instanceId,
+            installId,
+            SiteId,
+            serviceType: 'action'
+        });
 
-            if (instance.email_field) {
-                cdoData.fieldValues.push({
-                    id: instance.email_field,
-                    value: smsLog.emailAddress
-                });
-            }
-
-            if (instance.outgoing_field) {
-                cdoData.fieldValues.push({
-                    id: instance.outgoing_field,
-                    value: smsLog.message
-                });
-            }
-
-            if (instance.notification_field) {
-                cdoData.fieldValues.push({
-                    id: instance.notification_field,
-                    value: status
-                });
-            }
-
-            if (instance.vn_field && smsLog.senderId) {
-                cdoData.fieldValues.push({
-                    id: instance.vn_field,
-                    value: smsLog.senderId
-                });
-            }
-
-            if (instance.title_field) {
-                cdoData.fieldValues.push({
-                    id: instance.title_field,
-                    value: smsLog.campaignTitle || ''
-                });
-            }
-
-            await eloquaService.createCustomObjectRecord(
-                instance.custom_object_id, 
-                cdoData
-            );
-
-            logger.debug('Custom object updated', {
-                customObjectId: instance.custom_object_id,
-                contactId: record.contactId
-            });
-
-        } catch (error) {
-            logger.error('Error updating custom object', {
-                error: error.message,
-                customObjectId: instance.custom_object_id
+        if (!instance) {
+            return res.status(404).json({
+                error: 'Instance not found'
             });
         }
-    }
+
+        res.json({
+            success: true,
+            instance
+        });
+    });
 
     /**
      * Copy instance
@@ -946,7 +965,7 @@ class ActionController {
             lastExecutedAt: undefined,
             createdAt: undefined,
             updatedAt: undefined,
-            requiresConfiguration: true // New copy requires configuration
+            requiresConfiguration: true
         });
 
         await newInstance.save();
@@ -960,24 +979,32 @@ class ActionController {
     });
 
     /**
-     * Delete instance
-     * POST /eloqua/action/delete
+     * Delete/Remove instance
+     * POST /eloqua/action/delete or /eloqua/action/remove
      */
     static delete = asyncHandler(async (req, res) => {
         const { instanceId } = req.query;
 
         logger.info('Deleting action instance', { instanceId });
 
-        await ActionInstance.findOneAndUpdate(
-            { instanceId },
-            { isActive: false }
-        );
+        const instance = await ActionInstance.findOne({ instanceId });
 
-        logger.info('Action instance deleted', { instanceId });
+        if (!instance) {
+            return res.status(404).json({
+                error: 'Instance not found'
+            });
+        }
+
+        instance.Status = 'removed';
+        instance.RemoveAt = new Date();
+        instance.isActive = false;
+        await instance.save();
+
+        logger.info('Action instance marked as removed', { instanceId });
 
         res.json({
             success: true,
-            message: 'Instance deleted successfully'
+            message: 'Instance removed successfully'
         });
     });
 
@@ -993,13 +1020,9 @@ class ActionController {
             installId, 
             country, 
             phone,
-            hasMessage: !!message,
-            messageLength: message?.length || 0,
-            hasTrackedLinkPlaceholder: message?.includes('[tracked-link]') || false,
-            trackedLinkUrl: tracked_link_url
+            hasMessage: !!message
         });
 
-        // Validate inputs
         if (!message || !message.trim()) {
             return res.status(400).json({ 
                 error: 'Message is required',
@@ -1027,7 +1050,7 @@ class ActionController {
         if (!consumer.transmitsms_api_key || !consumer.transmitsms_api_secret) {
             return res.status(400).json({ 
                 error: 'Not configured',
-                description: 'TransmitSMS API credentials not configured. Please configure them first.' 
+                description: 'TransmitSMS API credentials not configured' 
             });
         }
 
@@ -1037,35 +1060,11 @@ class ActionController {
                 consumer.transmitsms_api_secret
             );
 
-            // Format phone number
             const formattedNumber = formatPhoneNumber(phone, country);
             
-            logger.info('Formatted phone number for test', { 
-                original: phone, 
-                formatted: formattedNumber,
-                country 
-            });
-
-            // Prepare message
             let finalMessage = message.trim();
             finalMessage = finalMessage.replace(/\n\n+/g, '\n\n');
 
-            if (!finalMessage) {
-                return res.status(400).json({ 
-                    error: 'Message is empty after processing',
-                    description: 'Message cannot be empty' 
-                });
-            }
-
-            logger.info('Sending test SMS', { 
-                to: formattedNumber,
-                messageLength: finalMessage.length,
-                from: caller_id || 'default',
-                hasTrackedLinkPlaceholder: finalMessage.includes('[tracked-link]'),
-                trackedLinkUrl: tracked_link_url
-            });
-
-            // Build callback URLs with tracking parameters
             const baseUrl = process.env.APP_BASE_URL || 'https://eloqua-integrator.onrender.com';
             
             const callbackParams = new URLSearchParams({
@@ -1074,19 +1073,16 @@ class ActionController {
                 phone: formattedNumber
             }).toString();
 
-            // Prepare SMS options
             const smsOptions = {};
             
             if (caller_id) {
                 smsOptions.from = caller_id;
             }
 
-            // Add tracked link URL if message contains [tracked-link]
             if (finalMessage.includes('[tracked-link]') && tracked_link_url) {
                 smsOptions.tracked_link_url = tracked_link_url;
             }
 
-            // Add callback URLs for test
             if (consumer.dlr_callback) {
                 smsOptions.dlr_callback = `${baseUrl}/webhooks/dlr?${callbackParams}`;
             }
@@ -1099,14 +1095,6 @@ class ActionController {
                 smsOptions.link_hits_callback = `${baseUrl}/webhooks/linkhit?${callbackParams}`;
             }
 
-            logger.info('SMS options with callbacks', {
-                hasCallbacks: !!(smsOptions.dlr_callback || smsOptions.reply_callback || smsOptions.link_hits_callback),
-                dlr: !!smsOptions.dlr_callback,
-                reply: !!smsOptions.reply_callback,
-                linkHits: !!smsOptions.link_hits_callback
-            });
-
-            // Send SMS
             const response = await smsService.sendSms(
                 formattedNumber,
                 finalMessage,
@@ -1123,19 +1111,12 @@ class ActionController {
                 message: 'Test SMS sent successfully',
                 messageId: response.message_id,
                 to: formattedNumber,
-                messageLength: finalMessage.length,
-                callbacks: {
-                    dlr: smsOptions.dlr_callback,
-                    reply: smsOptions.reply_callback,
-                    linkHits: smsOptions.link_hits_callback
-                },
                 response
             });
 
         } catch (error) {
             logger.error('Error sending test SMS', {
                 error: error.message,
-                stack: error.stack,
                 phone,
                 country
             });
@@ -1148,7 +1129,7 @@ class ActionController {
     });
 
     /**
-     * Get custom objects (AJAX) with pagination and search
+     * Get custom objects (AJAX)
      * GET /eloqua/action/ajax/customobjects/:installId/:siteId/customObject
      */
     static getCustomObjects = asyncHandler(async (req, res) => {
@@ -1162,9 +1143,10 @@ class ActionController {
             count 
         });
 
-        const eloquaService = new EloquaService(installId, siteId);
-        
         try {
+            const eloquaService = new EloquaService(installId, siteId);
+            await eloquaService.initialize();
+            
             const customObjects = await eloquaService.getCustomObjects(search, count);
 
             logger.debug('Custom objects fetched', { 
@@ -1178,10 +1160,10 @@ class ActionController {
                 error: error.message
             });
 
-            res.status(500).json({
-                error: 'Failed to fetch custom objects',
-                message: error.message,
-                elements: []
+            res.json({
+                elements: [],
+                total: 0,
+                error: error.message
             });
         }
     });
@@ -1198,9 +1180,10 @@ class ActionController {
             customObjectId 
         });
 
-        const eloquaService = new EloquaService(installId, siteId);
-        
         try {
+            const eloquaService = new EloquaService(installId, siteId);
+            await eloquaService.initialize();
+            
             const customObject = await eloquaService.getCustomObject(customObjectId);
 
             logger.debug('Custom object fields fetched', { 
@@ -1215,10 +1198,10 @@ class ActionController {
                 error: error.message
             });
 
-            res.status(500).json({
-                error: 'Failed to fetch fields',
-                message: error.message,
-                fields: []
+            res.json({
+                id: customObjectId,
+                fields: [],
+                error: error.message
             });
         }
     });
@@ -1232,9 +1215,10 @@ class ActionController {
 
         logger.debug('AJAX: Fetching contact fields', { installId });
 
-        const eloquaService = new EloquaService(installId, siteId);
-        
         try {
+            const eloquaService = new EloquaService(installId, siteId);
+            await eloquaService.initialize();
+            
             const contactFields = await eloquaService.getContactFields(1000);
 
             logger.debug('Contact fields fetched', { 
@@ -1248,10 +1232,10 @@ class ActionController {
                 error: error.message
             });
 
-            res.status(500).json({
-                error: 'Failed to fetch contact fields',
-                message: error.message,
-                elements: []
+            res.json({
+                items: [],
+                total: 0,
+                error: error.message
             });
         }
     });
@@ -1263,7 +1247,6 @@ class ActionController {
     static getWorkerStatus = asyncHandler(async (req, res) => {
         const { installId } = req.query;
 
-        // Get stats for this install
         const stats = await SmsJob.aggregate([
             { $match: { installId } },
             {
@@ -1286,7 +1269,6 @@ class ActionController {
             statsMap[stat._id] = stat.count;
         });
 
-        // Get recent jobs
         const recentJobs = await SmsJob.find({ installId })
             .sort({ createdAt: -1 })
             .limit(10)
@@ -1298,6 +1280,41 @@ class ActionController {
             recentJobs
         });
     });
+
+    /**
+     * Get worker health
+     * GET /eloqua/action/worker/health
+     */
+    static getWorkerHealth = asyncHandler(async (req, res) => {
+        const pendingCount = await SmsJob.countDocuments({ status: 'pending' });
+        const processingCount = await SmsJob.countDocuments({ status: 'processing' });
+        const stuckCount = await SmsJob.countDocuments({
+            status: 'processing',
+            processingStartedAt: { $lt: new Date(Date.now() - 5 * 60 * 1000) }
+        });
+
+        const workerStats = global.smsWorker ? await global.smsWorker.getStats() : null;
+
+        res.json({
+            success: true,
+            queue: {
+                pending: pendingCount,
+                processing: processingCount,
+                stuck: stuckCount
+            },
+            worker: workerStats || { status: 'not available' }
+        });
+    });
+
+    /**
+     * Helper: Parse field name from "fieldId__fieldName" or "fieldName" format
+     */
+    static parseFieldName(fieldValue) {
+        if (!fieldValue) return null;
+        
+        const parts = fieldValue.split('__');
+        return parts.length > 1 ? parts[1] : parts[0];
+    }
 }
 
 module.exports = ActionController;

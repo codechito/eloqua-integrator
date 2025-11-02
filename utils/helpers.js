@@ -354,7 +354,20 @@ function parseQueryString(queryString) {
     return params;
 }
 
+/**
+ * Parse field name from Eloqua format
+ * @param {string} fieldValue - Format: "fieldId__fieldName" or "fieldName"
+ * @returns {string|null} - Parsed field name
+ */
+function parseFieldName(fieldValue) {
+    if (!fieldValue) return null;
+    
+    const parts = fieldValue.split('__');
+    return parts.length > 1 ? parts[1] : parts[0];
+}
+
 module.exports = {
+    parseFieldName,
     parseFieldPath,
     extractMergeFields,
     replaceMergeFields,
