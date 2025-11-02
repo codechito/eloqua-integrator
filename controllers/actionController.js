@@ -669,43 +669,183 @@ class ActionController {
     }
 
     /**
-     * Notify (Execute action) - Queue SMS jobs
-     * POST /eloqua/action/notify
-     */
-    static notify = asyncHandler(async (req, res) => {
-        const { instanceId } = req.query;
-        const executionData = req.body;
+ * Notify (Execute action) - Queue SMS jobs
+ * POST /eloqua/action/notify
+ */
+static notify = asyncHandler(async (req, res) => {
+    const instanceId = req.query.instanceId || req.params.instanceId;
+    const installId = req.query.installId || req.params.installId;
+    const assetId = req.query.AssetId || req.params.assetId;
+    const executionId = req.query.ExecutionId || req.params.executionId;
+    const siteId = req.query.siteId || req.params.SiteId;
+    
+    const executionData = req.body;
 
-        logger.info('Action notify received', { 
-            instanceId, 
-            recordCount: executionData.items?.length || 0,
-            executionId: executionData.executionId,
-            hasMore: executionData.hasMore
+    logger.info('Action notify received', { 
+        instanceId, 
+        installId,
+        assetId,
+        executionId,
+        recordCount: executionData.items?.length || 0,
+        hasMore: executionData.hasMore
+    });
+
+    // Log sample record to see actual structure
+    if (executionData.items && executionData.items.length > 0) {
+        logger.debug('Sample record from Eloqua', {
+            instanceId,
+            sampleRecord: executionData.items[0],
+            recordKeys: Object.keys(executionData.items[0])
+        });
+    }
+
+    // Process asynchronously
+    ActionController.processNotifyAsync(
+        instanceId, 
+        installId, 
+        siteId,
+        assetId,
+        executionId,
+        executionData
+    ).catch(error => {
+        logger.error('Async notify processing failed', {
+            instanceId,
+            error: error.message,
+            stack: error.stack
+        });
+    });
+
+    // Return response after 10 second delay (like old code)
+    setTimeout(() => {
+        res.status(200).json({
+            message: "SMS jobs are being processed asynchronously"
+        });
+    }, 10000);
+});
+
+/**
+ * Process notify asynchronously
+ */
+static async processNotifyAsync(instanceId, installId, siteId, assetId, executionId, executionData) {
+    try {
+        logger.info('Starting async notify processing', {
+            instanceId,
+            installId,
+            recordCount: executionData.items?.length || 0
         });
 
         const instance = await ActionInstance.findOne({ instanceId });
         if (!instance) {
-            return res.status(404).json({ error: 'Instance not found' });
+            throw new Error(`Instance not found: ${instanceId}`);
         }
 
-        const consumer = await Consumer.findOne({ installId: instance.installId })
+        const consumer = await Consumer.findOne({ installId })
             .select('+transmitsms_api_key +transmitsms_api_secret');
             
         if (!consumer) {
-            return res.status(404).json({ error: 'Consumer not found' });
+            throw new Error(`Consumer not found: ${installId}`);
         }
 
         if (!consumer.transmitsms_api_key || !consumer.transmitsms_api_secret) {
-            logger.error('TransmitSMS not configured', { instanceId });
-            return res.status(400).json({ 
-                error: 'TransmitSMS API not configured' 
-            });
+            throw new Error('TransmitSMS API not configured');
         }
 
-        // Update instance entry date
+        // Update instance (like old code)
+        instance.asset_id = assetId || instance.assetId;
         instance.entry_date = new Date();
-        instance.asset_id = executionData.assetId || instance.assetId;
         await instance.save();
+
+        // Parse field names (like old code)
+        let recipient_field = instance.recipient_field;
+        let country_field = instance.country_field;
+
+        if (instance.program_coid) {
+            // If program CDO, parse the field names
+            if (instance.recipient_field.split('__').length > 1) {
+                recipient_field = instance.recipient_field.split('__')[1];
+            } else {
+                recipient_field = instance.recipient_field;
+            }
+
+            if (instance.country_setting === 'cc') {
+                country_field = instance.country_field;
+            } else {
+                if (instance.country_field.split('__').length > 1) {
+                    country_field = instance.country_field.split('__')[1];
+                } else {
+                    country_field = instance.country_field;
+                }
+            }
+        }
+
+        // Remove C_ prefix for field lookup (like old code does with field.replace("C_", ""))
+        recipient_field = recipient_field.replace(/^C_/, '');
+        country_field = country_field.replace(/^C_/, '');
+
+        logger.debug('Parsed field names', {
+            recipient_field,
+            country_field,
+            hasProgramCoid: !!instance.program_coid
+        });
+
+        // Process items (enrich with message and tracked_link_url)
+        executionData.items.forEach(item => {
+            item.message = instance.message;
+            item.tracked_link_url = instance.tracked_link;
+            
+            // Set default country if not present
+            if (!item.Country) {
+                item.Country = consumer.default_country;
+            }
+            
+            item.recipient_field = recipient_field;
+            item.country_field = country_field;
+
+            // Replace merge fields in message [FieldName] format
+            const templated_fields = item.message.match(/[^[\]]+(?=])/g);
+            if (templated_fields) {
+                templated_fields.forEach(field => {
+                    // Skip special fields
+                    if (field.indexOf("tracked-link") === -1 && field.indexOf("unsub-reply-link") === -1) {
+                        const nfield = "\\[" + field + "\\]";
+                        const msgrgex = new RegExp(nfield, "g");
+                        
+                        // Remove C_ prefix and get value from item
+                        const cleanFieldName = field.replace("C_", "");
+                        const fieldValue = item[cleanFieldName] || '';
+                        
+                        item.message = item.message.replace(msgrgex, fieldValue);
+                        
+                        logger.debug('Replaced merge field in message', {
+                            field,
+                            cleanFieldName,
+                            value: fieldValue ? fieldValue.substring(0, 20) : '(empty)'
+                        });
+                    }
+                });
+            }
+
+            // Replace merge fields in tracked link URL
+            if (item.tracked_link_url) {
+                const link_templated_fields = item.tracked_link_url.match(/[^[\]]+(?=])/g);
+                if (link_templated_fields) {
+                    link_templated_fields.forEach(field => {
+                        const nfield = "\\[" + field + "\\]";
+                        const msgrgex = new RegExp(nfield, "g");
+                        
+                        const cleanFieldName = field.replace("C_", "");
+                        const fieldValue = item[cleanFieldName] || '';
+                        
+                        item.tracked_link_url = item.tracked_link_url.replace(msgrgex, fieldValue);
+                    });
+                }
+            }
+        });
+
+        logger.info('Items enriched with message data', {
+            itemCount: executionData.items.length,
+            sampleMessage: executionData.items[0]?.message?.substring(0, 50)
+        });
 
         // Queue SMS jobs
         const results = await ActionController.queueSmsJobs(
@@ -714,213 +854,208 @@ class ActionController {
             executionData
         );
 
-        logger.info('Action notify completed', { 
-            instanceId, 
-            queuedCount: results.filter(r => r.success).length,
-            failCount: results.filter(r => !r.success).length
+        const successCount = results.filter(r => r.success).length;
+        const failCount = results.filter(r => !r.success).length;
+
+        logger.info('Async notify processing completed', { 
+            instanceId,
+            executionId,
+            totalRecords: results.length,
+            successCount,
+            failCount
         });
 
-        res.json({
+        return {
             success: true,
-            message: 'SMS jobs queued for processing',
-            results
+            successCount,
+            failCount
+        };
+
+    } catch (error) {
+        logger.error('Async notify processing error', {
+            instanceId,
+            installId,
+            error: error.message,
+            stack: error.stack
         });
+        throw error;
+    }
+}
+
+/**
+ * Queue SMS jobs for background processing
+ * Items are already enriched with message and merge field data
+ */
+static async queueSmsJobs(instance, consumer, executionData) {
+    const results = [];
+    const items = executionData.items || [];
+    const baseUrl = process.env.APP_BASE_URL || 'https://eloqua-integrator.onrender.com';
+
+    logger.info('Queueing SMS jobs', {
+        instanceId: instance.instanceId,
+        itemCount: items.length
     });
 
-    /**
-     * Queue SMS jobs for background processing
-     * Handles both regular contact fields and program CDO fields
-     */
-    static async queueSmsJobs(instance, consumer, executionData) {
-        const results = [];
-        const records = executionData.items || [];
-        const baseUrl = process.env.APP_BASE_URL || 'https://eloqua-integrator.onrender.com';
+    for (let i = 0; i < items.length; i++) {
+        const item = items[i];
+        
+        try {
+            // Get mobile number (already parsed field name stored in item)
+            const mobileNumber = item[item.recipient_field] || item.MobilePhone;
 
-        // Parse field names (handle fieldId__fieldName format)
-        const recipientFieldName = ActionController.parseFieldName(instance.recipient_field);
-        const countryFieldName = instance.country_field ? ActionController.parseFieldName(instance.country_field) : null;
-
-        logger.debug('Field mappings for notify', {
-            recipientField: {
-                raw: instance.recipient_field,
-                parsed: recipientFieldName
-            },
-            countryField: {
-                raw: instance.country_field,
-                parsed: countryFieldName
-            }
-        });
-
-        for (const record of records) {
-            try {
-                // Get mobile number
-                const mobileNumber = record[recipientFieldName] || record.MobilePhone;
-
-                if (!mobileNumber) {
-                    results.push({
-                        contactId: record.ContactID || record.Id,
-                        success: false,
-                        error: 'Mobile number not found'
-                    });
-                    continue;
-                }
-
-                // Get country for formatting
-                let country = consumer.default_country || 'Australia';
-                if (countryFieldName) {
-                    const countryValue = record[countryFieldName] || record.Country;
-                    if (countryValue) {
-                        country = countryValue;
-                    }
-                }
-
-                // Format phone number
-                const formattedNumber = formatPhoneNumber(mobileNumber, country);
-
-                // Process message with merge fields [FieldName]
-                let message = instance.message;
-                const mergeFields = message.match(/\[([^\]]+)\]/g);
+            if (!mobileNumber) {
+                logger.warn('Item has no mobile number', {
+                    contactId: item.ContactID || item.Id,
+                    recipient_field: item.recipient_field,
+                    availableFields: Object.keys(item)
+                });
                 
-                if (mergeFields) {
-                    for (const field of mergeFields) {
-                        const fieldName = field.replace(/[\[\]]/g, '');
-                        
-                        // Skip special placeholders
-                        if (fieldName === 'tracked-link' || fieldName === 'unsub-reply-link') {
-                            continue;
-                        }
-                        
-                        // Get field value (remove C_ prefix if exists)
-                        const cleanFieldName = fieldName.replace('C_', '');
-                        const fieldValue = record[cleanFieldName] || '';
-                        message = message.replace(field, fieldValue);
-                    }
-                }
-
-                // Process tracked link URL if exists
-                let trackedLinkUrl = null;
-                if (instance.tracked_link) {
-                    trackedLinkUrl = instance.tracked_link;
-                    const linkFields = trackedLinkUrl.match(/\[([^\]]+)\]/g);
-                    
-                    if (linkFields) {
-                        for (const field of linkFields) {
-                            const fieldName = field.replace(/[\[\]]/g, '');
-                            const cleanFieldName = fieldName.replace('C_', '');
-                            const fieldValue = record[cleanFieldName] || '';
-                            trackedLinkUrl = trackedLinkUrl.replace(field, fieldValue);
-                        }
-                    }
-                }
-
-                // Determine sender ID (handle dynamic ## prefix)
-                let senderId = instance.caller_id;
-                if (senderId && senderId.startsWith('##')) {
-                    const senderFieldName = senderId.replace('##', '');
-                    senderId = record[senderFieldName] || instance.caller_id;
-                }
-
-                // Build callback URLs
-                const callbackParams = new URLSearchParams({
-                    installId: instance.installId,
-                    instanceId: instance.instanceId,
-                    contactId: record.ContactID || record.Id,
-                    emailAddress: record.EmailAddress || '',
-                    campaignId: instance.assetId || ''
-                }).toString();
-
-                // Build SMS options
-                const smsOptions = {
-                    from: senderId || undefined
-                };
-
-                if (instance.message_expiry === 'YES' && instance.message_validity) {
-                    smsOptions.validity = parseInt(instance.message_validity) * 60;
-                }
-
-                // Add tracked link if message contains [tracked-link] placeholder
-                if (message.includes('[tracked-link]') && trackedLinkUrl) {
-                    smsOptions.tracked_link_url = trackedLinkUrl;
-                }
-
-                // Add callback URLs
-                if (consumer.dlr_callback) {
-                    smsOptions.dlr_callback = `${consumer.dlr_callback.replace('http:', 'https:')}?${callbackParams}`;
-                }
-
-                if (consumer.reply_callback) {
-                    smsOptions.reply_callback = `${consumer.reply_callback.replace('http:', 'https:')}?${callbackParams}`;
-                }
-
-                if (consumer.link_hits_callback) {
-                    smsOptions.link_hits_callback = `${consumer.link_hits_callback.replace('http:', 'https:')}?${callbackParams}`;
-                }
-
-                // Prepare custom object data if configured
-                const customObjectData = instance.custom_object_id ? {
-                    customObjectId: instance.custom_object_id,
-                    fieldMappings: {
-                        mobile_field: instance.mobile_field,
-                        email_field: instance.email_field,
-                        title_field: instance.title_field,
-                        notification_field: instance.notification_field,
-                        outgoing_field: instance.outgoing_field,
-                        vn_field: instance.vn_field
-                    },
-                    recordData: record
-                } : null;
-
-                // Create SMS job
-                const jobId = generateId();
-                const smsJob = new SmsJob({
-                    jobId,
-                    installId: instance.installId,
-                    instanceId: instance.instanceId,
-                    contactId: record.ContactID || record.Id,
-                    emailAddress: record.EmailAddress || '',
-                    mobileNumber: formattedNumber,
-                    message,
-                    senderId: senderId,
-                    campaignId: instance.assetId,
-                    campaignTitle: instance.assetName,
-                    assetName: instance.assetName,
-                    smsOptions,
-                    customObjectData,
-                    status: 'pending',
-                    scheduledAt: new Date()
-                });
-
-                await smsJob.save();
-
                 results.push({
-                    contactId: record.ContactID || record.Id,
-                    success: true,
-                    jobId: jobId
-                });
-
-                logger.debug('SMS job queued', {
-                    jobId,
-                    contactId: record.ContactID || record.Id,
-                    to: formattedNumber
-                });
-
-            } catch (error) {
-                logger.error('Error queuing SMS job', {
-                    instanceId: instance.instanceId,
-                    contactId: record.ContactID || record.Id,
-                    error: error.message
-                });
-
-                results.push({
-                    contactId: record.ContactID || record.Id,
+                    contactId: item.ContactID || item.Id,
                     success: false,
-                    error: error.message
+                    error: 'Mobile number not found'
                 });
+                continue;
             }
-        }
 
-        return results;
+            // Get country
+            const country = item[item.country_field] || item.Country || consumer.default_country || 'Australia';
+
+            // Format phone number
+            const formattedNumber = formatPhoneNumber(mobileNumber, country);
+
+            logger.debug('Processing item for SMS', {
+                index: i + 1,
+                total: items.length,
+                contactId: item.ContactID || item.Id,
+                mobileNumber: mobileNumber,
+                formattedNumber: formattedNumber,
+                messagePreview: item.message?.substring(0, 50) + '...'
+            });
+
+            // Message is already processed and merged
+            const message = item.message;
+            const trackedLinkUrl = item.tracked_link_url;
+
+            // Determine sender ID
+            let senderId = instance.caller_id;
+            if (senderId && senderId.startsWith('##')) {
+                const senderFieldName = senderId.replace('##', '').replace(/^C_/, '');
+                senderId = item[senderFieldName] || instance.caller_id;
+            }
+
+            // Build callback URLs
+            const callbackParams = new URLSearchParams({
+                installId: instance.installId,
+                instanceId: instance.instanceId,
+                contactId: item.ContactID || item.Id,
+                emailAddress: item.EmailAddress || '',
+                campaignId: instance.assetId || ''
+            }).toString();
+
+            // Build SMS options
+            const smsOptions = {
+                from: senderId || undefined
+            };
+
+            if (instance.message_expiry === 'YES' && instance.message_validity) {
+                smsOptions.validity = parseInt(instance.message_validity) * 60;
+            }
+
+            // Add tracked link if message contains [tracked-link] placeholder
+            if (message.includes('[tracked-link]') && trackedLinkUrl) {
+                smsOptions.tracked_link_url = trackedLinkUrl;
+            }
+
+            // Add callback URLs (replace http with https like old code)
+            if (consumer.dlr_callback) {
+                const dlrUrl = consumer.dlr_callback.replace('http:', 'https:');
+                smsOptions.dlr_callback = `${dlrUrl}?${callbackParams}`;
+            }
+
+            if (consumer.reply_callback) {
+                const replyUrl = consumer.reply_callback.replace('http:', 'https:');
+                smsOptions.reply_callback = `${replyUrl}?${callbackParams}`;
+            }
+
+            if (consumer.link_hits_callback) {
+                const linkUrl = consumer.link_hits_callback.replace('http:', 'https:');
+                smsOptions.link_hits_callback = `${linkUrl}?${callbackParams}`;
+            }
+
+            // Prepare custom object data if configured
+            const customObjectData = instance.custom_object_id ? {
+                customObjectId: instance.custom_object_id,
+                fieldMappings: {
+                    mobile_field: instance.mobile_field,
+                    email_field: instance.email_field,
+                    title_field: instance.title_field,
+                    notification_field: instance.notification_field,
+                    outgoing_field: instance.outgoing_field,
+                    vn_field: instance.vn_field
+                },
+                recordData: item
+            } : null;
+
+            // Create SMS job
+            const jobId = generateId();
+            const smsJob = new SmsJob({
+                jobId,
+                installId: instance.installId,
+                instanceId: instance.instanceId,
+                contactId: item.ContactID || item.Id,
+                emailAddress: item.EmailAddress || '',
+                mobileNumber: formattedNumber,
+                message,
+                senderId: senderId,
+                campaignId: instance.assetId,
+                campaignTitle: instance.assetName,
+                assetName: instance.assetName,
+                smsOptions,
+                customObjectData,
+                status: 'pending',
+                scheduledAt: new Date()
+            });
+
+            await smsJob.save();
+
+            logger.info('SMS job created', {
+                jobId,
+                contactId: item.ContactID || item.Id,
+                to: formattedNumber
+            });
+
+            results.push({
+                contactId: item.ContactID || item.Id,
+                success: true,
+                jobId: jobId
+            });
+
+        } catch (error) {
+            logger.error('Error creating SMS job', {
+                instanceId: instance.instanceId,
+                contactId: item.ContactID || item.Id,
+                error: error.message,
+                stack: error.stack
+            });
+
+            results.push({
+                contactId: item.ContactID || item.Id,
+                success: false,
+                error: error.message
+            });
+        }
     }
+
+    logger.info('SMS job queueing completed', {
+        instanceId: instance.instanceId,
+        total: results.length,
+        success: results.filter(r => r.success).length,
+        failed: results.filter(r => !r.success).length
+    });
+
+    return results;
+}
 
     /**
      * Process a single SMS job (called by worker)
