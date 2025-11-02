@@ -12,31 +12,38 @@ class EloquaService {
     }
 
     /**
-     * Extract pod number from siteId
+     * Get Eloqua base URL using the id endpoint
+     * This is required for App Cloud apps
      */
-    getPodFromSiteId(siteId) {
-        if (!siteId) {
-            logger.warn('No siteId provided, defaulting to p03');
-            return 'p03';
+    async getEloquaBaseUrl(accessToken) {
+        try {
+            logger.debug('Fetching Eloqua base URL', {
+                installId: this.installId
+            });
+
+            const response = await axios.get('https://login.eloqua.com/id', {
+                headers: {
+                    'Authorization': `Bearer ${accessToken}`
+                }
+            });
+
+            const baseUrl = response.data.urls.base;
+            
+            logger.info('Eloqua base URL retrieved', {
+                installId: this.installId,
+                baseUrl
+            });
+
+            return baseUrl;
+
+        } catch (error) {
+            logger.error('Failed to get Eloqua base URL', {
+                installId: this.installId,
+                error: error.message,
+                response: error.response?.data
+            });
+            throw error;
         }
-
-        const siteIdStr = String(siteId);
-        
-        let podNumber;
-        if (siteIdStr.length >= 3) {
-            podNumber = parseInt(siteIdStr.charAt(0));
-        } else {
-            podNumber = parseInt(siteIdStr);
-        }
-
-        const pod = `p${String(podNumber).padStart(2, '0')}`;
-        
-        logger.debug('Extracted pod from siteId', {
-            siteId: siteIdStr,
-            pod: pod
-        });
-
-        return pod;
     }
 
     /**
@@ -52,21 +59,6 @@ class EloquaService {
                 installId: this.installId,
                 siteId: this.siteId
             });
-
-            // **FIX: If siteId is not provided, get it from consumer**
-            if (!this.siteId) {
-                logger.warn('SiteId not provided to EloquaService, fetching from consumer');
-                
-                const consumer = await Consumer.findOne({ installId: this.installId });
-                if (consumer && consumer.siteId) {
-                    this.siteId = consumer.siteId;
-                    logger.info('SiteId retrieved from consumer', {
-                        siteId: this.siteId
-                    });
-                } else {
-                    throw new Error('SiteId not found in consumer record');
-                }
-            }
 
             const consumer = await Consumer.findOne({ installId: this.installId })
                 .select('+oauth_token +oauth_expires_at +oauth_refresh_token');
@@ -87,8 +79,7 @@ class EloquaService {
                 installId: this.installId,
                 tokenPreview,
                 tokenLength: consumer.oauth_token?.length || 0,
-                expiresAt: consumer.oauth_expires_at,
-                isExpired: consumer.oauth_expires_at ? new Date() >= consumer.oauth_expires_at : 'NO_EXPIRY'
+                expiresAt: consumer.oauth_expires_at
             });
 
             if (consumer.oauth_expires_at && new Date() >= consumer.oauth_expires_at) {
@@ -100,20 +91,19 @@ class EloquaService {
                 throw new Error('OAuth token expired');
             }
 
-            const pod = this.getPodFromSiteId(this.siteId);
-            this.baseURL = `https://secure.${pod}.eloqua.com`;
+            // **KEY FIX: Get the actual Eloqua base URL using the /id endpoint**
+            this.baseURL = await this.getEloquaBaseUrl(consumer.oauth_token);
 
-            logger.info('Eloqua base URL constructed', {
-                siteId: this.siteId,
-                pod: pod,
+            logger.info('Eloqua base URL set', {
+                installId: this.installId,
                 baseURL: this.baseURL
             });
 
-            // For App Cloud, use Basic Auth with the OAuth token
+            // **KEY FIX: Use Bearer token, not Basic**
             this.client = axios.create({
                 baseURL: this.baseURL,
                 headers: {
-                    'Authorization': `Basic ${consumer.oauth_token}`,
+                    'Authorization': `Bearer ${consumer.oauth_token}`,  // Bearer, not Basic!
                     'Content-Type': 'application/json'
                 },
                 timeout: 30000
@@ -126,7 +116,7 @@ class EloquaService {
                         url: config.url,
                         baseURL: config.baseURL,
                         hasAuth: !!config.headers?.Authorization,
-                        authType: config.headers?.Authorization?.substring(0, 10) || 'NO_AUTH'
+                        authType: 'Bearer'
                     });
                     return config;
                 },
@@ -153,8 +143,7 @@ class EloquaService {
                         data: error.response?.data,
                         url: error.config?.url,
                         method: error.config?.method,
-                        baseURL: this.baseURL,
-                        authHeader: error.config?.headers?.Authorization?.substring(0, 20) + '...'
+                        baseURL: this.baseURL
                     });
                     throw error;
                 }
@@ -166,7 +155,7 @@ class EloquaService {
                 installId: this.installId,
                 siteId: this.siteId,
                 baseURL: this.baseURL,
-                authType: 'Basic'
+                authType: 'Bearer'
             });
 
         } catch (error) {
@@ -180,7 +169,6 @@ class EloquaService {
         }
     }
 
-    // ... rest of the methods remain the same
     async ensureInitialized() {
         if (!this.initialized || !this.client) {
             logger.debug('Client not initialized, initializing now', {
@@ -311,7 +299,7 @@ class EloquaService {
         };
 
         if (search) {
-            params.search = search;
+            params.search = `name=${search}*`;
         }
 
         try {
@@ -366,7 +354,7 @@ class EloquaService {
         
         try {
             const response = await this.client.post(
-                `/api/REST/2.0/data/customObject/${customObjectId}`,
+                `/api/REST/2.0/data/customObject/${customObjectId}/instance`,
                 data
             );
 
