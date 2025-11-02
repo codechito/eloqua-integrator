@@ -1,238 +1,116 @@
 const axios = require('axios');
-const Consumer = require('../models/Consumer');
-const { logger, buildQueryString } = require('../utils');
-const eloquaConfig = require('../config/eloqua');
+const { logger } = require('../utils');
+const config = require('../config/eloqua');
 
 class OAuthService {
     /**
-     * Get authorization URL for OAuth flow
-     * @param {string} installId - Installation ID
-     * @param {string} state - State parameter for security
-     * @returns {string} Authorization URL
+     * Get access token from authorization code
      */
-    static getAuthorizationUrl(installId, state) {
-        const params = {
-            response_type: 'code',
-            client_id: process.env.ELOQUA_CLIENT_ID,
-            redirect_uri: process.env.ELOQUA_REDIRECT_URI,
-            scope: eloquaConfig.oauth.scope,
-            state: state || installId
-        };
-
-        const queryString = buildQueryString(params);
-        const authUrl = `${eloquaConfig.oauth.authorizationUrl}?${queryString}`;
-
-        logger.info('Generated OAuth authorization URL', {
-            installId,
-            redirectUri: process.env.ELOQUA_REDIRECT_URI
-        });
-
-        return authUrl;
-    }
-
-    /**
-     * Exchange authorization code for access token
-     * @param {string} code - Authorization code
-     * @returns {object} Token data
-     */
-    static async exchangeCodeForToken(code) {
+    static async getAccessToken(code) {
         try {
-            logger.info('Exchanging authorization code for token');
-
-            // Create Basic Auth header
-            const credentials = Buffer.from(
-                `${process.env.ELOQUA_CLIENT_ID}:${process.env.ELOQUA_CLIENT_SECRET}`
-            ).toString('base64');
-
-            // Use URLSearchParams for form-encoded body
-            const params = new URLSearchParams({
-                grant_type: 'authorization_code',
-                code: code,
-                redirect_uri: process.env.ELOQUA_REDIRECT_URI
-            });
+            logger.info('Exchanging authorization code for access token');
 
             const response = await axios.post(
-                eloquaConfig.oauth.tokenUrl,
-                params.toString(), // Send as URL-encoded string
+                config.oauth.tokenURL,
+                new URLSearchParams({
+                    grant_type: 'authorization_code',
+                    code: code,
+                    redirect_uri: config.oauth.callbackURL
+                }).toString(),
                 {
+                    auth: {
+                        username: config.oauth.clientID,
+                        password: config.oauth.clientSecret
+                    },
                     headers: {
-                        'Authorization': `Basic ${credentials}`,
                         'Content-Type': 'application/x-www-form-urlencoded'
                     }
                 }
             );
 
-            logger.info('Successfully exchanged code for token', {
-                expiresIn: response.data.expires_in,
-                tokenType: response.data.token_type
-            });
-
-            return response.data;
-        } catch (error) {
-            const errorMessage = error.response?.data?.error_description || 
-                                error.response?.data?.error || 
-                                error.message;
-            
-            logger.error('OAuth token exchange failed', {
-                error: errorMessage,
-                statusCode: error.response?.status,
-                details: error.response?.data
-            });
-
-            throw new Error(`OAuth token exchange failed: ${errorMessage}`);
-        }
-    }
-
-    /**
-     * Refresh access token
-     * @param {string} refreshToken - Refresh token
-     * @returns {object} New token data
-     */
-    static async refreshAccessToken(refreshToken) {
-        try {
-            logger.info('Refreshing access token');
-
-            // Create Basic Auth header
-            const credentials = Buffer.from(
-                `${process.env.ELOQUA_CLIENT_ID}:${process.env.ELOQUA_CLIENT_SECRET}`
-            ).toString('base64');
-
-            // Use URLSearchParams for form-encoded body
-            const params = new URLSearchParams({
-                grant_type: 'refresh_token',
-                refresh_token: refreshToken
-            });
-
-            const response = await axios.post(
-                eloquaConfig.oauth.tokenUrl,
-                params.toString(),
-                {
-                    headers: {
-                        'Authorization': `Basic ${credentials}`,
-                        'Content-Type': 'application/x-www-form-urlencoded'
-                    }
-                }
-            );
-
-            logger.info('Successfully refreshed access token', {
+            logger.info('Token exchange successful', {
+                hasAccessToken: !!response.data.access_token,
+                hasRefreshToken: !!response.data.refresh_token,
+                tokenType: response.data.token_type,
                 expiresIn: response.data.expires_in
             });
 
             return response.data;
         } catch (error) {
-            const errorMessage = error.response?.data?.error_description || 
-                                error.response?.data?.error || 
-                                error.message;
-            
+            logger.error('Token exchange failed', {
+                error: error.message,
+                status: error.response?.status,
+                data: error.response?.data,
+                stack: error.stack
+            });
+            throw error;
+        }
+    }
+
+    /**
+     * Refresh access token using refresh token
+     */
+    static async refreshAccessToken(refreshToken) {
+        try {
+            logger.info('Refreshing access token');
+
+            const response = await axios.post(
+                config.oauth.tokenURL,
+                new URLSearchParams({
+                    grant_type: 'refresh_token',
+                    refresh_token: refreshToken,
+                    scope: config.oauth.scope || 'full'
+                }).toString(),
+                {
+                    auth: {
+                        username: config.oauth.clientID,
+                        password: config.oauth.clientSecret
+                    },
+                    headers: {
+                        'Content-Type': 'application/x-www-form-urlencoded'
+                    }
+                }
+            );
+
+            logger.info('Token refresh successful', {
+                hasAccessToken: !!response.data.access_token,
+                hasRefreshToken: !!response.data.refresh_token,
+                tokenType: response.data.token_type,
+                expiresIn: response.data.expires_in
+            });
+
+            return response.data;
+        } catch (error) {
             logger.error('Token refresh failed', {
-                error: errorMessage,
-                statusCode: error.response?.status
-            });
-
-            throw new Error(`Token refresh failed: ${errorMessage}`);
-        }
-    }
-
-    /**
-     * Save tokens to database
-     * @param {string} installId - Installation ID
-     * @param {object} tokenData - Token data from OAuth response
-     * @returns {object} Updated consumer
-     */
-    static async saveTokens(installId, tokenData) {
-        try {
-            const consumer = await Consumer.findOne({ installId });
-            
-            if (!consumer) {
-                throw new Error('Consumer not found');
-            }
-
-            // Calculate expiration date
-            const expiresIn = tokenData.expires_in || 28800; // Default 8 hours
-            const expiresAt = new Date(Date.now() + expiresIn * 1000);
-
-            // Update consumer with new tokens
-            consumer.oauth_token = tokenData.access_token;
-            consumer.oauth_refresh_token = tokenData.refresh_token;
-            consumer.oauth_expires_at = expiresAt;
-            consumer.oauth_token_type = tokenData.token_type || 'Bearer';
-
-            await consumer.save();
-
-            logger.info('OAuth tokens saved', {
-                installId,
-                expiresAt: expiresAt.toISOString()
-            });
-
-            return consumer;
-        } catch (error) {
-            logger.error('Error saving OAuth tokens', {
-                installId,
-                error: error.message
+                error: error.message,
+                status: error.response?.status,
+                data: error.response?.data,
+                stack: error.stack
             });
             throw error;
         }
     }
 
     /**
-     * Revoke access token
-     * @param {string} installId - Installation ID
+     * Get authorization URL
      */
-    static async revokeToken(installId) {
-        try {
-            const consumer = await Consumer.findOne({ installId })
-                .select('+oauth_token +oauth_refresh_token');
-            
-            if (!consumer) {
-                throw new Error('Consumer not found');
-            }
+    static getAuthorizationUrl(installId) {
+        const params = new URLSearchParams({
+            response_type: 'code',
+            client_id: config.oauth.clientID,
+            redirect_uri: config.oauth.callbackURL,
+            scope: config.oauth.scope || 'full',
+            state: installId
+        });
 
-            // Clear tokens
-            consumer.oauth_token = null;
-            consumer.oauth_refresh_token = null;
-            consumer.oauth_expires_at = null;
+        const authUrl = `${config.oauth.authorizationURL}?${params.toString()}`;
 
-            await consumer.save();
+        logger.info('Authorization URL generated', {
+            installId,
+            redirectUri: config.oauth.callbackURL
+        });
 
-            logger.info('OAuth tokens revoked', { installId });
-
-            return true;
-        } catch (error) {
-            logger.error('Error revoking OAuth tokens', {
-                installId,
-                error: error.message
-            });
-            throw error;
-        }
-    }
-
-    /**
-     * Check if consumer has valid OAuth token
-     * @param {string} installId - Installation ID
-     * @returns {boolean}
-     */
-    static async hasValidToken(installId) {
-        try {
-            const consumer = await Consumer.findOne({ installId })
-                .select('+oauth_token +oauth_expires_at');
-            
-            if (!consumer || !consumer.oauth_token) {
-                return false;
-            }
-
-            // Check if token is expired
-            if (consumer.oauth_expires_at && new Date() >= consumer.oauth_expires_at) {
-                return false;
-            }
-
-            return true;
-        } catch (error) {
-            logger.error('Error checking token validity', {
-                installId,
-                error: error.message
-            });
-            return false;
-        }
+        return authUrl;
     }
 }
 

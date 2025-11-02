@@ -1,32 +1,37 @@
-const Consumer = require('../models/Consumer');
+const { Consumer } = require('../models');
 const { logger } = require('../utils');
 
 /**
  * Session-based authentication for AJAX calls
- * This middleware checks if user has a valid session from OAuth
+ * Uses stored session data instead of query params
  */
 async function sessionAuth(req, res, next) {
-    const { installId, siteId } = req.params;
-
-    // Check if installId is in session or query
-    const sessionInstallId = req.session?.installId || req.query.installId;
-
-    if (!sessionInstallId && !installId) {
-        logger.warn('No installId in session or params');
-        return res.status(401).json({ 
-            error: 'Unauthorized',
-            message: 'No valid session. Please reload the configuration page.' 
-        });
-    }
-
     try {
-        // Verify consumer exists and is active
+        const { installId, siteId } = req.params;
+
+        logger.debug('Session auth check', {
+            installId,
+            siteId,
+            hasSession: !!req.session,
+            sessionInstallId: req.session?.installId
+        });
+
+        if (!installId) {
+            logger.warn('Missing installId in AJAX request');
+            return res.status(401).json({ 
+                error: 'Unauthorized',
+                message: 'InstallId is required' 
+            });
+        }
+
+        // Find consumer with OAuth token
         const consumer = await Consumer.findOne({ 
-            installId: installId || sessionInstallId,
+            installId, 
             isActive: true 
-        }).select('+oauth_token +oauth_expires_at');
+        }).select('+oauth_token +oauth_expires_at +oauth_refresh_token');
 
         if (!consumer) {
+            logger.warn('Consumer not found for AJAX request', { installId });
             return res.status(401).json({ 
                 error: 'Unauthorized',
                 message: 'Invalid installation' 
@@ -35,46 +40,50 @@ async function sessionAuth(req, res, next) {
 
         // Check if OAuth token exists
         if (!consumer.oauth_token) {
+            logger.warn('No OAuth token for consumer', { installId });
             return res.status(401).json({ 
                 error: 'Unauthorized',
-                message: 'OAuth token not found. Please re-authorize.',
-                code: 'REAUTH_REQUIRED',
-                reAuthUrl: `/eloqua/app/install?installId=${consumer.installId}&siteId=${consumer.SiteId}`
+                message: 'OAuth token not found. Please re-authorize the app.',
+                reAuthRequired: true
             });
         }
 
         // Check if token is expired
         if (consumer.oauth_expires_at && new Date() >= consumer.oauth_expires_at) {
-            logger.warn('OAuth token expired in session auth', {
-                installId: consumer.installId,
-                expiresAt: consumer.oauth_expires_at
+            logger.warn('OAuth token expired for consumer', {
+                installId,
+                expiresAt: consumer.oauth_expires_at,
+                now: new Date()
             });
             
-            // Token is expired but we'll let EloquaService handle the refresh
-            // Just log it here for visibility
+            return res.status(401).json({ 
+                error: 'Unauthorized',
+                message: 'OAuth token expired. Please refresh the page.',
+                reAuthRequired: true
+            });
         }
-
-        // Store installId in session for future requests
-        req.session.installId = consumer.installId;
-        req.session.siteId = consumer.SiteId;
 
         // Attach consumer to request
         req.consumer = consumer;
-        req.eloquaAuth = {
-            token: consumer.oauth_token,
-            baseUrl: consumer.eloqua_base_url
-        };
+        req.installId = installId;
+        req.siteId = siteId;
+
+        logger.debug('Session auth successful', {
+            installId,
+            hasToken: !!consumer.oauth_token,
+            expiresAt: consumer.oauth_expires_at
+        });
 
         next();
-
     } catch (error) {
         logger.error('Session auth error', {
             error: error.message,
-            installId
+            stack: error.stack
         });
+        
         res.status(500).json({ 
-            error: 'Authentication Error',
-            message: error.message 
+            error: 'Internal Server Error',
+            message: 'Authentication failed' 
         });
     }
 }

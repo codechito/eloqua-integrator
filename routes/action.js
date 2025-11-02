@@ -1,36 +1,32 @@
 const express = require('express');
 const router = express.Router();
-const { ActionController } = require('../controllers');
+const ActionController = require('../controllers/actionController');
 const { 
     verifyInstallation,
     verifyOAuthToken,
-    verifyTransmitSmsCredentials,
-    validateQueryParams 
-} = require('../middleware');
+    verifyTransmitSmsCredentials
+} = require('../middleware/auth');
 const sessionAuth = require('../middleware/sessionAuth');
 
-// Action service lifecycle
-router.post('/create', 
-    validateQueryParams('installId', 'siteId'),
+// Instance lifecycle endpoints (use verifyInstallation + verifyOAuthToken)
+router.get('/create', 
     verifyInstallation,
     ActionController.create
 );
 
 router.get('/configure', 
-    validateQueryParams('installId', 'siteId', 'instanceId'),
     verifyInstallation,
     verifyOAuthToken,
     ActionController.configure
 );
 
 router.post('/configure', 
-    validateQueryParams('instanceId'),
     verifyInstallation,
+    verifyOAuthToken,
     ActionController.saveConfiguration
 );
 
 router.post('/notify', 
-    validateQueryParams('instanceId'),
     verifyInstallation,
     verifyOAuthToken,
     verifyTransmitSmsCredentials,
@@ -38,26 +34,34 @@ router.post('/notify',
 );
 
 router.post('/copy', 
-    validateQueryParams('instanceId'),
     verifyInstallation,
     ActionController.copy
 );
 
 router.post('/delete', 
-    validateQueryParams('instanceId'),
     verifyInstallation,
     ActionController.delete
 );
 
-// AJAX endpoints with session auth (NO verifyInstallation or verifyOAuthToken)
+// AJAX endpoints (use sessionAuth - lightweight, no token refresh)
 router.get('/ajax/customobjects/:installId/:siteId/customObject',
-    sessionAuth,  // Use session-based auth instead
+    sessionAuth,
     ActionController.getCustomObjects
 );
 
 router.get('/ajax/customobject/:installId/:siteId/:customObjectId',
-    sessionAuth,  // Use session-based auth instead
+    sessionAuth,
     ActionController.getCustomObjectFields
+);
+
+router.get('/ajax/contactfields/:installId/:siteId',
+    sessionAuth,
+    ActionController.getContactFields
+);
+
+router.get('/ajax/sender-ids/:installId/:siteId',
+    sessionAuth,
+    ActionController.getSenderIds
 );
 
 router.post('/ajax/testsms/:installId/:siteId/:country/:phone',
@@ -67,20 +71,8 @@ router.post('/ajax/testsms/:installId/:siteId/:country/:phone',
 
 // Worker status
 router.get('/worker/status',
-    validateQueryParams('installId'),
     verifyInstallation,
     ActionController.getWorkerStatus
-);
-
-router.get('/ajax/sender-ids/:installId/:siteId',
-    sessionAuth,
-    ActionController.getSenderIds
-);
-
-// Add this new route
-router.get('/ajax/contactfields/:installId/:siteId',
-    sessionAuth,
-    ActionController.getContactFields
 );
 
 module.exports = router;

@@ -1,19 +1,18 @@
-const Consumer = require('../models/Consumer');
+const { Consumer } = require('../models');
 const { logger } = require('../utils');
 const OAuthService = require('../services/oauthService');
 
 /**
  * Verify Eloqua installation
- * Checks if installId exists and is active
  */
 async function verifyInstallation(req, res, next) {
     try {
-        const { installId } = req.query;
+        const { installId } = req.query || req.params;
 
         if (!installId) {
             logger.warn('Missing installId in request', {
                 path: req.path,
-                ip: req.ip
+                method: req.method
             });
             return res.status(401).json({ 
                 error: 'Unauthorized',
@@ -27,10 +26,9 @@ async function verifyInstallation(req, res, next) {
         });
 
         if (!consumer) {
-            logger.warn('Invalid or inactive installation', {
+            logger.warn('Invalid or inactive installation', { 
                 installId,
-                path: req.path,
-                ip: req.ip
+                path: req.path
             });
             return res.status(401).json({ 
                 error: 'Unauthorized',
@@ -38,7 +36,6 @@ async function verifyInstallation(req, res, next) {
             });
         }
 
-        // Attach consumer to request
         req.consumer = consumer;
         req.installId = installId;
 
@@ -49,9 +46,9 @@ async function verifyInstallation(req, res, next) {
 
         next();
     } catch (error) {
-        logger.error('Error verifying installation', {
+        logger.error('Error verifying installation', { 
             error: error.message,
-            path: req.path
+            stack: error.stack
         });
         res.status(500).json({ 
             error: 'Internal Server Error',
@@ -61,8 +58,7 @@ async function verifyInstallation(req, res, next) {
 }
 
 /**
- * Verify OAuth token exists and auto-refresh if expired
- * Checks if consumer has valid OAuth credentials and refreshes if needed
+ * Verify OAuth token and auto-refresh if expired
  */
 async function verifyOAuthToken(req, res, next) {
     try {
@@ -75,42 +71,69 @@ async function verifyOAuthToken(req, res, next) {
             });
         }
 
-        // Fetch consumer with OAuth fields including refresh token
+        // Fetch consumer with OAuth fields
         const consumerWithToken = await Consumer.findById(consumer._id)
             .select('+oauth_token +oauth_expires_at +oauth_refresh_token');
 
+        if (!consumerWithToken) {
+            logger.error('Consumer not found in database', {
+                consumerId: consumer._id
+            });
+            return res.status(401).json({ 
+                error: 'Unauthorized',
+                message: 'Consumer not found' 
+            });
+        }
+
         // Check if OAuth token exists
         if (!consumerWithToken.oauth_token) {
-            logger.warn('Missing OAuth token', {
-                installId: consumer.installId
+            logger.warn('Missing OAuth token', { 
+                installId: consumer.installId 
             });
             
-            // Create reauth error
             const reAuthError = new Error('OAuth authentication required');
             reAuthError.code = 'REAUTH_REQUIRED';
             reAuthError.reAuthUrl = `/eloqua/app/authorize?installId=${consumer.installId}`;
             return next(reAuthError);
         }
 
-        // Check if token is expired or about to expire (5 minutes buffer)
-        const tokenExpiryBuffer = 5 * 60 * 1000; // 5 minutes in milliseconds
-        const isExpiredOrExpiringSoon = consumerWithToken.oauth_expires_at && 
-            new Date() >= new Date(consumerWithToken.oauth_expires_at.getTime() - tokenExpiryBuffer);
+        // Check token expiry
+        const tokenExpiryBuffer = 5 * 60 * 1000; // 5 minutes
+        const now = new Date();
+        const expiresAt = consumerWithToken.oauth_expires_at;
+        
+        if (!expiresAt) {
+            logger.warn('No token expiry date set', {
+                installId: consumer.installId
+            });
+            // Token exists but no expiry - assume it's valid for now
+            req.consumer = consumerWithToken;
+            return next();
+        }
+
+        const isExpiredOrExpiringSoon = now >= new Date(expiresAt.getTime() - tokenExpiryBuffer);
+        const minutesUntilExpiry = expiresAt ? Math.round((expiresAt - now) / 60000) : 'N/A';
+
+        logger.debug('Token expiry check', {
+            installId: consumer.installId,
+            now: now.toISOString(),
+            expiresAt: expiresAt?.toISOString(),
+            isExpiredOrExpiringSoon,
+            minutesUntilExpiry
+        });
 
         if (isExpiredOrExpiringSoon) {
             logger.info('OAuth token expired or expiring soon, attempting refresh', {
                 installId: consumer.installId,
-                expiresAt: consumerWithToken.oauth_expires_at,
-                now: new Date()
+                expiresAt: expiresAt?.toISOString(),
+                minutesUntilExpiry
             });
 
-            // Check if refresh token exists
             if (!consumerWithToken.oauth_refresh_token) {
-                logger.error('No refresh token available', {
-                    installId: consumer.installId
+                logger.error('No refresh token available', { 
+                    installId: consumer.installId 
                 });
                 
-                // Create reauth error
                 const reAuthError = new Error('OAuth token expired and no refresh token available');
                 reAuthError.code = 'REAUTH_REQUIRED';
                 reAuthError.reAuthUrl = `/eloqua/app/authorize?installId=${consumer.installId}`;
@@ -118,8 +141,7 @@ async function verifyOAuthToken(req, res, next) {
             }
 
             try {
-                // Attempt to refresh the token
-                logger.info('Calling OAuthService.refreshAccessToken', {
+                logger.info('Calling OAuth refresh token endpoint', {
                     installId: consumer.installId
                 });
 
@@ -127,36 +149,41 @@ async function verifyOAuthToken(req, res, next) {
                     consumerWithToken.oauth_refresh_token
                 );
 
-                // Update consumer with new tokens
+                logger.info('Token refresh successful', {
+                    installId: consumer.installId,
+                    hasAccessToken: !!tokenData.access_token,
+                    hasRefreshToken: !!tokenData.refresh_token,
+                    expiresIn: tokenData.expires_in
+                });
+
+                // Update tokens
                 consumerWithToken.oauth_token = tokenData.access_token;
                 
-                // Update refresh token if a new one is provided
                 if (tokenData.refresh_token) {
                     consumerWithToken.oauth_refresh_token = tokenData.refresh_token;
                 }
                 
-                // Calculate expiry time (expires_in is in seconds)
-                const expiresIn = tokenData.expires_in || 3600; // Default 1 hour
+                const expiresIn = tokenData.expires_in || 28800; // Default 8 hours
                 consumerWithToken.oauth_expires_at = new Date(Date.now() + (expiresIn * 1000));
                 
                 await consumerWithToken.save();
 
-                logger.info('Successfully refreshed OAuth token', {
+                logger.info('OAuth token refreshed and saved', {
                     installId: consumer.installId,
-                    newExpiryAt: consumerWithToken.oauth_expires_at
+                    newExpiresAt: consumerWithToken.oauth_expires_at.toISOString()
                 });
 
-                // Update req.consumer with fresh token
                 req.consumer = consumerWithToken;
 
             } catch (refreshError) {
                 logger.error('Failed to refresh OAuth token', {
                     installId: consumer.installId,
                     error: refreshError.message,
+                    response: refreshError.response?.data,
+                    status: refreshError.response?.status,
                     stack: refreshError.stack
                 });
                 
-                // Create reauth error when refresh fails
                 const reAuthError = new Error('OAuth token refresh failed. Please re-authorize.');
                 reAuthError.code = 'REAUTH_REQUIRED';
                 reAuthError.reAuthUrl = `/eloqua/app/authorize?installId=${consumer.installId}`;
@@ -164,26 +191,26 @@ async function verifyOAuthToken(req, res, next) {
                 return next(reAuthError);
             }
         } else {
-            // Token is still valid, just update req.consumer with token data
+            // Token is still valid
             req.consumer = consumerWithToken;
             
             logger.debug('OAuth token is valid', {
                 installId: consumer.installId,
-                expiresAt: consumerWithToken.oauth_expires_at
+                expiresAt: expiresAt?.toISOString(),
+                minutesUntilExpiry
             });
         }
 
         next();
     } catch (error) {
-        logger.error('Error verifying OAuth token', {
+        logger.error('Error verifying OAuth token', { 
             error: error.message,
-            stack: error.stack
+            stack: error.stack 
         });
         
-        // For unexpected errors, still try to trigger reauth
         const reAuthError = new Error('Failed to verify OAuth token');
         reAuthError.code = 'REAUTH_REQUIRED';
-        reAuthError.reAuthUrl = `/eloqua/app/authorize?installId=${req.consumer?.installId || req.query.installId}`;
+        reAuthError.reAuthUrl = `/eloqua/app/authorize?installId=${req.consumer?.installId}`;
         reAuthError.originalError = error;
         next(reAuthError);
     }
@@ -191,7 +218,6 @@ async function verifyOAuthToken(req, res, next) {
 
 /**
  * Verify TransmitSMS credentials
- * Checks if consumer has configured TransmitSMS API credentials
  */
 async function verifyTransmitSmsCredentials(req, res, next) {
     try {
@@ -204,20 +230,25 @@ async function verifyTransmitSmsCredentials(req, res, next) {
             });
         }
 
-        if (!consumer.transmitsms_api_key || !consumer.transmitsms_api_secret) {
-            logger.warn('Missing TransmitSMS credentials', {
-                installId: consumer.installId
+        // Get credentials
+        const consumerWithCreds = await Consumer.findById(consumer._id)
+            .select('+transmitsms_api_key +transmitsms_api_secret');
+
+        if (!consumerWithCreds.transmitsms_api_key || !consumerWithCreds.transmitsms_api_secret) {
+            logger.warn('Missing TransmitSMS credentials', { 
+                installId: consumer.installId 
             });
             return res.status(400).json({ 
                 error: 'Configuration Required',
-                message: 'TransmitSMS API credentials not configured. Please configure the app.' 
+                message: 'TransmitSMS API credentials not configured' 
             });
         }
 
+        req.consumer = consumerWithCreds;
         next();
     } catch (error) {
-        logger.error('Error verifying TransmitSMS credentials', {
-            error: error.message
+        logger.error('Error verifying TransmitSMS credentials', { 
+            error: error.message 
         });
         res.status(500).json({ 
             error: 'Internal Server Error',
@@ -227,25 +258,19 @@ async function verifyTransmitSmsCredentials(req, res, next) {
 }
 
 /**
- * Verify webhook signature (if TransmitSMS provides one)
- * This is a placeholder for webhook verification
+ * Verify webhook signature
  */
 function verifyWebhookSignature(req, res, next) {
-    // TransmitSMS webhook signature verification
-    // Implement if TransmitSMS provides signature verification
-    
     logger.debug('Webhook received', {
         path: req.path,
         ip: req.ip,
         body: req.body
     });
-
     next();
 }
 
 /**
- * Rate limiting middleware
- * Basic rate limiting to prevent abuse
+ * Rate limiting
  */
 const rateLimitMap = new Map();
 
@@ -271,7 +296,7 @@ function rateLimit(maxRequests = 100, windowMs = 60000) {
         }
         
         if (limitData.count >= maxRequests) {
-            logger.warn('Rate limit exceeded', {
+            logger.warn('Rate limit exceeded', { 
                 ip: req.ip,
                 path: req.path
             });
@@ -286,7 +311,7 @@ function rateLimit(maxRequests = 100, windowMs = 60000) {
     };
 }
 
-// Clean up rate limit map periodically
+// Cleanup rate limit map periodically
 setInterval(() => {
     const now = Date.now();
     for (const [key, value] of rateLimitMap.entries()) {
@@ -294,7 +319,7 @@ setInterval(() => {
             rateLimitMap.delete(key);
         }
     }
-}, 60000); // Clean up every minute
+}, 60000);
 
 module.exports = {
     verifyInstallation,
