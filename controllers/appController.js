@@ -189,11 +189,19 @@ class AppController {
             return res.status(404).send('Installation not found');
         }
 
-        // **FIX 4: Check if OAuth token exists and is valid**
+        // Check if OAuth token exists and is valid
         const now = new Date();
         const hasValidToken = consumer.oauth_token && 
             consumer.oauth_expires_at && 
             now < consumer.oauth_expires_at;
+
+        logger.debug('Token validity check', {
+            installId,
+            hasToken: !!consumer.oauth_token,
+            expiresAt: consumer.oauth_expires_at,
+            now: now.toISOString(),
+            hasValidToken
+        });
 
         if (!hasValidToken) {
             logger.warn('No valid OAuth token for config page', {
@@ -203,7 +211,6 @@ class AppController {
                 isExpired: consumer.oauth_expires_at ? now >= consumer.oauth_expires_at : null
             });
 
-            // Redirect to authorization
             return res.redirect(`/eloqua/app/authorize?installId=${installId}&returnTo=config`);
         }
 
@@ -214,30 +221,44 @@ class AppController {
         // Get countries data
         const countries = require('../data/countries.json');
 
-        // Get custom objects
+        // Get custom objects - **FIX: Pass siteId to EloquaService**
         let custom_objects = { elements: [] };
         
         try {
-            const eloquaService = new EloquaService(installId, consumer.siteId);
+            logger.debug('Fetching custom objects', {
+                installId,
+                siteId: consumer.siteId  // Log the siteId being used
+            });
+
+            const eloquaService = new EloquaService(installId, consumer.siteId);  // Pass siteId here
             await eloquaService.initialize();
             custom_objects = await eloquaService.getCustomObjects('', 100);
             
-            logger.debug('Custom objects loaded for config', {
+            logger.info('Custom objects loaded for config', {
                 installId,
+                siteId: consumer.siteId,
                 count: custom_objects.elements?.length || 0
             });
         } catch (error) {
-            logger.warn('Could not fetch custom objects for config', {
+            logger.error('Could not fetch custom objects for config', {
                 installId,
+                siteId: consumer.siteId,
                 error: error.message,
-                status: error.response?.status
+                status: error.response?.status,
+                responseData: error.response?.data
             });
 
-            // If 401, token is invalid despite our check
+            // If 401, token is invalid
             if (error.response?.status === 401) {
-                logger.error('Token is invalid, redirecting to reauth', { installId });
+                logger.error('Token is invalid (401), redirecting to reauth', { 
+                    installId,
+                    siteId: consumer.siteId
+                });
                 return res.redirect(`/eloqua/app/authorize?installId=${installId}&returnTo=config`);
             }
+
+            // For other errors, continue with empty custom objects
+            logger.warn('Continuing with empty custom objects due to error');
         }
 
         res.render('app-config', {

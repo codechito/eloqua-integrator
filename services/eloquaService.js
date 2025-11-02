@@ -53,6 +53,21 @@ class EloquaService {
                 siteId: this.siteId
             });
 
+            // **FIX: If siteId is not provided, get it from consumer**
+            if (!this.siteId) {
+                logger.warn('SiteId not provided to EloquaService, fetching from consumer');
+                
+                const consumer = await Consumer.findOne({ installId: this.installId });
+                if (consumer && consumer.siteId) {
+                    this.siteId = consumer.siteId;
+                    logger.info('SiteId retrieved from consumer', {
+                        siteId: this.siteId
+                    });
+                } else {
+                    throw new Error('SiteId not found in consumer record');
+                }
+            }
+
             const consumer = await Consumer.findOne({ installId: this.installId })
                 .select('+oauth_token +oauth_expires_at +oauth_refresh_token');
 
@@ -94,14 +109,11 @@ class EloquaService {
                 baseURL: this.baseURL
             });
 
-            // **FIX: For App Cloud, use Basic Auth with the OAuth token**
-            // The token is already in the format: company:sessionId (Base64 encoded)
-            // We need to use it as Basic Auth, not Bearer
-            
+            // For App Cloud, use Basic Auth with the OAuth token
             this.client = axios.create({
                 baseURL: this.baseURL,
                 headers: {
-                    'Authorization': `Basic ${consumer.oauth_token}`,  // Changed from Bearer to Basic
+                    'Authorization': `Basic ${consumer.oauth_token}`,
                     'Content-Type': 'application/json'
                 },
                 timeout: 30000
@@ -152,6 +164,7 @@ class EloquaService {
 
             logger.info('Eloqua client initialized successfully', {
                 installId: this.installId,
+                siteId: this.siteId,
                 baseURL: this.baseURL,
                 authType: 'Basic'
             });
@@ -159,6 +172,7 @@ class EloquaService {
         } catch (error) {
             logger.error('Failed to initialize Eloqua client', {
                 installId: this.installId,
+                siteId: this.siteId,
                 error: error.message,
                 stack: error.stack
             });
