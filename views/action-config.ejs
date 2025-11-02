@@ -434,9 +434,10 @@
           <div class="column-right">
             <div class="form-group">
               <label>Recipient Field</label>
-              <select v-model="instance.recipient_field" class="form-control">
-                <option value="">-- Select Field --</option>
-                <option v-for="field in fields" v-bind:value="field.id ? field.id + '__' + field.internalName : field.internalName" :key="field.internalName">{{ field.name }}</option>
+              <select v-model="instance.recipient_field" style="width: 240px; display:inline;" class="form-control">
+                  <option v-for="field in fields" v-bind:value="field.id ? field.id + '__' + field.internalName : field.internalName">
+                      {{ field.name }}
+                  </option>
               </select>
             </div>
           </div>
@@ -465,10 +466,11 @@
           <div class="column-right">
             <div class="form-group">
               <label>Country Field</label>
-              <select v-model="instance.country_field" class="form-control">
-                <option value="">-- Select Field --</option>
-                <option v-if="instance.program_coid" value="Country">Contact Country</option>
-                <option v-for="field in countryfields" v-bind:value="field.id ? field.id + '__' + field.internalName : field.internalName" :key="field.internalName">{{ field.name }}</option>
+              <select v-model="instance.country_field" style="width: 240px; height: 35px;" class="form-control">
+                  <option v-if="instance.program_coid" value="Country">Contact Country</option>
+                  <option v-for="field in countryfields" v-bind:value="field.id ? field.id + '__' + field.internalName : field.internalName">
+                      {{ field.name }}
+                  </option>
               </select>
             </div>
           </div>

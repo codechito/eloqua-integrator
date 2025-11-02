@@ -374,28 +374,53 @@ class EloquaService {
         }
     }
 
-    async getContactFields(count = 200) {
+    /**
+     * Get contact fields using Bulk API (like old code)
+     * Bulk API returns proper internalName structure
+     */
+    async getContactFields(count = 1000) {
         await this.ensureInitialized();
         
         try {
-            const response = await this.client.get('/api/REST/2.0/assets/contact/fields', {
+            logger.debug('Fetching contact fields from Bulk API', {
+                installId: this.installId,
+                count
+            });
+
+            // Use Bulk API like the old code
+            const response = await this.client.get('/api/bulk/2.0/contacts/fields', {
                 params: {
-                    count: count,
-                    depth: 'minimal'
+                    limit: count,
+                    orderBy: 'name asc'
                 }
             });
 
-            logger.debug('Contact fields fetched', {
-                count: response.data.elements?.length || 0
+            logger.info('Contact fields fetched from Bulk API', {
+                count: response.data.items?.length || 0,
+                sampleField: response.data.items?.[0]
             });
 
+            // Bulk API returns items directly with proper structure
+            const items = (response.data.items || []).map(field => ({
+                id: field.internalName, // Bulk API uses internalName as identifier
+                name: field.name,
+                internalName: field.internalName,
+                dataType: field.dataType,
+                uri: field.uri
+            }));
+
             return {
-                items: response.data.elements || [],
-                total: response.data.total || 0
+                items: items,
+                total: response.data.totalResults || items.length,
+                hasMore: response.data.hasMore || false
             };
+
         } catch (error) {
-            logger.error('Failed to fetch contact fields', {
-                error: error.message
+            logger.error('Failed to fetch contact fields from Bulk API', {
+                installId: this.installId,
+                error: error.message,
+                status: error.response?.status,
+                statusText: error.response?.statusText
             });
             throw error;
         }

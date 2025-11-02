@@ -136,7 +136,7 @@ class ActionController {
         logger.info('Loading action configuration page', { 
             installId, 
             instanceId,
-            CustomObjectId, // Program CDO ID if configuring from Program
+            CustomObjectId,
             AssetType
         });
 
@@ -145,7 +145,6 @@ class ActionController {
             return res.status(404).send('Consumer not found');
         }
 
-        // Store in session
         req.session.installId = installId;
         req.session.siteId = siteId;
 
@@ -168,7 +167,6 @@ class ActionController {
             instance.program_coid = CustomObjectId;
         }
 
-        // Get countries data
         const countries = require('../data/countries.json');
 
         // Get sender IDs
@@ -201,16 +199,86 @@ class ActionController {
             logger.warn('Could not fetch custom objects', { error: error.message });
         }
 
-        // Get contact fields for merge
+        // Get contact fields using Bulk API (like old code)
         let merge_fields = [];
         try {
             const eloquaService = new EloquaService(installId, siteId);
             await eloquaService.initialize();
-            const contactFieldsResponse = await eloquaService.getContactFields(200);
+            
+            // Use Bulk API to get contact fields
+            const contactFieldsResponse = await eloquaService.getContactFields(1000);
+            
             merge_fields = contactFieldsResponse.items || [];
+
+            logger.info('Contact fields loaded from Bulk API', {
+                count: merge_fields.length,
+                sampleField: merge_fields[0]
+            });
+
         } catch (error) {
-            logger.warn('Could not fetch contact fields', { error: error.message });
+            logger.error('Failed to fetch contact fields', { 
+                error: error.message,
+                stack: error.stack
+            });
+            
+            // Provide default fields as fallback
+            merge_fields = [
+                { id: 'EmailAddress', name: 'Email Address', internalName: 'EmailAddress', dataType: 'string' },
+                { id: 'FirstName', name: 'First Name', internalName: 'FirstName', dataType: 'string' },
+                { id: 'LastName', name: 'Last Name', internalName: 'LastName', dataType: 'string' },
+                { id: 'MobilePhone', name: 'Mobile Phone', internalName: 'MobilePhone', dataType: 'string' },
+                { id: 'Country', name: 'Country', internalName: 'Country', dataType: 'string' }
+            ];
         }
+
+        // If this is a Program (has program_coid), get the CDO fields
+        let fields = merge_fields; // Default to contact fields
+        let countryfields = merge_fields;
+
+        if (instance.program_coid) {
+            try {
+                const eloquaService = new EloquaService(installId, siteId);
+                await eloquaService.initialize();
+                const programCDO = await eloquaService.getCustomObject(instance.program_coid);
+                
+                // Format CDO fields
+                if (programCDO.fields) {
+                    fields = programCDO.fields.map(field => ({
+                        id: field.id,
+                        name: field.name,
+                        internalName: field.internalName,
+                        dataType: field.dataType
+                    }));
+
+                    // For country field
+                    if (instance.country_setting === 'cf') {
+                        countryfields = fields; // Use CDO fields
+                    } else {
+                        countryfields = merge_fields; // Use contact fields
+                    }
+                }
+
+                logger.info('Program CDO fields loaded', {
+                    program_coid: instance.program_coid,
+                    fieldCount: fields.length
+                });
+
+            } catch (error) {
+                logger.warn('Could not fetch program CDO fields', { 
+                    error: error.message,
+                    program_coid: instance.program_coid
+                });
+            }
+        } else {
+            countryfields = merge_fields;
+        }
+
+        logger.info('Rendering action config page', {
+            instanceId,
+            mergeFieldCount: merge_fields.length,
+            fieldsCount: fields.length,
+            customObjectCount: custom_objects.elements?.length || 0
+        });
 
         res.render('action-config', {
             consumer: consumer.toObject(),
@@ -218,7 +286,7 @@ class ActionController {
             custom_objects,
             countries,
             sender_ids,
-            merge_fields
+            merge_fields: fields
         });
     });
 
@@ -384,21 +452,35 @@ class ActionController {
         }
 
         // Handle recipient field (mobile number)
+        // Handle recipient field (mobile number)
         if (instance.recipient_field) {
-            // **FIX: Parse the field name properly**
             const recipientParts = instance.recipient_field.split("__");
-            const recipientFieldName = recipientParts.length > 1 ? recipientParts[1] : recipientParts[0];
+            let recipientFieldId = null;
+            let recipientFieldName = null;
             
-            // **FIX: Use the parsed field name as KEY, not the raw value**
-            if (instance.program_coid) {
-                // Using program CDO
-                if (recipientParts.length > 1) {
-                    const fieldId = recipientParts[0];
-                    const fieldName = recipientParts[1];
-                    recordDefinition[fieldName] = `{{CustomObject[${instance.program_coid}].Field[${fieldId}]}}`;
-                } else {
-                    recordDefinition[recipientFieldName] = `{{CustomObject[${instance.program_coid}].Contact.Field(C_${recipientFieldName})}}`;
-                }
+            if (recipientParts.length > 1) {
+                // Format: "100014__ContactMobile" (CDO field)
+                recipientFieldId = recipientParts[0];
+                recipientFieldName = recipientParts[1];
+            } else {
+                // Format: "MobilePhone1" (Contact field from Bulk API)
+                recipientFieldName = recipientParts[0];
+            }
+            
+            // Skip if undefined
+            if (!recipientFieldName || recipientFieldName === 'undefined') {
+                logger.warn('Recipient field has undefined name', { 
+                    recipient_field: instance.recipient_field 
+                });
+                recipientFieldName = 'MobilePhone'; // Safe default
+            }
+            
+            if (instance.program_coid && recipientFieldId) {
+                // Program with CDO field
+                recordDefinition[recipientFieldName] = `{{CustomObject[${instance.program_coid}].Field[${recipientFieldId}]}}`;
+            } else if (instance.program_coid) {
+                // Program with contact field
+                recordDefinition[recipientFieldName] = `{{CustomObject[${instance.program_coid}].Contact.Field(C_${recipientFieldName})}}`;
             } else {
                 // Regular campaign - contact field
                 recordDefinition[recipientFieldName] = `{{Contact.Field(C_${recipientFieldName})}}`;
