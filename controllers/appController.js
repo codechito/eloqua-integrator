@@ -37,18 +37,26 @@ class AppController {
 
         await consumer.save();
 
-        logger.info('Consumer created', {
+        logger.info('Consumer created, initiating OAuth', {
             installId,
             siteName,
             siteId
         });
 
-        // Return install response
-        res.json({
-            success: true,
+        // **FIX 1: Redirect to OAuth instead of returning JSON**
+        // Store callbackUrl in session for after OAuth
+        req.session.installId = installId;
+        req.session.eloquaCallbackUrl = callbackUrl;
+
+        // Redirect to OAuth authorization
+        const authUrl = OAuthService.getAuthorizationUrl(installId);
+        
+        logger.info('Redirecting to OAuth for new install', {
             installId,
-            callbackUrl: callbackUrl || `${process.env.APP_BASE_URL}/eloqua/app/config?installId=${installId}`
+            authUrl
         });
+
+        res.redirect(authUrl);
     });
 
     /**
@@ -60,7 +68,8 @@ class AppController {
 
         logger.info('App uninstall request', { installId });
 
-        const consumer = await Consumer.findOne({ installId });
+        const consumer = await Consumer.findOne({ installId })
+            .select('+oauth_token');
 
         if (!consumer) {
             return res.status(404).json({
@@ -68,11 +77,28 @@ class AppController {
             });
         }
 
+        // **FIX 2: Revoke OAuth token before uninstall**
+        if (consumer.oauth_token) {
+            try {
+                await OAuthService.revokeToken(consumer.oauth_token);
+                logger.info('OAuth token revoked', { installId });
+            } catch (error) {
+                logger.warn('Failed to revoke token during uninstall', {
+                    installId,
+                    error: error.message
+                });
+            }
+        }
+
         // Soft delete - mark as inactive
         consumer.isActive = false;
+        consumer.oauth_token = null;
+        consumer.oauth_refresh_token = null;
+        consumer.oauth_expires_at = null;
+        
         await consumer.save();
 
-        logger.info('Consumer marked as inactive', { installId });
+        logger.info('Consumer uninstalled', { installId });
 
         res.json({
             success: true,
@@ -89,7 +115,8 @@ class AppController {
 
         logger.info('App status check', { installId });
 
-        const consumer = await Consumer.findOne({ installId });
+        const consumer = await Consumer.findOne({ installId })
+            .select('+oauth_token +oauth_expires_at +transmitsms_api_key +transmitsms_api_secret');
 
         if (!consumer) {
             return res.status(404).json({
@@ -97,12 +124,34 @@ class AppController {
             });
         }
 
+        // **FIX 3: Check token expiry status**
+        const now = new Date();
+        const isTokenExpired = consumer.oauth_expires_at 
+            ? now >= consumer.oauth_expires_at 
+            : null;
+        
+        const tokenStatus = !consumer.oauth_token 
+            ? 'missing'
+            : isTokenExpired 
+            ? 'expired' 
+            : 'valid';
+
         res.json({
             success: true,
             isActive: consumer.isActive,
             siteName: consumer.siteName,
-            hasOAuthToken: !!consumer.oauth_token,
-            hasTransmitSmsCredentials: !!(consumer.transmitsms_api_key && consumer.transmitsms_api_secret)
+            siteId: consumer.siteId,
+            oauth: {
+                hasToken: !!consumer.oauth_token,
+                tokenStatus,
+                expiresAt: consumer.oauth_expires_at,
+                minutesUntilExpiry: consumer.oauth_expires_at 
+                    ? Math.floor((consumer.oauth_expires_at - now) / 60000)
+                    : null
+            },
+            transmitSms: {
+                isConfigured: !!(consumer.transmitsms_api_key && consumer.transmitsms_api_secret)
+            }
         });
     });
 
@@ -115,33 +164,61 @@ class AppController {
 
         logger.info('Loading app configuration page', { installId });
 
-        const consumer = await Consumer.findOne({ installId });
+        const consumer = await Consumer.findOne({ installId })
+            .select('+oauth_token +oauth_expires_at');
 
         if (!consumer) {
             return res.status(404).send('Installation not found');
         }
 
+        // **FIX 4: Check if OAuth token exists and is valid**
+        const now = new Date();
+        const hasValidToken = consumer.oauth_token && 
+            consumer.oauth_expires_at && 
+            now < consumer.oauth_expires_at;
+
+        if (!hasValidToken) {
+            logger.warn('No valid OAuth token for config page', {
+                installId,
+                hasToken: !!consumer.oauth_token,
+                expiresAt: consumer.oauth_expires_at,
+                isExpired: consumer.oauth_expires_at ? now >= consumer.oauth_expires_at : null
+            });
+
+            // Redirect to authorization
+            return res.redirect(`/eloqua/app/authorize?installId=${installId}&returnTo=config`);
+        }
+
         // Store in session
         req.session.installId = installId;
+        req.session.siteId = consumer.siteId;
 
         // Get countries data
         const countries = require('../data/countries.json');
 
-        // Get custom objects if OAuth token exists
+        // Get custom objects
         let custom_objects = { elements: [] };
         
-        const consumerWithToken = await Consumer.findOne({ installId })
-            .select('+oauth_token');
+        try {
+            const eloquaService = new EloquaService(installId, consumer.siteId);
+            await eloquaService.initialize();
+            custom_objects = await eloquaService.getCustomObjects('', 100);
+            
+            logger.debug('Custom objects loaded for config', {
+                installId,
+                count: custom_objects.elements?.length || 0
+            });
+        } catch (error) {
+            logger.warn('Could not fetch custom objects for config', {
+                installId,
+                error: error.message,
+                status: error.response?.status
+            });
 
-        if (consumerWithToken && consumerWithToken.oauth_token) {
-            try {
-                const eloquaService = new EloquaService(installId, consumer.siteId);
-                await eloquaService.initialize();
-                custom_objects = await eloquaService.getCustomObjects('', 100);
-            } catch (error) {
-                logger.warn('Could not fetch custom objects for config', {
-                    error: error.message
-                });
+            // If 401, token is invalid despite our check
+            if (error.response?.status === 401) {
+                logger.error('Token is invalid, redirecting to reauth', { installId });
+                return res.redirect(`/eloqua/app/authorize?installId=${installId}&returnTo=config`);
             }
         }
 
@@ -149,7 +226,8 @@ class AppController {
             consumer: consumer.toObject(),
             countries,
             custom_objects,
-            success: req.query.success === 'true'
+            success: req.query.success === 'true',
+            baseUrl: process.env.APP_BASE_URL
         });
     });
 
@@ -161,9 +239,14 @@ class AppController {
         const { installId } = req.query;
         const { consumer: consumerData } = req.body;
 
-        logger.info('Saving app configuration', { installId });
+        logger.info('Saving app configuration', { 
+            installId,
+            hasApiKey: !!consumerData.transmitsms_api_key,
+            hasApiSecret: !!consumerData.transmitsms_api_secret
+        });
 
-        const consumer = await Consumer.findOne({ installId });
+        const consumer = await Consumer.findOne({ installId })
+            .select('+transmitsms_api_key +transmitsms_api_secret');
 
         if (!consumer) {
             return res.status(404).json({
@@ -171,41 +254,49 @@ class AppController {
             });
         }
 
-        // Update consumer configuration
+        // **FIX 5: Update consumer configuration with validation**
         if (consumerData.transmitsms_api_key) {
-            consumer.transmitsms_api_key = consumerData.transmitsms_api_key;
+            consumer.transmitsms_api_key = consumerData.transmitsms_api_key.trim();
         }
 
         if (consumerData.transmitsms_api_secret) {
-            consumer.transmitsms_api_secret = consumerData.transmitsms_api_secret;
+            consumer.transmitsms_api_secret = consumerData.transmitsms_api_secret.trim();
         }
 
         if (consumerData.default_country) {
             consumer.default_country = consumerData.default_country;
         }
 
-        // Update callback URLs
+        // **FIX 6: Set callback URLs with installId**
         const baseUrl = process.env.APP_BASE_URL || 'https://eloqua-integrator.onrender.com';
         
-        consumer.dlr_callback = `${baseUrl}/webhooks/dlr`;
-        consumer.reply_callback = `${baseUrl}/webhooks/reply`;
-        consumer.link_hits_callback = `${baseUrl}/webhooks/linkhit`;
+        consumer.dlr_callback = `${baseUrl}/webhooks/dlr?installId=${installId}`;
+        consumer.reply_callback = `${baseUrl}/webhooks/reply?installId=${installId}`;
+        consumer.link_hits_callback = `${baseUrl}/webhooks/linkhit?installId=${installId}`;
 
         // Update action configurations if provided
         if (consumerData.actions) {
             consumer.actions = {
-                ...consumer.actions,
+                ...consumer.actions.toObject(),
                 ...consumerData.actions
             };
         }
 
         await consumer.save();
 
-        logger.info('App configuration saved', { installId });
+        logger.info('App configuration saved', { 
+            installId,
+            hasTransmitSmsCreds: !!(consumer.transmitsms_api_key && consumer.transmitsms_api_secret)
+        });
 
         res.json({
             success: true,
-            message: 'Configuration saved successfully'
+            message: 'Configuration saved successfully',
+            callbacks: {
+                dlr: consumer.dlr_callback,
+                reply: consumer.reply_callback,
+                linkHits: consumer.link_hits_callback
+            }
         });
     });
 
@@ -214,9 +305,9 @@ class AppController {
      * GET /eloqua/app/authorize
      */
     static authorize = asyncHandler(async (req, res) => {
-        const { installId } = req.query;
+        const { installId, returnTo } = req.query;
 
-        logger.info('OAuth authorization initiated', { installId });
+        logger.info('OAuth authorization initiated', { installId, returnTo });
 
         if (!installId) {
             return res.status(400).send('InstallId is required');
@@ -228,18 +319,19 @@ class AppController {
             return res.status(404).send('Installation not found');
         }
 
-        // Store installId in session for callback
+        // Store in session for callback
         req.session.installId = installId;
+        req.session.returnTo = returnTo || 'config';
 
         // Generate authorization URL
         const authUrl = OAuthService.getAuthorizationUrl(installId);
 
         logger.info('Redirecting to Eloqua authorization', {
             installId,
+            returnTo,
             authUrl
         });
 
-        // Redirect to Eloqua authorization page
         res.redirect(authUrl);
     });
 
@@ -248,13 +340,35 @@ class AppController {
      * GET /eloqua/app/oauth/callback
      */
     static oauthCallback = asyncHandler(async (req, res) => {
-        const { code, state } = req.query;
+        const { code, state, error: oauthError } = req.query;
 
         logger.info('OAuth callback received', { 
             hasCode: !!code, 
             hasState: !!state,
-            state 
+            hasError: !!oauthError,
+            state,
+            error: oauthError
         });
+
+        // **FIX 7: Handle OAuth errors from Eloqua**
+        if (oauthError) {
+            logger.error('OAuth error from Eloqua', {
+                error: oauthError,
+                errorDescription: req.query.error_description
+            });
+
+            return res.status(400).send(`
+                <html>
+                <head><title>Authorization Failed</title></head>
+                <body style="font-family: Arial; text-align: center; padding: 50px;">
+                    <h2>✗ Authorization Failed</h2>
+                    <p>Error: ${oauthError}</p>
+                    <p>${req.query.error_description || 'Please try again.'}</p>
+                    <a href="/eloqua/app/authorize?installId=${state}" class="btn">Try Again</a>
+                </body>
+                </html>
+            `);
+        }
 
         if (!code) {
             logger.error('No authorization code received');
@@ -262,21 +376,39 @@ class AppController {
         }
 
         try {
-            // Exchange code for token
-            logger.info('Exchanging authorization code for token');
+            // **FIX 8: Exchange code for token with detailed logging**
+            logger.info('Exchanging authorization code for access token', {
+                codeLength: code.length,
+                codePreview: code.substring(0, 20) + '...'
+            });
             
             const tokenData = await OAuthService.getAccessToken(code);
 
-            logger.info('Token received from Eloqua', {
+            // **FIX 9: Validate token response**
+            if (!tokenData.access_token) {
+                throw new Error('No access token received from Eloqua');
+            }
+
+            logger.info('Access token received from Eloqua', {
                 hasAccessToken: !!tokenData.access_token,
                 hasRefreshToken: !!tokenData.refresh_token,
                 expiresIn: tokenData.expires_in,
                 tokenType: tokenData.token_type,
                 tokenLength: tokenData.access_token?.length || 0,
                 tokenPreview: tokenData.access_token 
-                    ? `${tokenData.access_token.substring(0, 10)}...${tokenData.access_token.substring(tokenData.access_token.length - 10)}`
-                    : 'NO_TOKEN'
+                    ? `${tokenData.access_token.substring(0, 15)}...${tokenData.access_token.substring(tokenData.access_token.length - 15)}`
+                    : 'NO_TOKEN',
+                // Decode if it's Base64 to check
+                isBase64: tokenData.access_token?.match(/^[A-Za-z0-9+/=]+$/) ? true : false
             });
+
+            // **FIX 10: Verify this is a proper Bearer token, not Basic Auth**
+            if (tokenData.access_token.includes('\\')) {
+                logger.error('Token appears to be Basic Auth credentials, not OAuth token!', {
+                    tokenPreview: tokenData.access_token.substring(0, 50)
+                });
+                throw new Error('Invalid token format received. Please check OAuth configuration.');
+            }
 
             // Get installId from state or session
             const installId = state || req.session.installId;
@@ -287,23 +419,25 @@ class AppController {
             }
 
             // Find and update consumer
-            const consumer = await Consumer.findOne({ installId });
+            const consumer = await Consumer.findOne({ installId })
+                .select('+oauth_token +oauth_refresh_token');
 
             if (!consumer) {
                 logger.error('Consumer not found', { installId });
                 return res.status(404).send('Installation not found');
             }
 
-            logger.info('Consumer found, updating tokens', {
+            logger.info('Consumer found, saving OAuth tokens', {
                 installId,
-                siteName: consumer.siteName
+                siteName: consumer.siteName,
+                siteId: consumer.siteId
             });
 
-            // Calculate token expiry
+            // **FIX 11: Calculate and save token expiry**
             const expiresIn = tokenData.expires_in || 28800; // Default 8 hours
             const expiresAt = new Date(Date.now() + (expiresIn * 1000));
 
-            // Update consumer with tokens
+            // Save tokens
             consumer.oauth_token = tokenData.access_token;
             consumer.oauth_refresh_token = tokenData.refresh_token;
             consumer.oauth_expires_at = expiresAt;
@@ -312,33 +446,178 @@ class AppController {
 
             logger.info('OAuth tokens saved to database', {
                 installId,
-                expiresAt,
-                expiresInMinutes: Math.floor(expiresIn / 60),
+                tokenLength: tokenData.access_token.length,
+                expiresAt: expiresAt.toISOString(),
+                expiresInHours: Math.floor(expiresIn / 3600),
                 hasRefreshToken: !!tokenData.refresh_token
             });
 
-            // Verify tokens were saved by querying again
+            // **FIX 12: Verify tokens were actually saved**
             const verifyConsumer = await Consumer.findOne({ installId })
                 .select('+oauth_token +oauth_refresh_token +oauth_expires_at');
+
+            const tokenMatches = verifyConsumer.oauth_token === tokenData.access_token;
 
             logger.info('Verified tokens in database', {
                 installId,
                 hasToken: !!verifyConsumer.oauth_token,
                 hasRefreshToken: !!verifyConsumer.oauth_refresh_token,
                 tokenLength: verifyConsumer.oauth_token?.length || 0,
-                expiresAt: verifyConsumer.oauth_expires_at
+                tokenMatches,
+                expiresAt: verifyConsumer.oauth_expires_at?.toISOString()
             });
 
-            // Redirect to success page
-            res.redirect(`/eloqua/app/config?installId=${installId}&success=true`);
+            if (!tokenMatches) {
+                logger.error('Token mismatch after save!', {
+                    installId,
+                    savedLength: verifyConsumer.oauth_token?.length,
+                    originalLength: tokenData.access_token.length
+                });
+            }
+
+            // Get return destination
+            const returnTo = req.session.returnTo || 'config';
+            const eloquaCallbackUrl = req.session.eloquaCallbackUrl;
+
+            // Clean up session
+            delete req.session.returnTo;
+            delete req.session.eloquaCallbackUrl;
+
+            // **FIX 13: Redirect based on context**
+            if (eloquaCallbackUrl) {
+                // App install flow - return to Eloqua
+                logger.info('Redirecting to Eloqua callback URL', {
+                    installId,
+                    callbackUrl: eloquaCallbackUrl
+                });
+                res.redirect(eloquaCallbackUrl);
+            } else if (returnTo === 'config') {
+                // Configuration flow - go to config page
+                logger.info('Redirecting to config page', { installId });
+                res.redirect(`/eloqua/app/config?installId=${installId}&success=true`);
+            } else {
+                // Default success page
+                res.send(`
+                    <html>
+                    <head>
+                        <title>Authorization Successful</title>
+                        <style>
+                            body {
+                                font-family: Arial, sans-serif;
+                                text-align: center;
+                                padding: 50px;
+                                background: #f5f5f5;
+                            }
+                            .success {
+                                background: white;
+                                padding: 40px;
+                                border-radius: 8px;
+                                box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+                                max-width: 500px;
+                                margin: 0 auto;
+                            }
+                            .checkmark {
+                                color: #4CAF50;
+                                font-size: 60px;
+                            }
+                            h2 { color: #333; }
+                            p { color: #666; }
+                            .btn {
+                                display: inline-block;
+                                padding: 10px 20px;
+                                background: #4CAF50;
+                                color: white;
+                                text-decoration: none;
+                                border-radius: 4px;
+                                margin-top: 20px;
+                            }
+                        </style>
+                    </head>
+                    <body>
+                        <div class="success">
+                            <div class="checkmark">✓</div>
+                            <h2>Authorization Successful</h2>
+                            <p>Your app has been successfully connected to Eloqua.</p>
+                            <p>Token expires: ${expiresAt.toLocaleString()}</p>
+                            <a href="/eloqua/app/config?installId=${installId}" class="btn">Go to Configuration</a>
+                        </div>
+                        <script>
+                            // Auto close if opened in popup
+                            if (window.opener) {
+                                setTimeout(() => {
+                                    window.close();
+                                }, 3000);
+                            }
+                        </script>
+                    </body>
+                    </html>
+                `);
+            }
 
         } catch (error) {
             logger.error('OAuth callback error', {
                 error: error.message,
                 stack: error.stack,
-                response: error.response?.data
+                response: error.response?.data,
+                status: error.response?.status
             });
-            res.status(500).send('OAuth authentication failed: ' + error.message);
+
+            res.status(500).send(`
+                <html>
+                <head>
+                    <title>Authorization Failed</title>
+                    <style>
+                        body {
+                            font-family: Arial, sans-serif;
+                            text-align: center;
+                            padding: 50px;
+                            background: #f5f5f5;
+                        }
+                        .error {
+                            background: white;
+                            padding: 40px;
+                            border-radius: 8px;
+                            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+                            max-width: 500px;
+                            margin: 0 auto;
+                        }
+                        .error-icon {
+                            color: #f44336;
+                            font-size: 60px;
+                        }
+                        h2 { color: #333; }
+                        p { color: #666; }
+                        .details {
+                            background: #f5f5f5;
+                            padding: 15px;
+                            border-radius: 4px;
+                            margin: 20px 0;
+                            font-family: monospace;
+                            font-size: 12px;
+                            text-align: left;
+                        }
+                        .btn {
+                            display: inline-block;
+                            padding: 10px 20px;
+                            background: #2196F3;
+                            color: white;
+                            text-decoration: none;
+                            border-radius: 4px;
+                            margin-top: 20px;
+                        }
+                    </style>
+                </head>
+                <body>
+                    <div class="error">
+                        <div class="error-icon">✗</div>
+                        <h2>Authorization Failed</h2>
+                        <p>Failed to complete OAuth authentication.</p>
+                        <div class="details">${error.message}</div>
+                        <a href="/eloqua/app/authorize?installId=${state || req.session.installId}" class="btn">Try Again</a>
+                    </div>
+                </body>
+                </html>
+            `);
         }
     });
 
@@ -359,7 +638,7 @@ class AppController {
         }
 
         const tokenPreview = consumer.oauth_token 
-            ? `${consumer.oauth_token.substring(0, 15)}...${consumer.oauth_token.substring(consumer.oauth_token.length - 15)}`
+            ? `${consumer.oauth_token.substring(0, 20)}...${consumer.oauth_token.substring(consumer.oauth_token.length - 20)}`
             : 'NO_TOKEN';
 
         const now = new Date();
@@ -368,18 +647,42 @@ class AppController {
             ? Math.floor((consumer.oauth_expires_at.getTime() - now.getTime()) / 1000 / 60)
             : null;
 
+        // Check if token looks like Base64 Basic Auth
+        const looksLikeBasicAuth = consumer.oauth_token 
+            ? consumer.oauth_token.match(/^[A-Za-z0-9+/=]+$/) && consumer.oauth_token.includes('\\')
+            : false;
+
+        let decodedToken = null;
+        if (consumer.oauth_token && looksLikeBasicAuth) {
+            try {
+                decodedToken = Buffer.from(consumer.oauth_token, 'base64').toString('utf-8');
+            } catch (e) {
+                decodedToken = 'Failed to decode';
+            }
+        }
+
         res.json({
             installId,
             siteName: consumer.siteName,
             siteId: consumer.siteId,
-            hasToken: !!consumer.oauth_token,
-            tokenLength: consumer.oauth_token?.length || 0,
-            tokenPreview,
-            hasRefreshToken: !!consumer.oauth_refresh_token,
-            expiresAt: consumer.oauth_expires_at,
-            isExpired,
-            timeUntilExpiryMinutes: timeUntilExpiry,
-            now: now
+            token: {
+                exists: !!consumer.oauth_token,
+                length: consumer.oauth_token?.length || 0,
+                preview: tokenPreview,
+                looksLikeBasicAuth,
+                decodedBasicAuth: decodedToken,
+                isValidBearerToken: consumer.oauth_token && !looksLikeBasicAuth
+            },
+            refreshToken: {
+                exists: !!consumer.oauth_refresh_token,
+                length: consumer.oauth_refresh_token?.length || 0
+            },
+            expiry: {
+                expiresAt: consumer.oauth_expires_at,
+                isExpired,
+                timeUntilExpiryMinutes: timeUntilExpiry,
+                now: now.toISOString()
+            }
         });
     });
 
@@ -411,10 +714,11 @@ class AppController {
             
             const tokenData = await OAuthService.refreshAccessToken(consumer.oauth_refresh_token);
 
-            logger.info('Token refresh response received', {
+            logger.info('Token refresh successful', {
                 hasAccessToken: !!tokenData.access_token,
                 hasRefreshToken: !!tokenData.refresh_token,
-                expiresIn: tokenData.expires_in
+                expiresIn: tokenData.expires_in,
+                tokenLength: tokenData.access_token?.length
             });
 
             consumer.oauth_token = tokenData.access_token;
@@ -428,9 +732,9 @@ class AppController {
 
             await consumer.save();
 
-            logger.info('Token refreshed and saved', {
+            logger.info('Refreshed token saved', {
                 installId,
-                expiresAt: consumer.oauth_expires_at
+                expiresAt: consumer.oauth_expires_at.toISOString()
             });
 
             res.json({
@@ -441,9 +745,10 @@ class AppController {
             });
 
         } catch (error) {
-            logger.error('Failed to refresh token', { 
+            logger.error('Token refresh failed', { 
                 installId,
                 error: error.message,
+                response: error.response?.data,
                 stack: error.stack
             });
             
@@ -456,7 +761,7 @@ class AppController {
     });
 
     /**
-     * AJAX - Get custom objects
+     * AJAX - Get custom objects (with session auth)
      * GET /eloqua/app/ajax/customobjects/:installId/:siteId/customObject
      */
     static getCustomObjects = asyncHandler(async (req, res) => {
@@ -465,14 +770,15 @@ class AppController {
 
         logger.debug('AJAX: Fetching custom objects for app config', { 
             installId, 
+            siteId,
             search, 
             count 
         });
 
-        const eloquaService = new EloquaService(installId, siteId);
-        await eloquaService.initialize();
-        
         try {
+            const eloquaService = new EloquaService(installId, siteId);
+            await eloquaService.initialize();
+            
             const customObjects = await eloquaService.getCustomObjects(search, count);
 
             logger.debug('Custom objects fetched for app', { 
@@ -483,33 +789,36 @@ class AppController {
         } catch (error) {
             logger.error('Error fetching custom objects for app', {
                 installId,
-                error: error.message
+                error: error.message,
+                status: error.response?.status
             });
 
-            res.status(500).json({
-                error: 'Failed to fetch custom objects',
-                message: error.message,
-                elements: []
+            // Return empty list instead of error to not break UI
+            res.json({
+                elements: [],
+                total: 0,
+                error: error.message
             });
         }
     });
 
     /**
-     * AJAX - Get custom object fields
+     * AJAX - Get custom object fields (with session auth)
      * GET /eloqua/app/ajax/customobject/:installId/:siteId/:customObjectId
      */
     static getCustomObjectFields = asyncHandler(async (req, res) => {
         const { installId, siteId, customObjectId } = req.params;
 
         logger.debug('AJAX: Fetching custom object fields for app', { 
-            installId, 
+            installId,
+            siteId,
             customObjectId 
         });
 
-        const eloquaService = new EloquaService(installId, siteId);
-        await eloquaService.initialize();
-        
         try {
+            const eloquaService = new EloquaService(installId, siteId);
+            await eloquaService.initialize();
+            
             const customObject = await eloquaService.getCustomObject(customObjectId);
 
             logger.debug('Custom object fields fetched for app', { 
@@ -521,13 +830,15 @@ class AppController {
             logger.error('Error fetching custom object fields for app', {
                 installId,
                 customObjectId,
-                error: error.message
+                error: error.message,
+                status: error.response?.status
             });
 
-            res.status(500).json({
-                error: 'Failed to fetch fields',
-                message: error.message,
-                fields: []
+            // Return empty fields instead of error
+            res.json({
+                id: customObjectId,
+                fields: [],
+                error: error.message
             });
         }
     });

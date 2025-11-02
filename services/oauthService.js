@@ -1,46 +1,95 @@
 const axios = require('axios');
+const querystring = require('querystring');
 const { logger } = require('../utils');
-const config = require('../config/eloqua');
 
 class OAuthService {
+    constructor() {
+        this.clientId = process.env.ELOQUA_CLIENT_ID;
+        this.clientSecret = process.env.ELOQUA_CLIENT_SECRET;
+        this.redirectUri = process.env.ELOQUA_REDIRECT_URI;
+        this.authorizationURL = 'https://login.eloqua.com/auth/oauth2/authorize';
+        this.tokenURL = 'https://login.eloqua.com/auth/oauth2/token';
+    }
+
     /**
-     * Get access token from authorization code
+     * Get authorization URL for OAuth flow
      */
-    static async getAccessToken(code) {
+    getAuthorizationUrl(state) {
+        const params = {
+            response_type: 'code',
+            client_id: this.clientId,
+            redirect_uri: this.redirectUri,
+            scope: 'full',
+            state: state || ''
+        };
+
+        const url = `${this.authorizationURL}?${querystring.stringify(params)}`;
+
+        logger.info('Generated authorization URL', {
+            clientId: this.clientId,
+            redirectUri: this.redirectUri,
+            state
+        });
+
+        return url;
+    }
+
+    /**
+     * Exchange authorization code for access token
+     */
+    async getAccessToken(code) {
         try {
-            logger.info('Exchanging authorization code for access token');
+            logger.info('Exchanging authorization code for access token', {
+                code: code.substring(0, 10) + '...',
+                tokenURL: this.tokenURL
+            });
+
+            const data = {
+                grant_type: 'authorization_code',
+                code: code,
+                redirect_uri: this.redirectUri
+            };
+
+            const auth = Buffer.from(`${this.clientId}:${this.clientSecret}`).toString('base64');
+
+            logger.debug('Token request details', {
+                url: this.tokenURL,
+                grantType: data.grant_type,
+                redirectUri: data.redirect_uri,
+                hasCode: !!data.code,
+                authHeader: `Basic ${auth.substring(0, 20)}...`
+            });
 
             const response = await axios.post(
-                config.oauth.tokenURL,
-                new URLSearchParams({
-                    grant_type: 'authorization_code',
-                    code: code,
-                    redirect_uri: config.oauth.callbackURL
-                }).toString(),
+                this.tokenURL,
+                querystring.stringify(data),
                 {
-                    auth: {
-                        username: config.oauth.clientID,
-                        password: config.oauth.clientSecret
-                    },
                     headers: {
+                        'Authorization': `Basic ${auth}`,
                         'Content-Type': 'application/x-www-form-urlencoded'
                     }
                 }
             );
 
-            logger.info('Token exchange successful', {
+            logger.info('Access token received', {
                 hasAccessToken: !!response.data.access_token,
                 hasRefreshToken: !!response.data.refresh_token,
-                tokenType: response.data.token_type,
-                expiresIn: response.data.expires_in
+                expiresIn: response.data.expires_in,
+                tokenType: response.data.token_type
             });
 
-            return response.data;
+            return {
+                access_token: response.data.access_token,
+                refresh_token: response.data.refresh_token,
+                expires_in: response.data.expires_in || 28800, // 8 hours default
+                token_type: response.data.token_type
+            };
+
         } catch (error) {
-            logger.error('Token exchange failed', {
+            logger.error('Failed to get access token', {
                 error: error.message,
+                response: error.response?.data,
                 status: error.response?.status,
-                data: error.response?.data,
                 stack: error.stack
             });
             throw error;
@@ -50,41 +99,48 @@ class OAuthService {
     /**
      * Refresh access token using refresh token
      */
-    static async refreshAccessToken(refreshToken) {
+    async refreshAccessToken(refreshToken) {
         try {
-            logger.info('Refreshing access token');
+            logger.info('Refreshing access token', {
+                refreshToken: refreshToken.substring(0, 10) + '...'
+            });
+
+            const data = {
+                grant_type: 'refresh_token',
+                refresh_token: refreshToken,
+                scope: 'full'
+            };
+
+            const auth = Buffer.from(`${this.clientId}:${this.clientSecret}`).toString('base64');
 
             const response = await axios.post(
-                config.oauth.tokenURL,
-                new URLSearchParams({
-                    grant_type: 'refresh_token',
-                    refresh_token: refreshToken,
-                    scope: config.oauth.scope || 'full'
-                }).toString(),
+                this.tokenURL,
+                querystring.stringify(data),
                 {
-                    auth: {
-                        username: config.oauth.clientID,
-                        password: config.oauth.clientSecret
-                    },
                     headers: {
+                        'Authorization': `Basic ${auth}`,
                         'Content-Type': 'application/x-www-form-urlencoded'
                     }
                 }
             );
 
-            logger.info('Token refresh successful', {
+            logger.info('Access token refreshed', {
                 hasAccessToken: !!response.data.access_token,
                 hasRefreshToken: !!response.data.refresh_token,
-                tokenType: response.data.token_type,
                 expiresIn: response.data.expires_in
             });
 
-            return response.data;
+            return {
+                access_token: response.data.access_token,
+                refresh_token: response.data.refresh_token || refreshToken, // Keep old if new not provided
+                expires_in: response.data.expires_in || 28800
+            };
+
         } catch (error) {
-            logger.error('Token refresh failed', {
+            logger.error('Failed to refresh access token', {
                 error: error.message,
+                response: error.response?.data,
                 status: error.response?.status,
-                data: error.response?.data,
                 stack: error.stack
             });
             throw error;
@@ -92,26 +148,34 @@ class OAuthService {
     }
 
     /**
-     * Get authorization URL
+     * Revoke access token
      */
-    static getAuthorizationUrl(installId) {
-        const params = new URLSearchParams({
-            response_type: 'code',
-            client_id: config.oauth.clientID,
-            redirect_uri: config.oauth.callbackURL,
-            scope: config.oauth.scope || 'full',
-            state: installId
-        });
+    async revokeToken(token) {
+        try {
+            logger.info('Revoking access token');
 
-        const authUrl = `${config.oauth.authorizationURL}?${params.toString()}`;
+            const auth = Buffer.from(`${this.clientId}:${this.clientSecret}`).toString('base64');
 
-        logger.info('Authorization URL generated', {
-            installId,
-            redirectUri: config.oauth.callbackURL
-        });
+            await axios.post(
+                'https://login.eloqua.com/auth/oauth2/revoke',
+                querystring.stringify({ token }),
+                {
+                    headers: {
+                        'Authorization': `Basic ${auth}`,
+                        'Content-Type': 'application/x-www-form-urlencoded'
+                    }
+                }
+            );
 
-        return authUrl;
+            logger.info('Access token revoked');
+
+        } catch (error) {
+            logger.error('Failed to revoke token', {
+                error: error.message
+            });
+            throw error;
+        }
     }
 }
 
-module.exports = OAuthService;
+module.exports = new OAuthService();
