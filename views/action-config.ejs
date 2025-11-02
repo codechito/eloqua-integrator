@@ -1145,17 +1145,26 @@ Opt-out reply STOP"></textarea>
           }
         },
         mounted: function () {
-          var vm = this;
-          
-          vm.previousCustomObjectId = vm.instance.custom_object_id || null;
-          
-          vm.fetchOptionsmap('', null);
-          
-          if (vm.instance.custom_object_id) {
-            vm.getFields();
-          }
-          
-          vm.getProgramFields();
+            // **ADD VALIDATION: Log what fields we received**
+            console.log('Fields received from backend:', this.fields);
+            console.log('First field structure:', this.fields[0]);
+
+            this.previousCustomObjectId = this.instance.custom_object_id || null;
+            
+            // **FIX: Ensure all fields have internalName**
+            this.fields = this.fields.map(field => {
+                if (!field.internalName) {
+                    console.warn('Field missing internalName:', field);
+                    // Try to use name as fallback
+                    field.internalName = field.name ? field.name.replace(/\s+/g, '') : 'UnknownField';
+                }
+                return field;
+            });
+            
+            console.log('Fields after validation:', this.fields[0]);
+            
+            this.getFields();
+            this.getProgramFields();
         }
       });
     </script>

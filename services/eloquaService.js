@@ -375,7 +375,7 @@ class EloquaService {
     }
 
     /**
-     * Get contact fields using Bulk API (like old code)
+     * Get contact fields using Bulk API
      * Bulk API returns proper internalName structure
      */
     async getContactFields(count = 1000) {
@@ -387,7 +387,6 @@ class EloquaService {
                 count
             });
 
-            // Use Bulk API like the old code
             const response = await this.client.get('/api/bulk/2.0/contacts/fields', {
                 params: {
                     limit: count,
@@ -395,19 +394,37 @@ class EloquaService {
                 }
             });
 
-            logger.info('Contact fields fetched from Bulk API', {
-                count: response.data.items?.length || 0,
-                sampleField: response.data.items?.[0]
+            // **LOG THE RAW RESPONSE**
+            logger.debug('Bulk API raw response sample', {
+                sampleItem: response.data.items?.[0],
+                itemKeys: response.data.items?.[0] ? Object.keys(response.data.items[0]) : []
             });
 
             // Bulk API returns items directly with proper structure
-            const items = (response.data.items || []).map(field => ({
-                id: field.internalName, // Bulk API uses internalName as identifier
-                name: field.name,
-                internalName: field.internalName,
-                dataType: field.dataType,
-                uri: field.uri
-            }));
+            const items = (response.data.items || []).map(field => {
+                const mappedField = {
+                    id: field.internalName, // Use internalName as ID for Bulk API
+                    name: field.name,
+                    internalName: field.internalName,
+                    dataType: field.dataType,
+                    uri: field.uri
+                };
+                
+                // Validate
+                if (!mappedField.internalName) {
+                    logger.warn('Field missing internalName in Bulk API response', {
+                        fieldName: field.name,
+                        fieldData: field
+                    });
+                }
+                
+                return mappedField;
+            });
+
+            logger.info('Contact fields mapped from Bulk API', {
+                count: items.length,
+                sampleMappedField: items[0]
+            });
 
             return {
                 items: items,
@@ -420,7 +437,8 @@ class EloquaService {
                 installId: this.installId,
                 error: error.message,
                 status: error.response?.status,
-                statusText: error.response?.statusText
+                statusText: error.response?.statusText,
+                responseData: error.response?.data
             });
             throw error;
         }

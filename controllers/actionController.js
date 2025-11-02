@@ -162,7 +162,6 @@ class ActionController {
             };
         }
 
-        // If CustomObjectId is provided (from Program), set it
         if (CustomObjectId) {
             instance.program_coid = CustomObjectId;
         }
@@ -199,20 +198,34 @@ class ActionController {
             logger.warn('Could not fetch custom objects', { error: error.message });
         }
 
-        // Get contact fields using Bulk API (like old code)
+        // Get contact fields using Bulk API (has proper internalName)
         let merge_fields = [];
         try {
             const eloquaService = new EloquaService(installId, siteId);
             await eloquaService.initialize();
             
-            // Use Bulk API to get contact fields
             const contactFieldsResponse = await eloquaService.getContactFields(1000);
-            
             merge_fields = contactFieldsResponse.items || [];
 
-            logger.info('Contact fields loaded from Bulk API', {
+            // **CRITICAL: Validate that fields have internalName**
+            merge_fields = merge_fields.filter(field => {
+                if (!field.internalName) {
+                    logger.warn('Contact field missing internalName', { 
+                        fieldId: field.id, 
+                        fieldName: field.name 
+                    });
+                    return false;
+                }
+                return true;
+            });
+
+            logger.info('Contact fields loaded and validated', {
                 count: merge_fields.length,
-                sampleField: merge_fields[0]
+                sampleField: merge_fields[0] ? {
+                    id: merge_fields[0].id,
+                    name: merge_fields[0].name,
+                    internalName: merge_fields[0].internalName
+                } : null
             });
 
         } catch (error) {
@@ -221,7 +234,7 @@ class ActionController {
                 stack: error.stack
             });
             
-            // Provide default fields as fallback
+            // Fallback fields
             merge_fields = [
                 { id: 'EmailAddress', name: 'Email Address', internalName: 'EmailAddress', dataType: 'string' },
                 { id: 'FirstName', name: 'First Name', internalName: 'FirstName', dataType: 'string' },
@@ -231,37 +244,33 @@ class ActionController {
             ];
         }
 
-        // If this is a Program (has program_coid), get the CDO fields
-        let fields = merge_fields; // Default to contact fields
-        let countryfields = merge_fields;
-
+        // If Program, get CDO fields
+        let fields = merge_fields;
+        
         if (instance.program_coid) {
             try {
                 const eloquaService = new EloquaService(installId, siteId);
                 await eloquaService.initialize();
                 const programCDO = await eloquaService.getCustomObject(instance.program_coid);
                 
-                // Format CDO fields
                 if (programCDO.fields) {
-                    fields = programCDO.fields.map(field => ({
-                        id: field.id,
-                        name: field.name,
-                        internalName: field.internalName,
-                        dataType: field.dataType
-                    }));
+                    fields = programCDO.fields.filter(field => {
+                        if (!field.internalName) {
+                            logger.warn('CDO field missing internalName', { 
+                                fieldId: field.id, 
+                                fieldName: field.name 
+                            });
+                            return false;
+                        }
+                        return true;
+                    });
 
-                    // For country field
-                    if (instance.country_setting === 'cf') {
-                        countryfields = fields; // Use CDO fields
-                    } else {
-                        countryfields = merge_fields; // Use contact fields
-                    }
+                    logger.info('Program CDO fields loaded', {
+                        program_coid: instance.program_coid,
+                        fieldCount: fields.length,
+                        sampleField: fields[0]
+                    });
                 }
-
-                logger.info('Program CDO fields loaded', {
-                    program_coid: instance.program_coid,
-                    fieldCount: fields.length
-                });
 
             } catch (error) {
                 logger.warn('Could not fetch program CDO fields', { 
@@ -269,15 +278,22 @@ class ActionController {
                     program_coid: instance.program_coid
                 });
             }
-        } else {
-            countryfields = merge_fields;
         }
 
-        logger.info('Rendering action config page', {
-            instanceId,
-            mergeFieldCount: merge_fields.length,
-            fieldsCount: fields.length,
-            customObjectCount: custom_objects.elements?.length || 0
+        // **CRITICAL LOG: Check what we're sending to frontend**
+        logger.info('Fields being sent to frontend', {
+            fieldCount: fields.length,
+            firstField: fields[0] ? {
+                id: fields[0].id,
+                name: fields[0].name,
+                internalName: fields[0].internalName,
+                hasInternalName: !!fields[0].internalName
+            } : null,
+            secondField: fields[1] ? {
+                id: fields[1].id,
+                name: fields[1].name,
+                internalName: fields[1].internalName
+            } : null
         });
 
         res.render('action-config', {
@@ -439,7 +455,6 @@ class ActionController {
 
     /**
      * Build recordDefinition object for Eloqua
-     * Based on old working code pattern - handles both Campaign and Program CDO scenarios
      */
     static async buildRecordDefinition(instance, eloquaService = null) {
         const recordDefinition = {};
@@ -458,122 +473,68 @@ class ActionController {
             recordDefinition.EmailAddress = "{{CustomObject.Contact.EmailAddress}}";
         }
 
-        // Handle dynamic sender ID (caller_id with ## prefix means it's a contact field)
+        // Handle dynamic sender ID (caller_id with ## prefix)
         if (instance.caller_id && instance.caller_id.toString().indexOf("##") !== -1) {
             const fieldName = instance.caller_id.split("##")[1];
-            if (fieldName && fieldName !== 'undefined') {
-                recordDefinition[fieldName] = `{{Contact.Field(C_${fieldName})}}`;
+            if (fieldName) {
+                // Remove C_ prefix if exists
+                const cleanFieldName = fieldName.replace(/^C_/, '');
+                recordDefinition[cleanFieldName] = `{{Contact.Field(C_${cleanFieldName})}}`;
             }
         }
 
-        // **CRITICAL FIX: Handle recipient field**
+        // Handle recipient field (mobile number)
         if (instance.recipient_field) {
-            logger.debug('Processing recipient field', {
-                raw: instance.recipient_field,
-                type: typeof instance.recipient_field
-            });
-
             const recipientParts = instance.recipient_field.split("__");
             let recipientFieldId = null;
             let recipientFieldName = null;
             
             if (recipientParts.length > 1) {
-                // Format: "100014__ContactMobile" (CDO field with ID)
                 recipientFieldId = recipientParts[0];
                 recipientFieldName = recipientParts[1];
-                
-                logger.debug('Recipient field parsed as CDO field', {
-                    fieldId: recipientFieldId,
-                    fieldName: recipientFieldName
-                });
             } else {
-                // Format: "MobilePhone1" (Contact field from Bulk API, no ID)
                 recipientFieldName = recipientParts[0];
-                
-                logger.debug('Recipient field parsed as contact field', {
-                    fieldName: recipientFieldName
-                });
             }
             
-            // **CRITICAL: Validate field name**
-            if (!recipientFieldName || recipientFieldName === 'undefined' || recipientFieldName.trim() === '') {
-                logger.error('Invalid recipient field name detected', { 
-                    recipient_field: instance.recipient_field,
-                    parsedName: recipientFieldName
-                });
-                
-                // Try to fetch and fix it
-                if (eloquaService && recipientFieldId && instance.program_coid) {
-                    try {
-                        logger.info('Attempting to resolve recipient field from Eloqua', {
-                            fieldId: recipientFieldId,
-                            program_coid: instance.program_coid
-                        });
-                        
-                        const cdo = await eloquaService.getCustomObject(instance.program_coid);
-                        const field = cdo.fields.find(f => f.id === recipientFieldId);
-                        if (field && field.internalName) {
-                            recipientFieldName = field.internalName;
-                            logger.info('Resolved recipient field from Eloqua', {
-                                fieldId: recipientFieldId,
-                                resolvedName: recipientFieldName
-                            });
-                        }
-                    } catch (error) {
-                        logger.warn('Could not resolve recipient field from Eloqua', { 
-                            error: error.message 
-                        });
-                    }
-                }
-                
-                // Still undefined? Use safe default
-                if (!recipientFieldName || recipientFieldName === 'undefined') {
-                    recipientFieldName = 'MobilePhone';
-                    logger.warn('Using default recipient field name', { 
-                        default: recipientFieldName 
-                    });
-                }
+            // Remove C_ prefix if it exists in the field name
+            if (recipientFieldName) {
+                recipientFieldName = recipientFieldName.replace(/^C_/, '');
             }
             
-            // **ONLY ADD TO RECORD DEFINITION IF WE HAVE A VALID NAME**
-            if (recipientFieldName && recipientFieldName !== 'undefined' && recipientFieldName.trim() !== '') {
-                if (instance.program_coid && recipientFieldId) {
-                    // Program with CDO field
-                    recordDefinition[recipientFieldName] = `{{CustomObject[${instance.program_coid}].Field[${recipientFieldId}]}}`;
-                    logger.debug('Added recipient as CDO field', {
-                        key: recipientFieldName,
-                        value: recordDefinition[recipientFieldName]
-                    });
-                } else if (instance.program_coid) {
-                    // Program with contact field
-                    recordDefinition[recipientFieldName] = `{{CustomObject[${instance.program_coid}].Contact.Field(C_${recipientFieldName})}}`;
-                    logger.debug('Added recipient as program contact field', {
-                        key: recipientFieldName,
-                        value: recordDefinition[recipientFieldName]
-                    });
-                } else {
-                    // Regular campaign - contact field
-                    recordDefinition[recipientFieldName] = `{{Contact.Field(C_${recipientFieldName})}}`;
-                    logger.debug('Added recipient as contact field', {
-                        key: recipientFieldName,
-                        value: recordDefinition[recipientFieldName]
-                    });
-                }
+            // Skip if invalid
+            if (!recipientFieldName || recipientFieldName === 'undefined') {
+                logger.warn('Recipient field has invalid name', { 
+                    recipient_field: instance.recipient_field 
+                });
+                recipientFieldName = 'MobilePhone';
+            }
+            
+            if (instance.program_coid && recipientFieldId && !isNaN(recipientFieldId)) {
+                // Program with numeric CDO field ID
+                recordDefinition[recipientFieldName] = `{{CustomObject[${instance.program_coid}].Field[${recipientFieldId}]}}`;
+                logger.debug('Added recipient as CDO field', {
+                    key: recipientFieldName,
+                    value: recordDefinition[recipientFieldName]
+                });
+            } else if (instance.program_coid) {
+                // Program with contact field
+                recordDefinition[recipientFieldName] = `{{CustomObject[${instance.program_coid}].Contact.Field(C_${recipientFieldName})}}`;
+                logger.debug('Added recipient as program contact field', {
+                    key: recipientFieldName,
+                    value: recordDefinition[recipientFieldName]
+                });
             } else {
-                logger.error('SKIPPING recipient field - invalid name', {
-                    recipientFieldName,
-                    recipient_field: instance.recipient_field
+                // Regular campaign - contact field
+                recordDefinition[recipientFieldName] = `{{Contact.Field(C_${recipientFieldName})}}`;
+                logger.debug('Added recipient as contact field', {
+                    key: recipientFieldName,
+                    value: recordDefinition[recipientFieldName]
                 });
             }
         }
 
-        // **CRITICAL FIX: Handle country field**
+        // Handle country field
         if (instance.country_field) {
-            logger.debug('Processing country field', {
-                raw: instance.country_field,
-                type: typeof instance.country_field
-            });
-
             const countryParts = instance.country_field.split("__");
             let countryFieldId = null;
             let countryFieldName = null;
@@ -581,83 +542,52 @@ class ActionController {
             if (countryParts.length > 1) {
                 countryFieldId = countryParts[0];
                 countryFieldName = countryParts[1];
-                
-                logger.debug('Country field parsed with ID', {
-                    fieldId: countryFieldId,
-                    fieldName: countryFieldName
-                });
             } else {
                 countryFieldName = countryParts[0];
-                
-                logger.debug('Country field parsed without ID', {
-                    fieldName: countryFieldName
-                });
             }
             
-            // **CRITICAL: Validate field name**
-            if (!countryFieldName || countryFieldName === 'undefined' || countryFieldName.trim() === '') {
-                logger.error('Invalid country field name detected', { 
-                    country_field: instance.country_field,
-                    parsedName: countryFieldName
+            // Remove C_ prefix if it exists
+            if (countryFieldName) {
+                countryFieldName = countryFieldName.replace(/^C_/, '');
+            }
+            
+            // Skip if invalid
+            if (!countryFieldName || countryFieldName === 'undefined') {
+                logger.warn('Country field has invalid name', { 
+                    country_field: instance.country_field 
                 });
-                
-                // Try to resolve
-                if (eloquaService && countryFieldId && instance.program_coid) {
-                    try {
-                        const cdo = await eloquaService.getCustomObject(instance.program_coid);
-                        const field = cdo.fields.find(f => f.id === countryFieldId);
-                        if (field && field.internalName) {
-                            countryFieldName = field.internalName;
-                            logger.info('Resolved country field from Eloqua', {
-                                fieldId: countryFieldId,
-                                resolvedName: countryFieldName
-                            });
-                        }
-                    } catch (error) {
-                        logger.warn('Could not resolve country field from Eloqua', { 
-                            error: error.message 
-                        });
-                    }
-                }
-                
-                // Still undefined? Use safe default
-                if (!countryFieldName || countryFieldName === 'undefined') {
-                    countryFieldName = 'Country';
-                    logger.warn('Using default country field name', { 
-                        default: countryFieldName 
+                countryFieldName = 'Country';
+            }
+            
+            if (instance.program_coid) {
+                if (instance.country_setting === 'cc' || countryFieldName === 'Country') {
+                    // Contact country field
+                    recordDefinition[countryFieldName] = `{{CustomObject[${instance.program_coid}].Contact.Field(C_${countryFieldName})}}`;
+                    logger.debug('Added country as program contact field', {
+                        key: countryFieldName,
+                        value: recordDefinition[countryFieldName]
                     });
-                }
-            }
-            
-            // **ONLY ADD IF VALID**
-            if (countryFieldName && countryFieldName !== 'undefined' && countryFieldName.trim() !== '') {
-                if (instance.program_coid) {
-                    if (instance.country_setting === 'cc' || instance.country_field === 'Country') {
-                        // Contact country field
-                        recordDefinition[countryFieldName] = `{{CustomObject[${instance.program_coid}].Contact.Field(C_${countryFieldName})}}`;
-                    } else if (countryFieldId) {
-                        // CDO field for country
-                        recordDefinition[countryFieldName] = `{{CustomObject[${instance.program_coid}].Field[${countryFieldId}]}}`;
-                    } else {
-                        recordDefinition[countryFieldName] = `{{CustomObject[${instance.program_coid}].Contact.Field(C_${countryFieldName})}}`;
-                    }
-                    
-                    logger.debug('Added country field', {
+                } else if (countryFieldId && !isNaN(countryFieldId)) {
+                    // CDO field with numeric ID
+                    recordDefinition[countryFieldName] = `{{CustomObject[${instance.program_coid}].Field[${countryFieldId}]}}`;
+                    logger.debug('Added country as CDO field', {
                         key: countryFieldName,
                         value: recordDefinition[countryFieldName]
                     });
                 } else {
-                    // Regular campaign - contact field
-                    recordDefinition[countryFieldName] = `{{Contact.Field(C_${countryFieldName})}}`;
-                    logger.debug('Added country as contact field', {
+                    // CDO field without numeric ID
+                    recordDefinition[countryFieldName] = `{{CustomObject[${instance.program_coid}].Contact.Field(C_${countryFieldName})}}`;
+                    logger.debug('Added country as program contact field fallback', {
                         key: countryFieldName,
                         value: recordDefinition[countryFieldName]
                     });
                 }
             } else {
-                logger.error('SKIPPING country field - invalid name', {
-                    countryFieldName,
-                    country_field: instance.country_field
+                // Regular campaign - contact field
+                recordDefinition[countryFieldName] = `{{Contact.Field(C_${countryFieldName})}}`;
+                logger.debug('Added country as contact field', {
+                    key: countryFieldName,
+                    value: recordDefinition[countryFieldName]
                 });
             }
         }
@@ -678,21 +608,20 @@ class ActionController {
                     return;
                 }
 
-                const cleanFieldName = fieldName.replace("C_", "");
+                // Remove C_ prefix if exists
+                let cleanFieldName = fieldName.replace(/^C_/, '');
                 
-                // Skip if undefined or invalid
-                if (!cleanFieldName || cleanFieldName === 'undefined' || cleanFieldName.trim() === '') {
-                    logger.warn('Skipping invalid merge field', { fieldName });
+                // Skip if invalid
+                if (!cleanFieldName || cleanFieldName === 'undefined') {
                     return;
                 }
                 
                 if (!recordDefinition[cleanFieldName]) {
                     if (instance.program_coid) {
-                        recordDefinition[cleanFieldName] = `{{CustomObject[${instance.program_coid}].Contact.Field(${fieldName})}}`;
+                        recordDefinition[cleanFieldName] = `{{CustomObject[${instance.program_coid}].Contact.Field(C_${cleanFieldName})}}`;
                     } else {
-                        recordDefinition[cleanFieldName] = `{{Contact.Field(${fieldName})}}`;
+                        recordDefinition[cleanFieldName] = `{{Contact.Field(C_${cleanFieldName})}}`;
                     }
-                    
                     logger.debug('Added merge field from message', {
                         key: cleanFieldName,
                         value: recordDefinition[cleanFieldName]
@@ -706,21 +635,21 @@ class ActionController {
         if (trackedLinkFields) {
             trackedLinkFields.forEach(function(field) {
                 const fieldName = field.replace(/[\[\]]/g, '');
-                const cleanFieldName = fieldName.replace("C_", "");
                 
-                // Skip if undefined or invalid
-                if (!cleanFieldName || cleanFieldName === 'undefined' || cleanFieldName.trim() === '') {
-                    logger.warn('Skipping invalid tracked link field', { fieldName });
+                // Remove C_ prefix if exists
+                let cleanFieldName = fieldName.replace(/^C_/, '');
+                
+                // Skip if invalid
+                if (!cleanFieldName || cleanFieldName === 'undefined') {
                     return;
                 }
                 
                 if (!recordDefinition[cleanFieldName]) {
                     if (instance.program_coid) {
-                        recordDefinition[cleanFieldName] = `{{CustomObject[${instance.program_coid}].Contact.Field(${fieldName})}}`;
+                        recordDefinition[cleanFieldName] = `{{CustomObject[${instance.program_coid}].Contact.Field(C_${cleanFieldName})}}`;
                     } else {
-                        recordDefinition[cleanFieldName] = `{{Contact.Field(${fieldName})}}`;
+                        recordDefinition[cleanFieldName] = `{{Contact.Field(C_${cleanFieldName})}}`;
                     }
-                    
                     logger.debug('Added merge field from tracked link', {
                         key: cleanFieldName,
                         value: recordDefinition[cleanFieldName]
