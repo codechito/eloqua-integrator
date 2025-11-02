@@ -10,8 +10,8 @@ class AppController {
      * GET or POST /eloqua/app/install
      */
     static install = asyncHandler(async (req, res) => {
-        // Support both GET and POST
-        const params = req.method === 'POST' ? req.body : req.query;
+        // Eloqua sends data as query parameters even for POST requests
+        const params = { ...req.query, ...req.body };
         
         const { 
             siteName, 
@@ -28,10 +28,19 @@ class AppController {
             callback,
             callbackUrl,
             existingInstallId,
-            hasExistingInstallId: !!existingInstallId
+            hasExistingInstallId: !!existingInstallId,
+            queryParams: Object.keys(req.query),
+            bodyParams: Object.keys(req.body)
         });
 
         if (!siteName || !siteId) {
+            logger.error('Missing required parameters', {
+                hasSiteName: !!siteName,
+                hasSiteId: !!siteId,
+                query: req.query,
+                body: req.body
+            });
+            
             return res.status(400).json({
                 error: 'Missing required parameters: siteName and siteId'
             });
@@ -93,23 +102,7 @@ class AppController {
         req.session.installId = installId;
         req.session.eloquaCallbackUrl = callback || callbackUrl;
 
-        // Check if this is an AJAX/JSON request
-        const wantsJson = req.headers.accept?.includes('application/json') || 
-                        req.query.format === 'json';
-
-        if (wantsJson) {
-            // Return JSON for AJAX requests
-            logger.info('Returning JSON response for install', { installId });
-            
-            return res.json({
-                success: true,
-                installId,
-                authUrl: OAuthService.getAuthorizationUrl(installId),
-                message: 'Please complete OAuth authorization'
-            });
-        }
-
-        // Redirect to OAuth authorization for browser requests
+        // Generate OAuth URL
         const authUrl = OAuthService.getAuthorizationUrl(installId);
         
         logger.info('Redirecting to OAuth for install', {
@@ -118,6 +111,7 @@ class AppController {
             callback: callback || callbackUrl
         });
 
+        // Redirect to OAuth authorization
         res.redirect(authUrl);
     });
 
