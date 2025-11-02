@@ -19,6 +19,15 @@ const ConsumerSchema = new mongoose.Schema({
         default: 'Unknown Site'
     },
     
+    // ADD THESE TWO FIELDS HERE:
+    pending_oauth_callback: {
+        type: String,
+        trim: true
+    },
+    pending_oauth_expires: {
+        type: Date
+    },
+
     // Eloqua Callback URL (NEW)
     eloqua_callback_url: {
         type: String,

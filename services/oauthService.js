@@ -6,17 +6,15 @@ class OAuthService {
     constructor() {
         this.clientId = process.env.ELOQUA_CLIENT_ID;
         this.clientSecret = process.env.ELOQUA_CLIENT_SECRET;
-        this.redirectUri = process.env.ELOQUA_REDIRECT_URI; // Base redirect URI without trailing slash
+        this.redirectUri = process.env.ELOQUA_REDIRECT_URI;
         this.authorizationURL = 'https://login.eloqua.com/auth/oauth2/authorize';
         this.tokenURL = 'https://login.eloqua.com/auth/oauth2/token';
     }
 
     /**
      * Get authorization URL with installId embedded in redirect URI
-     * OLD CODE PATTERN: callbackUrl with installId/siteId in path
      */
     getAuthorizationUrl(installId) {
-        // **FIX: Include installId in redirect URI like old code**
         const redirectUri = `${this.redirectUri}/${installId}`;
         
         const params = {
@@ -41,7 +39,6 @@ class OAuthService {
 
     /**
      * Exchange authorization code for access token
-     * Must use same redirect_uri as authorization
      */
     async getAccessToken(code, installId) {
         try {
@@ -51,7 +48,6 @@ class OAuthService {
                 installId
             });
 
-            // **FIX: Use same redirect URI with installId as in authorization**
             const redirectUri = `${this.redirectUri}/${installId}`;
 
             const data = {

@@ -385,10 +385,10 @@ class AppController {
             });
         }
 
-        // **FIX: Store Eloqua callback in database (not session)**
+        // Store Eloqua callback URL in DATABASE (not session)
         const eloquaCallback = callback || callbackUrl;
         consumer.pending_oauth_callback = eloquaCallback;
-        consumer.pending_oauth_expires = new Date(Date.now() + 30 * 60 * 1000); // 30 min expiry
+        consumer.pending_oauth_expires = new Date(Date.now() + 30 * 60 * 1000);
         
         await consumer.save();
 
@@ -404,6 +404,7 @@ class AppController {
         
         logger.info('Redirecting to OAuth', { 
             installId,
+            SiteId: consumer.SiteId,
             authUrl,
             willRedirectBackTo: eloquaCallback || 'config page'
         });
@@ -417,7 +418,7 @@ class AppController {
      */
     static oauthCallback = asyncHandler(async (req, res) => {
         const { code, state, error: oauthError } = req.query;
-        const { installId } = req.params; // **FIX: Get installId from URL path**
+        const { installId } = req.params; // Get installId from URL path
 
         logger.info('OAuth callback received', { 
             hasCode: !!code, 
@@ -455,7 +456,7 @@ class AppController {
 
         if (!installId) {
             logger.error('No installId in URL path');
-            return res.status(400).send('Installation ID missing');
+            return res.status(400).send('Installation ID missing from URL');
         }
 
         try {
@@ -465,7 +466,7 @@ class AppController {
                 codePreview: code.substring(0, 20) + '...'
             });
             
-            // **FIX: Pass installId to getAccessToken**
+            // Pass installId to getAccessToken
             const tokenData = await OAuthService.getAccessToken(code, installId);
 
             if (!tokenData.access_token) {
@@ -482,7 +483,7 @@ class AppController {
                     : 'NO_TOKEN'
             });
 
-            // **FIX: Get consumer with pending callback from database**
+            // Get consumer with pending callback from DATABASE
             const consumer = await Consumer.findOne({ installId })
                 .select('+oauth_token +oauth_refresh_token +pending_oauth_callback +pending_oauth_expires');
 
@@ -491,7 +492,7 @@ class AppController {
                 return res.status(404).send('Installation not found');
             }
 
-            logger.info('Consumer found, saving OAuth tokens', {
+            logger.info('Consumer found, extracting callback from database', {
                 installId,
                 siteName: consumer.siteName,
                 SiteId: consumer.SiteId,
@@ -508,16 +509,16 @@ class AppController {
             consumer.oauth_refresh_token = tokenData.refresh_token;
             consumer.oauth_expires_at = expiresAt;
 
-            // **FIX: Get Eloqua callback URL from database**
+            // GET callback URL from database
             const eloquaCallbackUrl = consumer.pending_oauth_callback;
 
-            // Clear pending callback after use
+            // Clear pending callback after retrieving it
             consumer.pending_oauth_callback = null;
             consumer.pending_oauth_expires = null;
 
             await consumer.save();
 
-            logger.info('OAuth tokens saved to database', {
+            logger.info('OAuth tokens saved, callback retrieved', {
                 installId,
                 tokenLength: tokenData.access_token.length,
                 expiresAt: expiresAt.toISOString(),
@@ -527,7 +528,7 @@ class AppController {
                 hasCallbackUrl: !!eloquaCallbackUrl
             });
 
-            // **PRIORITY 1: Redirect to Eloqua callback to complete installation**
+            // REDIRECT TO ELOQUA CALLBACK
             if (eloquaCallbackUrl) {
                 logger.info('Redirecting to Eloqua callback URL to complete installation', {
                     installId,
@@ -537,8 +538,11 @@ class AppController {
                 return res.redirect(eloquaCallbackUrl);
             }
             
-            // **PRIORITY 2: No callback - go to config page**
-            logger.info('No Eloqua callback URL - Redirecting to config page', { installId });
+            // Fallback: No callback - go to config page
+            logger.warn('No Eloqua callback URL found - Redirecting to config page', { 
+                installId 
+            });
+            
             return res.redirect(`/eloqua/app/config?installId=${installId}&success=true`);
 
         } catch (error) {
@@ -572,26 +576,6 @@ class AppController {
                         .error-icon {
                             color: #f44336;
                             font-size: 60px;
-                        }
-                        h2 { color: #333; }
-                        p { color: #666; }
-                        .details {
-                            background: #f5f5f5;
-                            padding: 15px;
-                            border-radius: 4px;
-                            margin: 20px 0;
-                            font-family: monospace;
-                            font-size: 12px;
-                            text-align: left;
-                        }
-                        .btn {
-                            display: inline-block;
-                            padding: 10px 20px;
-                            background: #2196F3;
-                            color: white;
-                            text-decoration: none;
-                            border-radius: 4px;
-                            margin-top: 20px;
                         }
                     </style>
                 </head>

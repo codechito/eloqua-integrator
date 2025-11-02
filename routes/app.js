@@ -22,7 +22,7 @@ router.post('/config', verifyInstallation, AppController.saveConfig);
 // OAuth
 router.get('/authorize', AppController.authorize);
 
-// **FIX: OAuth callback with installId in URL path**
+// OAuth callback with installId in URL path (NOT query param)
 router.get('/oauth/callback/:installId', AppController.oauthCallback);
 
 // Token management
