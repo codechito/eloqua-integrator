@@ -3,6 +3,7 @@ const ActionInstance = require('./ActionInstance');
 const DecisionInstance = require('./DecisionInstance');
 const FeederInstance = require('./FeederInstance');
 const SmsLog = require('./SmsLog');
+const SmsJob = require('./SmsJob');
 const SmsReply = require('./SmsReply');
 const LinkHit = require('./LinkHit');
 
@@ -12,6 +13,7 @@ module.exports = {
     DecisionInstance,
     FeederInstance,
     SmsLog,
+    SmsJob,
     SmsReply,
     LinkHit
 };

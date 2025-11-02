@@ -542,140 +542,89 @@ class ActionController {
 
     /**
      * Build recordDefinition object for Eloqua
+     * Based on the old working code pattern
      */
     static async buildRecordDefinition(instance, eloquaService = null) {
         const recordDefinition = {};
 
-        logger.info('Building recordDefinition - START', {
+        logger.debug('Building recordDefinition', {
             instanceId: instance.instanceId,
             hasProgramCDO: !!instance.program_coid,
             recipientField: instance.recipient_field,
             countryField: instance.country_field,
-            hasMessage: !!instance.message
+            message: instance.message
         });
 
-        // If using program CDO, add placeholder ContactID and EmailAddress
+        // ALWAYS include ContactID and EmailAddress (required!)
         if (instance.program_coid) {
             recordDefinition.ContactID = "{{CustomObject.Contact.Id}}";
-            recordDefinition.EmailAddress = "{{CustomObject.Contact.EmailAddress}}";
+            recordDefinition.EmailAddress = "{{CustomObject.Contact.Field(C_EmailAddress)}}";
+        } else {
+            recordDefinition.ContactID = "{{Contact.Id}}";
+            recordDefinition.EmailAddress = "{{Contact.Field(C_EmailAddress)}}";
         }
 
         // Handle dynamic sender ID (caller_id with ## prefix)
         if (instance.caller_id && instance.caller_id.toString().indexOf("##") !== -1) {
             const fieldName = instance.caller_id.split("##")[1];
-            if (fieldName) {
-                // Remove C_ prefix if exists
-                const cleanFieldName = fieldName.replace(/^C_/, '');
-                recordDefinition[cleanFieldName] = `{{Contact.Field(C_${cleanFieldName})}}`;
+            if (!recordDefinition[fieldName]) {
+                if (instance.program_coid) {
+                    recordDefinition[fieldName] = `{{CustomObject[${instance.program_coid}].Contact.Field(C_${fieldName})}}`;
+                } else {
+                    recordDefinition[fieldName] = `{{Contact.Field(C_${fieldName})}}`;
+                }
             }
         }
 
         // Handle recipient field (mobile number)
         if (instance.recipient_field) {
-            const recipientParts = instance.recipient_field.split("__");
-            let recipientFieldId = null;
-            let recipientFieldName = null;
-            
-            if (recipientParts.length > 1) {
-                recipientFieldId = recipientParts[0];
-                recipientFieldName = recipientParts[1];
+            if (instance.program_coid) {
+                // Using program CDO
+                const fields = instance.recipient_field.split("__");
+                if (fields.length > 1) {
+                    const fieldId = fields[0];
+                    const fieldName = fields[1];
+                    recordDefinition[fieldName] = `{{CustomObject[${instance.program_coid}].Field[${fieldId}]}}`;
+                } else {
+                    recordDefinition[instance.recipient_field] = `{{CustomObject[${instance.program_coid}].Contact.Field(C_${instance.recipient_field})}}`;
+                }
             } else {
-                recipientFieldName = recipientParts[0];
-            }
-            
-            // Remove C_ prefix if it exists in the field name
-            if (recipientFieldName) {
-                recipientFieldName = recipientFieldName.replace(/^C_/, '');
-            }
-            
-            // Skip if invalid
-            if (!recipientFieldName || recipientFieldName === 'undefined') {
-                logger.warn('Recipient field has invalid name', { 
-                    recipient_field: instance.recipient_field 
-                });
-                recipientFieldName = 'MobilePhone';
-            }
-            
-            if (instance.program_coid && recipientFieldId && !isNaN(recipientFieldId)) {
-                // Program with numeric CDO field ID
-                recordDefinition[recipientFieldName] = `{{CustomObject[${instance.program_coid}].Field[${recipientFieldId}]}}`;
-                logger.debug('Added recipient as CDO field', {
-                    key: recipientFieldName,
-                    value: recordDefinition[recipientFieldName]
-                });
-            } else if (instance.program_coid) {
-                // Program with contact field
-                recordDefinition[recipientFieldName] = `{{CustomObject[${instance.program_coid}].Contact.Field(C_${recipientFieldName})}}`;
-                logger.debug('Added recipient as program contact field', {
-                    key: recipientFieldName,
-                    value: recordDefinition[recipientFieldName]
-                });
-            } else {
-                // Regular campaign - contact field
-                recordDefinition[recipientFieldName] = `{{Contact.Field(C_${recipientFieldName})}}`;
-                logger.debug('Added recipient as contact field', {
-                    key: recipientFieldName,
-                    value: recordDefinition[recipientFieldName]
-                });
+                // Regular contact field - parse fieldId__fieldName format
+                const fields = instance.recipient_field.split("__");
+                if (fields.length > 1) {
+                    const fieldName = fields[1]; // Get the actual field name
+                    recordDefinition[fieldName] = `{{Contact.Field(${fieldName})}}`;
+                } else {
+                    recordDefinition[instance.recipient_field] = `{{Contact.Field(C_${instance.recipient_field})}}`;
+                }
             }
         }
 
         // Handle country field
         if (instance.country_field) {
-            const countryParts = instance.country_field.split("__");
-            let countryFieldId = null;
-            let countryFieldName = null;
-            
-            if (countryParts.length > 1) {
-                countryFieldId = countryParts[0];
-                countryFieldName = countryParts[1];
-            } else {
-                countryFieldName = countryParts[0];
-            }
-            
-            // Remove C_ prefix if it exists
-            if (countryFieldName) {
-                countryFieldName = countryFieldName.replace(/^C_/, '');
-            }
-            
-            // Skip if invalid
-            if (!countryFieldName || countryFieldName === 'undefined') {
-                logger.warn('Country field has invalid name', { 
-                    country_field: instance.country_field 
-                });
-                countryFieldName = 'Country';
-            }
-            
             if (instance.program_coid) {
-                if (instance.country_setting === 'cc' || countryFieldName === 'Country') {
-                    // Contact country field
-                    recordDefinition[countryFieldName] = `{{CustomObject[${instance.program_coid}].Contact.Field(C_${countryFieldName})}}`;
-                    logger.debug('Added country as program contact field', {
-                        key: countryFieldName,
-                        value: recordDefinition[countryFieldName]
-                    });
-                } else if (countryFieldId && !isNaN(countryFieldId)) {
-                    // CDO field with numeric ID
-                    recordDefinition[countryFieldName] = `{{CustomObject[${instance.program_coid}].Field[${countryFieldId}]}}`;
-                    logger.debug('Added country as CDO field', {
-                        key: countryFieldName,
-                        value: recordDefinition[countryFieldName]
-                    });
+                // Using program CDO
+                if (instance.country_setting === 'cc' || instance.country_field === 'Country') {
+                    recordDefinition[instance.country_field] = `{{CustomObject[${instance.program_coid}].Contact.Field(C_${instance.country_field})}}`;
                 } else {
-                    // CDO field without numeric ID
-                    recordDefinition[countryFieldName] = `{{CustomObject[${instance.program_coid}].Contact.Field(C_${countryFieldName})}}`;
-                    logger.debug('Added country as program contact field fallback', {
-                        key: countryFieldName,
-                        value: recordDefinition[countryFieldName]
-                    });
+                    const fields = instance.country_field.split("__");
+                    if (fields.length > 1) {
+                        const fieldId = fields[0];
+                        const fieldName = fields[1];
+                        recordDefinition[fieldName] = `{{CustomObject[${instance.program_coid}].Field[${fieldId}]}}`;
+                    } else {
+                        recordDefinition[instance.country_field] = `{{CustomObject[${instance.program_coid}].Contact.Field(C_${instance.country_field})}}`;
+                    }
                 }
             } else {
-                // Regular campaign - contact field
-                recordDefinition[countryFieldName] = `{{Contact.Field(C_${countryFieldName})}}`;
-                logger.debug('Added country as contact field', {
-                    key: countryFieldName,
-                    value: recordDefinition[countryFieldName]
-                });
+                // Regular contact field - parse fieldId__fieldName format
+                const fields = instance.country_field.split("__");
+                if (fields.length > 1) {
+                    const fieldName = fields[1]; // Get the actual field name
+                    recordDefinition[fieldName] = `{{Contact.Field(${fieldName})}}`;
+                } else {
+                    recordDefinition[instance.country_field] = `{{Contact.Field(C_${instance.country_field})}}`;
+                }
             }
         }
 
@@ -695,24 +644,14 @@ class ActionController {
                     return;
                 }
 
-                // Remove C_ prefix if exists
-                let cleanFieldName = fieldName.replace(/^C_/, '');
-                
-                // Skip if invalid
-                if (!cleanFieldName || cleanFieldName === 'undefined') {
-                    return;
-                }
+                const cleanFieldName = fieldName.replace("C_", "");
                 
                 if (!recordDefinition[cleanFieldName]) {
                     if (instance.program_coid) {
-                        recordDefinition[cleanFieldName] = `{{CustomObject[${instance.program_coid}].Contact.Field(C_${cleanFieldName})}}`;
+                        recordDefinition[cleanFieldName] = `{{CustomObject[${instance.program_coid}].Contact.Field(${fieldName})}}`;
                     } else {
-                        recordDefinition[cleanFieldName] = `{{Contact.Field(C_${cleanFieldName})}}`;
+                        recordDefinition[cleanFieldName] = `{{Contact.Field(${fieldName})}}`;
                     }
-                    logger.debug('Added merge field from message', {
-                        key: cleanFieldName,
-                        value: recordDefinition[cleanFieldName]
-                    });
                 }
             });
         }
@@ -722,34 +661,22 @@ class ActionController {
         if (trackedLinkFields) {
             trackedLinkFields.forEach(function(field) {
                 const fieldName = field.replace(/[\[\]]/g, '');
-                
-                // Remove C_ prefix if exists
-                let cleanFieldName = fieldName.replace(/^C_/, '');
-                
-                // Skip if invalid
-                if (!cleanFieldName || cleanFieldName === 'undefined') {
-                    return;
-                }
+                const cleanFieldName = fieldName.replace("C_", "");
                 
                 if (!recordDefinition[cleanFieldName]) {
                     if (instance.program_coid) {
-                        recordDefinition[cleanFieldName] = `{{CustomObject[${instance.program_coid}].Contact.Field(C_${cleanFieldName})}}`;
+                        recordDefinition[cleanFieldName] = `{{CustomObject[${instance.program_coid}].Contact.Field(${fieldName})}}`;
                     } else {
-                        recordDefinition[cleanFieldName] = `{{Contact.Field(C_${cleanFieldName})}}`;
+                        recordDefinition[cleanFieldName] = `{{Contact.Field(${fieldName})}}`;
                     }
-                    logger.debug('Added merge field from tracked link', {
-                        key: cleanFieldName,
-                        value: recordDefinition[cleanFieldName]
-                    });
                 }
             });
         }
 
-        logger.info('RecordDefinition built - COMPLETE', {
+        logger.info('RecordDefinition built', {
             instanceId: instance.instanceId,
             recordDefinition,
-            fieldCount: Object.keys(recordDefinition).length,
-            keys: Object.keys(recordDefinition)
+            fieldCount: Object.keys(recordDefinition).length
         });
 
         return recordDefinition;
