@@ -385,38 +385,51 @@ class ActionController {
 
         // Handle recipient field (mobile number)
         if (instance.recipient_field) {
+            // **FIX: Parse the field name properly**
+            const recipientParts = instance.recipient_field.split("__");
+            const recipientFieldName = recipientParts.length > 1 ? recipientParts[1] : recipientParts[0];
+            
+            // **FIX: Use the parsed field name as KEY, not the raw value**
             if (instance.program_coid) {
-                // Using program CDO - check if field contains __ (fieldId__fieldName format)
-                const fields = instance.recipient_field.split("__");
-                if (fields.length > 1) {
-                    const fieldId = fields[0];
-                    const fieldName = fields[1];
+                // Using program CDO
+                if (recipientParts.length > 1) {
+                    const fieldId = recipientParts[0];
+                    const fieldName = recipientParts[1];
                     recordDefinition[fieldName] = `{{CustomObject[${instance.program_coid}].Field[${fieldId}]}}`;
                 } else {
-                    recordDefinition[instance.recipient_field] = `{{CustomObject[${instance.program_coid}].Contact.Field(C_${instance.recipient_field})}}`;
+                    recordDefinition[recipientFieldName] = `{{CustomObject[${instance.program_coid}].Contact.Field(C_${recipientFieldName})}}`;
                 }
             } else {
                 // Regular campaign - contact field
-                recordDefinition[instance.recipient_field] = `{{Contact.Field(C_${instance.recipient_field})}}`;
+                recordDefinition[recipientFieldName] = `{{Contact.Field(C_${recipientFieldName})}}`;
             }
         }
 
         // Handle country field
         if (instance.country_field) {
+            // **FIX: Parse the field name properly**
+            const countryParts = instance.country_field.split("__");
+            const countryFieldName = countryParts.length > 1 ? countryParts[1] : countryParts[0];
+            
+            // **FIX: Use the parsed field name as KEY**
             if (instance.program_coid) {
                 // Using program CDO
                 if (instance.country_setting === 'cc' || instance.country_field === 'Country') {
                     // Contact country field
-                    recordDefinition[instance.country_field] = `{{CustomObject[${instance.program_coid}].Contact.Field(C_${instance.country_field})}}`;
+                    recordDefinition[countryFieldName] = `{{CustomObject[${instance.program_coid}].Contact.Field(C_${countryFieldName})}}`;
                 } else {
                     // CDO field for country
-                    const fieldId = instance.country_field.split("__")[0];
-                    const fieldName = instance.country_field.split("__")[1];
-                    recordDefinition[fieldName] = `{{CustomObject[${instance.program_coid}].Field[${fieldId}]}}`;
+                    if (countryParts.length > 1) {
+                        const fieldId = countryParts[0];
+                        const fieldName = countryParts[1];
+                        recordDefinition[fieldName] = `{{CustomObject[${instance.program_coid}].Field[${fieldId}]}}`;
+                    } else {
+                        recordDefinition[countryFieldName] = `{{CustomObject[${instance.program_coid}].Contact.Field(C_${countryFieldName})}}`;
+                    }
                 }
             } else {
                 // Regular campaign - contact field
-                recordDefinition[instance.country_field] = `{{Contact.Field(C_${instance.country_field})}}`;
+                recordDefinition[countryFieldName] = `{{Contact.Field(C_${countryFieldName})}}`;
             }
         }
 
