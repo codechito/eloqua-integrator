@@ -885,165 +885,179 @@ class ActionController {
     }
 
     /**
-     * Queue SMS jobs for background processing
-     * Items are already enriched with message and merge field data
+     * Queue SMS jobs from enriched items
      */
-    static async queueSmsJobs(instance, consumer, executionData) {
-        const results = [];
-        const items = executionData.items || [];
-        const baseUrl = process.env.APP_BASE_URL || 'https://eloqua-integrator.onrender.com';
-
+    static async queueSmsJobs(instance, consumer, enrichedItems, executionId) {
         logger.info('Queueing SMS jobs', {
             instanceId: instance.instanceId,
-            itemCount: items.length
+            itemCount: enrichedItems.length
         });
 
-        for (let i = 0; i < items.length; i++) {
-            const item = items[i];
+        const results = {
+            success: 0,
+            failed: 0,
+            errors: []
+        };
+
+        // Parse field names to get the actual field names from Eloqua
+        // Format can be "FieldId__C_FieldName" or just "C_FieldName" or "FieldName"
+        const parseFieldName = (fieldConfig) => {
+            if (!fieldConfig) return null;
+            
+            // Split by __ to handle "FieldId__C_FieldName" format
+            const parts = fieldConfig.split('__');
+            
+            // Return the last part (the actual field name)
+            return parts[parts.length - 1];
+        };
+
+        const recipientFieldName = parseFieldName(instance.recipient_field);
+        const countryFieldName = parseFieldName(instance.country_field);
+
+        logger.debug('Parsed field names for extraction', {
+            recipient_field: instance.recipient_field,
+            recipientFieldName,
+            country_field: instance.country_field,
+            countryFieldName
+        });
+
+        for (let i = 0; i < enrichedItems.length; i++) {
+            const item = enrichedItems[i];
             
             try {
-                // Get mobile number (already parsed field name stored in item)
-                const mobileNumber = item[item.recipient_field] || item.MobilePhone;
+                logger.debug('Processing item for SMS', {
+                    index: i + 1,
+                    total: enrichedItems.length,
+                    contactId: item.ContactID,
+                    email: item.EmailAddress,
+                    recipientFieldName,
+                    recipientValue: item[recipientFieldName],
+                    availableFields: Object.keys(item)
+                });
 
+                // Extract mobile number using parsed field name
+                const mobileNumber = item[recipientFieldName];
+                
                 if (!mobileNumber) {
                     logger.warn('Item has no mobile number', {
-                        contactId: item.ContactID || item.Id,
-                        recipient_field: item.recipient_field,
+                        contactId: item.ContactID,
+                        recipientFieldName,
                         availableFields: Object.keys(item)
                     });
-                    
-                    results.push({
-                        contactId: item.ContactID || item.Id,
-                        success: false,
-                        error: 'Mobile number not found'
+                    results.failed++;
+                    results.errors.push({
+                        contactId: item.ContactID,
+                        error: 'No mobile number',
+                        field: recipientFieldName
                     });
                     continue;
                 }
 
-                // Get country
-                const country = item[item.country_field] || item.Country || consumer.default_country || 'Australia';
+                // Extract country using parsed field name (fallback to default)
+                const country = item[countryFieldName] || consumer.default_country || 'Australia';
 
-                // Format phone number
-                const formattedNumber = formatPhoneNumber(mobileNumber, country);
+                logger.debug('Extracted contact data', {
+                    contactId: item.ContactID,
+                    mobileNumber,
+                    country,
+                    countryFieldName,
+                    countryValue: item[countryFieldName]
+                });
+
+                // Format mobile number (remove spaces, ensure + prefix)
+                const formattedMobile = ActionController.formatMobileNumber(mobileNumber, country);
 
                 logger.debug('Processing item for SMS', {
                     index: i + 1,
-                    total: items.length,
-                    contactId: item.ContactID || item.Id,
-                    mobileNumber: mobileNumber,
-                    formattedNumber: formattedNumber,
-                    messagePreview: item.message?.substring(0, 50) + '...'
+                    total: enrichedItems.length,
+                    mobileNumber,
+                    formattedNumber: formattedMobile,
+                    messagePreview: item.message ? item.message.substring(0, 50) + '...' : 'N/A'
                 });
 
-                // Message is already processed and merged
-                const message = item.message;
-                const trackedLinkUrl = item.tracked_link_url;
-
-                // Determine sender ID
+                // Determine sender ID (might be dynamic from contact field)
                 let senderId = instance.caller_id;
                 if (senderId && senderId.startsWith('##')) {
-                    const senderFieldName = senderId.replace('##', '').replace(/^C_/, '');
-                    senderId = item[senderFieldName] || instance.caller_id;
+                    const senderFieldName = parseFieldName(senderId.replace('##', ''));
+                    senderId = item[senderFieldName] || senderId;
+                    
+                    logger.debug('Dynamic sender ID resolved', {
+                        original: instance.caller_id,
+                        fieldName: senderFieldName,
+                        resolved: senderId
+                    });
                 }
-
-                // Build callback URLs
-                const callbackParams = new URLSearchParams({
-                    installId: instance.installId,
-                    instanceId: instance.instanceId,
-                    contactId: item.ContactID || item.Id,
-                    emailAddress: item.EmailAddress || '',
-                    campaignId: instance.assetId || ''
-                }).toString();
 
                 // Build SMS options
                 const smsOptions = {
-                    from: senderId || undefined
+                    country: country,
+                    trackedLinkUrl: item.tracked_link_url || null,
+                    messageExpiry: instance.message_expiry === 'YES',
+                    messageValidity: instance.message_validity ? instance.message_validity * 60 : null
                 };
 
-                if (instance.message_expiry === 'YES' && instance.message_validity) {
-                    smsOptions.validity = parseInt(instance.message_validity) * 60;
-                }
-
-                // Add tracked link if message contains [tracked-link] placeholder
-                if (message.includes('[tracked-link]') && trackedLinkUrl) {
-                    smsOptions.tracked_link_url = trackedLinkUrl;
-                }
-
-                // Add callback URLs (replace http with https like old code)
-                if (consumer.dlr_callback) {
-                    const dlrUrl = consumer.dlr_callback.replace('http:', 'https:');
-                    smsOptions.dlr_callback = `${dlrUrl}?${callbackParams}`;
-                }
-
-                if (consumer.reply_callback) {
-                    const replyUrl = consumer.reply_callback.replace('http:', 'https:');
-                    smsOptions.reply_callback = `${replyUrl}?${callbackParams}`;
-                }
-
-                if (consumer.link_hits_callback) {
-                    const linkUrl = consumer.link_hits_callback.replace('http:', 'https:');
-                    smsOptions.link_hits_callback = `${linkUrl}?${callbackParams}`;
-                }
-
-                // Prepare custom object data if configured
-                const customObjectData = instance.custom_object_id ? {
-                    customObjectId: instance.custom_object_id,
-                    fieldMappings: {
-                        mobile_field: instance.mobile_field,
-                        email_field: instance.email_field,
-                        title_field: instance.title_field,
-                        notification_field: instance.notification_field,
-                        outgoing_field: instance.outgoing_field,
-                        vn_field: instance.vn_field
-                    },
-                    recordData: item
-                } : null;
-
                 // Create SMS job
-                const jobId = generateId();
                 const smsJob = new SmsJob({
-                    jobId,
+                    jobId: `${instance.instanceId}_${item.ContactID}_${Date.now()}_${i}`,
                     installId: instance.installId,
                     instanceId: instance.instanceId,
-                    contactId: item.ContactID || item.Id,
-                    emailAddress: item.EmailAddress || '',
-                    mobileNumber: formattedNumber,
-                    message,
-                    senderId: senderId,
+                    executionId: executionId,
+                    
+                    // Contact details
+                    contactId: item.ContactID,
+                    emailAddress: item.EmailAddress,
+                    mobileNumber: formattedMobile,
+                    
+                    // Message details (already processed with merge fields)
+                    message: item.message,
+                    senderId: senderId || 'BurstSMS',
+                    
+                    // Campaign details
                     campaignId: instance.assetId,
-                    campaignTitle: instance.assetName,
+                    campaignTitle: instance.assetName || 'Unknown Campaign',
                     assetName: instance.assetName,
-                    smsOptions,
-                    customObjectData,
+                    
+                    // SMS options
+                    smsOptions: smsOptions,
+                    
+                    // Custom object data for logging (if configured)
+                    customObjectData: instance.custom_object_id ? {
+                        customObjectId: instance.custom_object_id,
+                        fields: {
+                            [instance.mobile_field]: formattedMobile,
+                            [instance.email_field]: item.EmailAddress,
+                            [instance.outgoing_field]: item.message,
+                            [instance.notification_field]: 'Pending',
+                            [instance.vn_field]: senderId,
+                            [instance.title_field]: instance.assetName
+                        }
+                    } : null,
+                    
                     status: 'pending',
                     scheduledAt: new Date()
                 });
 
                 await smsJob.save();
 
-                logger.info('SMS job created', {
-                    jobId,
-                    contactId: item.ContactID || item.Id,
-                    to: formattedNumber
+                logger.debug('SMS job created', {
+                    jobId: smsJob.jobId,
+                    contactId: item.ContactID,
+                    mobile: formattedMobile
                 });
 
-                results.push({
-                    contactId: item.ContactID || item.Id,
-                    success: true,
-                    jobId: jobId
-                });
+                results.success++;
 
             } catch (error) {
                 logger.error('Error creating SMS job', {
                     instanceId: instance.instanceId,
-                    contactId: item.ContactID || item.Id,
+                    contactId: item.ContactID,
                     error: error.message,
                     stack: error.stack
                 });
-
-                results.push({
-                    contactId: item.ContactID || item.Id,
-                    success: false,
+                
+                results.failed++;
+                results.errors.push({
+                    contactId: item.ContactID,
                     error: error.message
                 });
             }
@@ -1051,13 +1065,64 @@ class ActionController {
 
         logger.info('SMS job queueing completed', {
             instanceId: instance.instanceId,
-            total: results.length,
-            success: results.filter(r => r.success).length,
-            failed: results.filter(r => !r.success).length
+            total: enrichedItems.length,
+            success: results.success,
+            failed: results.failed
         });
 
         return results;
     }
+
+    /**
+     * Get country calling code from country name
+     */
+    static getCountryCode(country) {
+        const countryCodes = {
+            'Australia': '+61',
+            'United States': '+1',
+            'United Kingdom': '+44',
+            'New Zealand': '+64',
+            'Singapore': '+65',
+            'Philippines': '+63',
+            'India': '+91',
+            'Malaysia': '+60',
+            // Add more as needed
+        };
+
+        return countryCodes[country] || '+61'; // Default to Australia
+    }
+
+    /**
+     * Format mobile number with country code
+     */
+    static formatMobileNumber(mobileNumber, country) {
+        if (!mobileNumber) return null;
+
+        // Remove all spaces and special characters
+        let cleaned = mobileNumber.replace(/[\s\-\(\)]/g, '');
+
+        // If it already starts with +, return as is
+        if (cleaned.startsWith('+')) {
+            return cleaned;
+        }
+
+        // Get country code from country name
+        const countryCode = ActionController.getCountryCode(country);
+
+        // If number starts with 0, remove it and add country code
+        if (cleaned.startsWith('0')) {
+            cleaned = cleaned.substring(1);
+        }
+
+        // If number doesn't start with country code digits, add it
+        if (!cleaned.startsWith(countryCode.replace('+', ''))) {
+            return `${countryCode}${cleaned}`;
+        }
+
+        return `+${cleaned}`;
+    }
+
+
 
         /**
      * Process a single SMS job (called by worker)
