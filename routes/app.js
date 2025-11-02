@@ -21,13 +21,17 @@ router.post('/config', verifyInstallation, AppController.saveConfig);
 
 // OAuth
 router.get('/authorize', AppController.authorize);
-router.get('/oauth/callback', AppController.oauthCallback);
+
+// **FIX: OAuth callback with installId in URL path**
+router.get('/oauth/callback/:installId', AppController.oauthCallback);
 
 // Token management
 router.post('/refresh-token', verifyInstallation, AppController.refreshToken);
 
-// Debug (remove in production)
+// Debug endpoints
 router.get('/debug/token/:installId', AppController.debugToken);
+router.get('/test-connection/:installId', AppController.testConnection);
+router.get('/fix-siteid/:installId/:siteId', AppController.fixSiteId);
 
 // AJAX endpoints
 router.get('/ajax/customobjects/:installId/:siteId/customObject',

@@ -6,29 +6,34 @@ class OAuthService {
     constructor() {
         this.clientId = process.env.ELOQUA_CLIENT_ID;
         this.clientSecret = process.env.ELOQUA_CLIENT_SECRET;
-        this.redirectUri = process.env.ELOQUA_REDIRECT_URI;
+        this.redirectUri = process.env.ELOQUA_REDIRECT_URI; // Base redirect URI without trailing slash
         this.authorizationURL = 'https://login.eloqua.com/auth/oauth2/authorize';
         this.tokenURL = 'https://login.eloqua.com/auth/oauth2/token';
     }
 
     /**
-     * Get authorization URL for OAuth flow
+     * Get authorization URL with installId embedded in redirect URI
+     * OLD CODE PATTERN: callbackUrl with installId/siteId in path
      */
-    getAuthorizationUrl(state) {
+    getAuthorizationUrl(installId) {
+        // **FIX: Include installId in redirect URI like old code**
+        const redirectUri = `${this.redirectUri}/${installId}`;
+        
         const params = {
             response_type: 'code',
             client_id: this.clientId,
-            redirect_uri: this.redirectUri,
+            redirect_uri: redirectUri,
             scope: 'full',
-            state: state || ''
+            state: installId
         };
 
         const url = `${this.authorizationURL}?${querystring.stringify(params)}`;
 
         logger.info('Generated authorization URL', {
             clientId: this.clientId,
-            redirectUri: this.redirectUri,
-            state
+            redirectUri,
+            installId,
+            fullUrl: url
         });
 
         return url;
@@ -36,18 +41,23 @@ class OAuthService {
 
     /**
      * Exchange authorization code for access token
+     * Must use same redirect_uri as authorization
      */
-    async getAccessToken(code) {
+    async getAccessToken(code, installId) {
         try {
             logger.info('Exchanging authorization code for access token', {
                 code: code.substring(0, 10) + '...',
-                tokenURL: this.tokenURL
+                tokenURL: this.tokenURL,
+                installId
             });
+
+            // **FIX: Use same redirect URI with installId as in authorization**
+            const redirectUri = `${this.redirectUri}/${installId}`;
 
             const data = {
                 grant_type: 'authorization_code',
                 code: code,
-                redirect_uri: this.redirectUri
+                redirect_uri: redirectUri
             };
 
             const auth = Buffer.from(`${this.clientId}:${this.clientSecret}`).toString('base64');
@@ -81,7 +91,7 @@ class OAuthService {
             return {
                 access_token: response.data.access_token,
                 refresh_token: response.data.refresh_token,
-                expires_in: response.data.expires_in || 28800, // 8 hours default
+                expires_in: response.data.expires_in || 28800,
                 token_type: response.data.token_type
             };
 
@@ -132,7 +142,7 @@ class OAuthService {
 
             return {
                 access_token: response.data.access_token,
-                refresh_token: response.data.refresh_token || refreshToken, // Keep old if new not provided
+                refresh_token: response.data.refresh_token || refreshToken,
                 expires_in: response.data.expires_in || 28800
             };
 
