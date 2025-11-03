@@ -20,6 +20,10 @@ const SmsJobSchema = new mongoose.Schema({
         required: true,
         index: true
     },
+    executionId: {
+        type: String,
+        index: true
+    },
     
     // Contact info
     contactId: {
@@ -55,21 +59,23 @@ const SmsJobSchema = new mongoose.Schema({
         type: String
     },
     
-    // SMS options
+    // SMS options - FIXED: Use camelCase and add country
     smsOptions: {
         from: String,
+        country: String,                    // ← ADD THIS
         validity: Number,
-        dlr_callback: String,
-        reply_callback: String,
-        link_hits_callback: String,
-        tracked_link_url: String
+        messageExpiry: Boolean,             // ← ADD THIS
+        messageValidity: Number,            // ← ADD THIS
+        dlrCallback: String,                // ← Changed from dlr_callback
+        replyCallback: String,              // ← Changed from reply_callback
+        linkHitsCallback: String,           // ← Changed from link_hits_callback
+        trackedLinkUrl: String              // ← Changed from tracked_link_url
     },
     
     // Custom object data for later update
     customObjectData: {
         customObjectId: String,
-        fieldMappings: mongoose.Schema.Types.Mixed,
-        recordData: mongoose.Schema.Types.Mixed
+        fields: mongoose.Schema.Types.Mixed  // ← Simplified
     },
     
     // Status
@@ -85,6 +91,9 @@ const SmsJobSchema = new mongoose.Schema({
         type: Date,
         default: Date.now,
         index: true
+    },
+    processingStartedAt: {
+        type: Date
     },
     processedAt: {
         type: Date
@@ -125,16 +134,6 @@ const SmsJobSchema = new mongoose.Schema({
     smsLogId: {
         type: mongoose.Schema.Types.ObjectId,
         ref: 'SmsLog'
-    },
-    
-    // Metadata
-    createdAt: {
-        type: Date,
-        default: Date.now
-    },
-    updatedAt: {
-        type: Date,
-        default: Date.now
     }
 }, {
     timestamps: true
@@ -143,42 +142,45 @@ const SmsJobSchema = new mongoose.Schema({
 // Indexes for worker queries
 SmsJobSchema.index({ status: 1, scheduledAt: 1 });
 SmsJobSchema.index({ installId: 1, status: 1 });
-SmsJobSchema.index({ createdAt: 1 });
+SmsJobSchema.index({ instanceId: 1, executionId: 1 });
 
 // Methods
-SmsJobSchema.methods.markAsProcessing = function() {
+SmsJobSchema.methods.markAsProcessing = async function() {
     this.status = 'processing';
+    this.processingStartedAt = new Date();
     this.processedAt = new Date();
-    return this.save();
+    return await this.save();
 };
 
-SmsJobSchema.methods.markAsSent = function(messageId, transmitSmsResponse) {
+SmsJobSchema.methods.markAsSent = async function(messageId, transmitSmsResponse) {
     this.status = 'sent';
     this.messageId = messageId;
     this.transmitSmsResponse = transmitSmsResponse;
     this.sentAt = new Date();
-    return this.save();
+    return await this.save();
 };
 
-SmsJobSchema.methods.markAsFailed = function(errorMessage, errorCode) {
+SmsJobSchema.methods.markAsFailed = async function(errorMessage, errorCode) {
     this.status = 'failed';
     this.errorMessage = errorMessage;
     this.errorCode = errorCode;
-    this.retryCount += 1;
     this.lastRetryAt = new Date();
-    return this.save();
+    return await this.save();
 };
 
 SmsJobSchema.methods.canRetry = function() {
     return this.retryCount < this.maxRetries;
 };
 
-SmsJobSchema.methods.resetForRetry = function() {
+SmsJobSchema.methods.resetForRetry = async function() {
     this.status = 'pending';
+    this.retryCount += 1;
+    this.scheduledAt = new Date(Date.now() + (this.retryCount * 60000)); // Retry after N minutes
+    this.processingStartedAt = null;
     this.processedAt = null;
     this.errorMessage = null;
     this.errorCode = null;
-    return this.save();
+    return await this.save();
 };
 
 module.exports = mongoose.model('SmsJob', SmsJobSchema);
