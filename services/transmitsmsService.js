@@ -120,92 +120,71 @@ class TransmitSmsService {
 
     /**
      * Send SMS
-     * @param {string} to - Recipient phone number (E.164 format)
-     * @param {string} message - SMS message (can include [tracked-link] placeholder)
-     * @param {object} options - Additional options
      */
     async sendSms(to, message, options = {}) {
-        try {
-            // Validate required fields
-            if (!to || !to.trim()) {
-                throw new Error('Recipient phone number is required');
-            }
+        const data = {
+            to: to,
+            message: message
+        };
 
-            if (!message || !message.trim()) {
-                throw new Error('Message is required');
-            }
-
-            // Build payload with required fields
-            const payload = {
-                to: to.trim(),
-                message: message.trim()
-            };
-
-            // Add optional fields
-            if (options.from) {
-                payload.from = options.from;
-            }
-
-            if (options.validity) {
-                payload.validity = options.validity;
-            }
-
-            if (options.send_at) {
-                payload.send_at = options.send_at;
-            }
-
-            if (options.countrycode) {
-                payload.countrycode = options.countrycode;
-            }
-
-            if (options.replies_to_email) {
-                payload.replies_to_email = options.replies_to_email;
-            }
-
-            // Add callback URLs with tracking parameters
-            if (options.dlr_callback) {
-                payload.dlr_callback = options.dlr_callback;
-            }
-
-            if (options.reply_callback) {
-                payload.reply_callback = options.reply_callback;
-            }
-
-            if (options.link_hits_callback) {
-                payload.link_hits_callback = options.link_hits_callback;
-            }
-
-            // If message contains [tracked-link], add the URL
-            if (message.includes('[tracked-link]') && options.tracked_link_url) {
-                payload.tracked_link_url = options.tracked_link_url;
-            }
-
-            logger.sms('send_request', {
-                to: payload.to,
-                messageLength: payload.message.length,
-                from: payload.from || 'default',
-                hasTrackedLink: payload.message.includes('[tracked-link]'),
-                trackedLinkUrl: payload.tracked_link_url,
-                hasCallbacks: !!(options.dlr_callback || options.reply_callback || options.link_hits_callback),
-                payloadKeys: Object.keys(payload)
-            });
-
-            const response = await this.makeRequest('POST', '/send-sms.json', payload);
-
-            logger.sms('send_success', {
-                to: payload.to,
-                messageId: response.message_id,
-                status: response.status
-            });
-
-            return response;
-        } catch (error) {
-            logger.sms('send_failed', {
-                to,
-                error: error.message
-            });
-            throw error;
+        // Add optional parameters
+        if (options.from) {
+            data.from = options.from;
         }
+
+        // Handle tracked link
+        if (message.includes('[tracked-link]')) {
+            if (!options.trackedLinkUrl) {
+                throw new Error('Message contains [tracked-link] but trackedLinkUrl is not provided');
+            }
+            data.tracked_link_url = options.trackedLinkUrl;
+        }
+
+        // List ID
+        if (options.list_id) {
+            data.list_id = options.list_id;
+        }
+
+        // Schedule time
+        if (options.schedule_time) {
+            data.schedule_time = options.schedule_time;
+        }
+
+        // Message validity
+        if (options.messageValidity) {
+            data.validity = options.messageValidity;
+        }
+
+        // Callbacks
+        if (options.dlr_callback) {
+            data.dlr_callback = options.dlr_callback;
+        }
+
+        if (options.reply_callback) {
+            data.reply_callback = options.reply_callback;
+        }
+
+        if (options.link_hits_callback) {
+            data.link_hits_callback = options.link_hits_callback;
+        }
+
+        logger.debug('Sending SMS', {
+            to,
+            from: data.from || 'default',
+            messageLength: message.length,
+            hasTrackedLink: !!data.tracked_link_url,
+            trackedLinkUrl: data.tracked_link_url
+        });
+
+        const response = await this.makeRequest('/send-sms.json', 'POST', data);
+
+        logger.sms('sent', {
+            to,
+            messageId: response.message_id,
+            cost: response.cost
+        });
+
+        return response;
     }
 
     /**

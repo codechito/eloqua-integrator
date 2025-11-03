@@ -306,7 +306,7 @@ class ActionController {
         });
     });
 
-    /**
+   /**
      * Save configuration and update Eloqua instance
      * POST /eloqua/action/configure
      */
@@ -319,18 +319,30 @@ class ActionController {
             receivedData: {
                 recipient_field: instanceData.recipient_field,
                 country_field: instanceData.country_field,
-                message: instanceData.message?.substring(0, 50) + '...'
+                message: instanceData.message?.substring(0, 50) + '...',
+                tracked_link: instanceData.tracked_link, // ADD THIS
+                caller_id: instanceData.caller_id,
+                custom_object_id: instanceData.custom_object_id,
+                hasTrackedLink: !!instanceData.tracked_link,
+                messageHasTrackedLinkPlaceholder: instanceData.message?.includes('[tracked-link]')
             }
         });
 
         let instance = await ActionInstance.findOne({ instanceId });
         
         if (!instance) {
+            logger.info('Creating new action instance', { instanceId });
             instance = new ActionInstance({ 
                 instanceId, 
                 ...instanceData 
             });
         } else {
+            logger.info('Updating existing action instance', { 
+                instanceId,
+                existingFields: Object.keys(instance.toObject())
+            });
+            
+            // Update all fields from instanceData
             Object.assign(instance, instanceData);
         }
 
@@ -341,44 +353,83 @@ class ActionController {
         const isConfigured = ActionController.validateConfiguration(instance);
         instance.requiresConfiguration = !isConfigured;
 
-        await instance.save();
-
-        // **ADD DEBUG LOG - Check what was actually saved**
-        logger.info('Instance saved to database', {
+        // **CRITICAL: Log what's about to be saved**
+        logger.debug('Instance data before save', {
             instanceId: instance.instanceId,
+            message: instance.message?.substring(0, 50) + '...',
+            tracked_link: instance.tracked_link,
+            hasTrackedLink: !!instance.tracked_link,
             recipient_field: instance.recipient_field,
             country_field: instance.country_field,
-            message: instance.message?.substring(0, 50)
+            caller_id: instance.caller_id,
+            custom_object_id: instance.custom_object_id,
+            messageHasPlaceholder: instance.message?.includes('[tracked-link]')
         });
+
+        await instance.save();
+
+        // **VERIFY what was actually saved by reloading from database**
+        const savedInstance = await ActionInstance.findOne({ instanceId });
+        
+        logger.info('Instance saved to database (verified)', {
+            instanceId: savedInstance.instanceId,
+            recipient_field: savedInstance.recipient_field,
+            country_field: savedInstance.country_field,
+            message: savedInstance.message?.substring(0, 50) + '...',
+            tracked_link: savedInstance.tracked_link,
+            hasTrackedLink: !!savedInstance.tracked_link,
+            caller_id: savedInstance.caller_id,
+            custom_object_id: savedInstance.custom_object_id,
+            messageHasPlaceholder: savedInstance.message?.includes('[tracked-link]'),
+            fieldsInDB: Object.keys(savedInstance.toObject())
+        });
+
+        // **ALERT: If message has [tracked-link] but no tracked_link URL configured**
+        if (savedInstance.message?.includes('[tracked-link]') && !savedInstance.tracked_link) {
+            logger.warn('Message contains [tracked-link] placeholder but no tracked_link URL configured!', {
+                instanceId: savedInstance.instanceId,
+                messagePreview: savedInstance.message.substring(0, 100)
+            });
+        }
 
         logger.info('Action configuration saved', { 
             instanceId,
-            requiresConfiguration: instance.requiresConfiguration
+            requiresConfiguration: instance.requiresConfiguration,
+            isConfigured
         });
 
         // Update Eloqua instance with recordDefinition
         try {
-            await ActionController.updateEloquaInstance(instance);
+            await ActionController.updateEloquaInstance(savedInstance);
             
             logger.info('Eloqua instance updated successfully', { instanceId });
 
             res.json({
                 success: true,
                 message: 'Configuration saved successfully',
-                requiresConfiguration: instance.requiresConfiguration
+                requiresConfiguration: savedInstance.requiresConfiguration,
+                debug: {
+                    hasTrackedLink: !!savedInstance.tracked_link,
+                    messageHasPlaceholder: savedInstance.message?.includes('[tracked-link]')
+                }
             });
 
         } catch (error) {
             logger.error('Failed to update Eloqua instance', {
                 instanceId,
-                error: error.message
+                error: error.message,
+                stack: error.stack
             });
 
             res.json({
                 success: true,
                 message: 'Configuration saved locally, but failed to update Eloqua',
                 warning: error.message,
-                requiresConfiguration: instance.requiresConfiguration
+                requiresConfiguration: savedInstance.requiresConfiguration,
+                debug: {
+                    hasTrackedLink: !!savedInstance.tracked_link,
+                    messageHasPlaceholder: savedInstance.message?.includes('[tracked-link]')
+                }
             });
         }
     });
@@ -726,13 +777,15 @@ class ActionController {
 
     /**
      * Enrich items with processed message and tracked link
-     * DO NOT modify field names - they come from Eloqua as-is
      */
     static enrichItems(items, instance, consumer) {
-        logger.debug('Parsed field names', {
-            recipient_field: instance.recipient_field,  // Should be "MobilePhone__C_MobilePhone"
-            country_field: instance.country_field,      // Should be "Country__C_Country"
-            hasProgramCoid: !!instance.program_coid
+        logger.debug('Enriching items', {
+            recipient_field: instance.recipient_field,
+            country_field: instance.country_field,
+            hasProgramCoid: !!instance.program_coid,
+            hasTrackedLink: !!instance.tracked_link,
+            trackedLinkValue: instance.tracked_link,
+            messageHasTrackedLink: instance.message?.includes('[tracked-link]')
         });
 
         return items.map(item => {
@@ -750,7 +803,6 @@ class ActionController {
                     }
 
                     // Item has fields like: C_FirstName, C_MobilePhone, etc.
-                    // Try both with and without C_ prefix
                     const fieldValue = item[fieldName] || item[fieldName.replace('C_', '')] || '';
 
                     logger.debug('Replaced merge field in message', {
@@ -766,6 +818,12 @@ class ActionController {
             let processedTrackedLink = null;
             if (instance.tracked_link) {
                 processedTrackedLink = instance.tracked_link;
+                
+                logger.debug('Processing tracked link', {
+                    originalUrl: instance.tracked_link,
+                    hasMergeFields: /\[([^\]]+)\]/.test(instance.tracked_link)
+                });
+
                 const linkMergeFields = instance.tracked_link.match(/\[([^\]]+)\]/g);
 
                 if (linkMergeFields) {
@@ -773,19 +831,34 @@ class ActionController {
                         const fieldName = field.replace(/[\[\]]/g, '');
                         const fieldValue = item[fieldName] || item[fieldName.replace('C_', '')] || '';
                         processedTrackedLink = processedTrackedLink.replace(field, fieldValue);
+                        
+                        logger.debug('Replaced merge field in tracked link', {
+                            field: fieldName,
+                            value: fieldValue
+                        });
                     }
                 }
+
+                logger.debug('Tracked link processed', {
+                    contactId: item.ContactID,
+                    processedUrl: processedTrackedLink
+                });
+            } else {
+                logger.warn('Message has [tracked-link] but instance.tracked_link is not configured', {
+                    contactId: item.ContactID,
+                    messagePreview: processedMessage.substring(0, 100)
+                });
             }
 
-            // Return enriched item with ORIGINAL fields intact
-            // Don't add recipient_field or country_field here!
             return {
-                ...item,  // Keep all original fields as-is
+                ...item,
                 message: processedMessage,
                 tracked_link_url: processedTrackedLink
             };
         });
     }
+
+
     /**
      * Process notify asynchronously (creates SMS jobs)
      */
@@ -1033,6 +1106,13 @@ class ActionController {
                     messageExpiry: instance.message_expiry === 'YES',
                     messageValidity: instance.message_validity ? instance.message_validity * 60 : null
                 };
+
+                logger.debug('SMS options built', {
+                    contactId: item.ContactID,
+                    hasTrackedLink: !!smsOptions.trackedLinkUrl,
+                    trackedLinkUrl: smsOptions.trackedLinkUrl,
+                    messageHasPlaceholder: item.message?.includes('[tracked-link]')
+                });
 
                 // Create SMS job
                 const smsJob = new SmsJob({
