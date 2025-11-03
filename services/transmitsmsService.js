@@ -11,40 +11,6 @@ class TransmitSmsService {
     }
 
     /**
-     * Configure number forwarding
-     * @param {string} number - Phone number to configure
-     * @param {string} forwardUrl - URL to forward messages to
-     */
-    async configureNumberForwarding(number, forwardUrl) {
-        try {
-            const params = {
-                number: number,
-                forward_url: forwardUrl
-            };
-
-            logger.info('Configuring number forwarding', {
-                number,
-                forwardUrl
-            });
-
-            const response = await this.makeRequest('GET', '/edit-number-options.json', params);
-
-            logger.info('Number forwarding configured', {
-                number,
-                response
-            });
-
-            return response;
-        } catch (error) {
-            logger.error('Error configuring number forwarding', {
-                number,
-                error: error.message
-            });
-            throw error;
-        }
-    }
-
-    /**
      * Get authorization header (Basic Auth)
      */
     getAuthHeader() {
@@ -54,11 +20,11 @@ class TransmitSmsService {
 
     /**
      * Make API request to TransmitSMS
-     * @param {string} method - HTTP method
      * @param {string} endpoint - API endpoint
-     * @param {object} data - Request data (will be converted to URLSearchParams for POST)
+     * @param {string} method - HTTP method (GET, POST, PUT)
+     * @param {object} data - Request data
      */
-    async makeRequest(method, endpoint, data = null) {
+    async makeRequest(endpoint, method = 'GET', data = null) {
         try {
             const url = `${this.baseUrl}${endpoint}`;
             
@@ -89,10 +55,9 @@ class TransmitSmsService {
                     axiosConfig.headers['Accept'] = 'application/json';
                 }
                 
-                logger.debug(`TransmitSMS API ${method} ${endpoint}`, { 
+                logger.debug(`TransmitSMS API ${endpoint} ${method}`, { 
                     hasData: !!data,
-                    dataKeys: Object.keys(data),
-                    contentType: axiosConfig.headers['Content-Type']
+                    dataKeys: data ? Object.keys(data) : []
                 });
             }
 
@@ -104,10 +69,10 @@ class TransmitSmsService {
 
             return response.data;
         } catch (error) {
-            const errorMessage = JSON.stringify(error.response?.data?.error?.description || error.message);
-            const statusCode = JSON.stringify(error.response?.status);
+            const errorMessage = error.response?.data?.error?.description || error.message;
+            const statusCode = error.response?.status;
 
-            logger.error(`TransmitSMS API Error: ${method} ${endpoint}`, {
+            logger.error(`TransmitSMS API Error: ${endpoint} ${method}`, {
                 status: statusCode,
                 error: errorMessage,
                 requestData: data,
@@ -156,16 +121,16 @@ class TransmitSmsService {
         }
 
         // Callbacks
-        if (options.dlr_callback) {
-            data.dlr_callback = options.dlr_callback;
+        if (options.dlrCallback) {
+            data.dlr_callback = options.dlrCallback;
         }
 
-        if (options.reply_callback) {
-            data.reply_callback = options.reply_callback;
+        if (options.replyCallback) {
+            data.reply_callback = options.replyCallback;
         }
 
-        if (options.link_hits_callback) {
-            data.link_hits_callback = options.link_hits_callback;
+        if (options.linkHitsCallback) {
+            data.link_tracking_callback = options.linkHitsCallback;
         }
 
         logger.debug('Sending SMS', {
@@ -178,10 +143,11 @@ class TransmitSmsService {
 
         const response = await this.makeRequest('/send-sms.json', 'POST', data);
 
-        logger.sms('sent', {
+        logger.info('SMS sent successfully', {
             to,
             messageId: response.message_id,
-            cost: response.cost
+            cost: response.cost,
+            hasTrackedLink: !!response.tracked_link
         });
 
         return response;
@@ -189,8 +155,6 @@ class TransmitSmsService {
 
     /**
      * Send bulk SMS
-     * @param {Array} messages - Array of message objects [{to, message}, ...]
-     * @param {object} options - Additional options
      */
     async sendBulkSms(messages, options = {}) {
         const results = [];
@@ -221,7 +185,6 @@ class TransmitSmsService {
 
     /**
      * Get SMS responses/replies
-     * @param {object} filters - Filter options
      */
     async getSmsResponses(filters = {}) {
         const params = {};
@@ -234,15 +197,14 @@ class TransmitSmsService {
             params.max_results = filters.max_results;
         }
 
-        return await this.makeRequest('GET', '/get-sms-responses.json', params);
+        return await this.makeRequest('/get-sms-responses.json', 'GET', params);
     }
 
     /**
      * Get delivery status
-     * @param {string} messageId - Message ID
      */
     async getDeliveryStatus(messageId) {
-        return await this.makeRequest('GET', '/get-delivery-status.json', {
+        return await this.makeRequest('/get-delivery-status.json', 'GET', {
             message_id: messageId
         });
     }
@@ -254,19 +216,18 @@ class TransmitSmsService {
         try {
             logger.debug('Fetching sender IDs from TransmitSMS');
 
-            const response = await this.makeRequest('GET', '/get-sender-ids.json');
+            const response = await this.makeRequest('/get-sender-ids.json', 'GET');
 
             const senderIds = response.result.caller_ids;
 
             logger.debug('Sender IDs fetched', {
-                virtualNumbers: senderIds['Virtual Number'].length,
-                businessNames: senderIds['Business Name'].length
+                virtualNumbers: senderIds['Virtual Number']?.length || 0,
+                businessNames: senderIds['Business Name']?.length || 0
             });
 
             return senderIds;
         } catch (error) {
             logger.error('Error fetching sender IDs', { error: error.message });
-            // Return empty arrays instead of failing
             return {
                 'Virtual Number': [],
                 'Business Name': [],
@@ -279,7 +240,7 @@ class TransmitSmsService {
      * Get account info
      */
     async getAccountInfo() {
-        return await this.makeRequest('GET', '/get-balance.json');
+        return await this.makeRequest('/get-balance.json', 'GET');
     }
 
     /**
@@ -302,6 +263,38 @@ class TransmitSmsService {
             return true;
         } catch (error) {
             return false;
+        }
+    }
+
+    /**
+     * Configure number forwarding
+     */
+    async configureNumberForwarding(number, forwardUrl) {
+        try {
+            const params = {
+                number: number,
+                forward_url: forwardUrl
+            };
+
+            logger.info('Configuring number forwarding', {
+                number,
+                forwardUrl
+            });
+
+            const response = await this.makeRequest('/edit-number-options.json', 'GET', params);
+
+            logger.info('Number forwarding configured', {
+                number,
+                response
+            });
+
+            return response;
+        } catch (error) {
+            logger.error('Error configuring number forwarding', {
+                number,
+                error: error.message
+            });
+            throw error;
         }
     }
 }
