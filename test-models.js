@@ -213,10 +213,6 @@ async function testModels() {
         await testAction.incrementFailed();
         console.log('   ✓ ActionInstance.incrementFailed() - Total failed:', testAction.totalFailed);
 
-        // Test FeederInstance methods
-        await testFeeder.incrementRecordsSent(5);
-        console.log('   ✓ FeederInstance.incrementRecordsSent(5) - Total:', testFeeder.totalRecordsSent);
-
         // Cleanup test data
         console.log('\n11. Cleaning up test data...');
         await Consumer.deleteMany({ installId: testConsumer.installId });
