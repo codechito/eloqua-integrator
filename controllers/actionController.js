@@ -1240,14 +1240,20 @@ class ActionController {
         return `+${cleaned}`;
     }
 
-
-
-        /**
+    /**
      * Process a single SMS job (called by worker)
      */
     static async processSmsJob(job) {
         try {
             await job.markAsProcessing();
+
+            logger.debug('Processing SMS job details', {
+                jobId: job.jobId,
+                message: job.message?.substring(0, 50),
+                messageHasTrackedLink: job.message?.includes('[tracked-link]'),
+                smsOptions: job.smsOptions,
+                trackedLinkUrl: job.smsOptions?.trackedLinkUrl
+            });
 
             const consumer = await Consumer.findOne({ installId: job.installId })
                 .select('+transmitsms_api_key +transmitsms_api_secret');
@@ -1261,10 +1267,32 @@ class ActionController {
                 consumer.transmitsms_api_secret
             );
 
+            // Build SMS options from job data
+            const smsOptions = {
+                from: job.senderId,
+                country: job.smsOptions?.country,
+                trackedLinkUrl: job.smsOptions?.trackedLinkUrl,  // ← CRITICAL!
+                messageExpiry: job.smsOptions?.messageExpiry,
+                messageValidity: job.smsOptions?.messageValidity,
+                dlr_callback: job.smsOptions?.dlr_callback,
+                reply_callback: job.smsOptions?.reply_callback,
+                link_hits_callback: job.smsOptions?.link_hits_callback
+            };
+
+            logger.debug('Sending SMS with options', {
+                jobId: job.jobId,
+                to: job.mobileNumber,
+                from: smsOptions.from,
+                messageLength: job.message?.length,
+                hasTrackedLink: !!smsOptions.trackedLinkUrl,
+                trackedLinkUrl: smsOptions.trackedLinkUrl,
+                messageHasPlaceholder: job.message?.includes('[tracked-link]')
+            });
+
             const smsResponse = await smsService.sendSms(
                 job.mobileNumber,
                 job.message,
-                job.smsOptions
+                smsOptions
             );
 
             await job.markAsSent(smsResponse.message_id, smsResponse);
@@ -1282,7 +1310,7 @@ class ActionController {
                 status: 'sent',
                 transmitSmsResponse: smsResponse,
                 sentAt: new Date(),
-                executionId: job.executionId, // Add this!
+                executionId: job.executionId,
                 trackedLink: smsResponse.tracked_link ? {
                     shortUrl: smsResponse.tracked_link.short_url,
                     originalUrl: smsResponse.tracked_link.original_url
@@ -1308,14 +1336,11 @@ class ActionController {
                 }
             }
 
-            // TODO: Set action status to complete using bulk import
-            // This should be done in batch, not per SMS
-            // See ActionController.setActionStatusComplete()
-
-            logger.sms('sent', {
+            logger.info('SMS sent successfully', {
                 jobId: job.jobId,
                 messageId: smsResponse.message_id,
-                to: job.mobileNumber
+                to: job.mobileNumber,
+                hasTrackedLink: !!smsResponse.tracked_link
             });
 
             return {
