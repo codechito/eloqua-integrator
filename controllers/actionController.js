@@ -156,19 +156,34 @@ class ActionController {
             fields.Id = '{{CustomObject.Id}}';
         }
 
+        // Remove dashes from instanceId for Eloqua
+        const instanceIdNoDashes = instance.instanceId.replace(/-/g, '');
+        
+        // Get execution ID from first message
+        const executionId = instance.lastExecutedAt ? Date.now() : 'default';
+
         const importDefinition = {
-            name: `SMS_Action_${instance.instanceId.replace(/-/g, '')}_${type}_${Date.now()}`,
+            name: `SMS_Action_${instanceIdNoDashes}_${type}_${Date.now()}`,
             fields: fields,
             identifierFieldName: instance.program_coid ? 'Id' : 'EmailAddress',
             isSyncTriggeredOnImport: false,
             dataRetentionDuration: 'P7D',
-            isUpdatingMultipleMatchedRecords: false
+            isUpdatingMultipleMatchedRecords: false,
+            // CRITICAL: Add syncActions to mark action as complete
+            syncActions: [
+                {
+                    destination: `{{ActionInstance(${instanceIdNoDashes})}}`,
+                    action: "setStatus",
+                    status: "complete"
+                }
+            ]
         };
 
         logger.debug('Creating import definition', {
             name: importDefinition.name,
             identifierField: importDefinition.identifierFieldName,
-            hasProgramCDO: !!instance.program_coid
+            hasProgramCDO: !!instance.program_coid,
+            syncActions: importDefinition.syncActions
         });
 
         const importType = instance.program_coid ? instance.program_coid : 'contacts';
