@@ -2,7 +2,7 @@ const Consumer = require('../models/Consumer');
 const DecisionInstance = require('../models/DecisionInstance');
 const SmsLog = require('../models/SmsLog');
 const SmsReply = require('../models/SmsReply');
-const EloquaService = require('../services/eloquaService');
+const EloquaService = require('../services/EloquaService');
 const logger = require('../utils/logger');
 const { generateId } = require('../utils/helpers');
 const asyncHandler = require('../middleware/asyncHandler');
@@ -64,6 +64,7 @@ class DecisionController {
             return res.status(404).send('Consumer not found');
         }
 
+        // Set session data
         req.session.installId = installId;
         req.session.siteId = siteId;
 
@@ -84,16 +85,24 @@ class DecisionController {
             instance.program_coid = CustomObjectId;
         }
 
+        // Get custom objects - Pass installId and siteId correctly
         let custom_objects = { elements: [] };
         try {
-            const eloquaService = new EloquaService(
-                consumer.eloqua_access_token,
-                consumer.eloqua_refresh_token,
-                consumer.eloqua_base_url
-            );
+            // Create EloquaService with installId and siteId
+            const eloquaService = new EloquaService(installId, siteId);
+            await eloquaService.initialize();
+            
             custom_objects = await eloquaService.getCustomObjects('', 100);
+            
+            logger.debug('Custom objects fetched', { 
+                count: custom_objects.elements?.length || 0 
+            });
         } catch (error) {
-            logger.warn('Could not fetch custom objects', { error: error.message });
+            logger.warn('Could not fetch custom objects', { 
+                error: error.message,
+                installId,
+                siteId
+            });
         }
 
         res.render('decision-config', {
@@ -108,11 +117,12 @@ class DecisionController {
      * POST /eloqua/decision/configure
      */
     static saveConfiguration = asyncHandler(async (req, res) => {
-        const { instanceId } = req.query;
+        const { instanceId, installId } = req.query;
         const { instance: instanceData } = req.body;
 
         logger.info('Saving decision configuration', { 
             instanceId,
+            installId,
             evaluation_period: instanceData.evaluation_period,
             text_type: instanceData.text_type,
             keyword: instanceData.keyword
@@ -123,11 +133,12 @@ class DecisionController {
         if (!instance) {
             instance = new DecisionInstance({ 
                 instanceId, 
-                installId: instanceData.installId,
+                installId: installId || instanceData.installId,
                 SiteId: instanceData.SiteId
             });
         }
 
+        // Update fields
         instance.evaluation_period = instanceData.evaluation_period;
         instance.text_type = instanceData.text_type;
         instance.keyword = instanceData.keyword;
@@ -500,11 +511,9 @@ class DecisionController {
                 throw new Error('Consumer not found');
             }
 
-            const eloquaService = new EloquaService(
-                consumer.eloqua_access_token,
-                consumer.eloqua_refresh_token,
-                consumer.eloqua_base_url
-            );
+            // Create EloquaService with installId and siteId
+            const eloquaService = new EloquaService(instance.installId, consumer.SiteId);
+            await eloquaService.initialize();
 
             const instanceIdNoDashes = instance.instanceId.replace(/-/g, '');
 
@@ -609,18 +618,14 @@ class DecisionController {
         const { installId, siteId } = req.params;
         const { search } = req.query;
 
-        const consumer = await Consumer.findOne({ installId });
-        if (!consumer) {
-            return res.status(404).json({ error: 'Consumer not found' });
-        }
+        logger.debug('Getting custom objects', { installId, siteId, search });
 
-        const eloquaService = new EloquaService(
-            consumer.eloqua_access_token,
-            consumer.eloqua_refresh_token,
-            consumer.eloqua_base_url
-        );
+        // Create EloquaService with installId and siteId
+        const eloquaService = new EloquaService(installId, siteId);
+        await eloquaService.initialize();
 
         const customObjects = await eloquaService.getCustomObjects(search, 100);
+        
         res.json(customObjects);
     });
 
@@ -631,18 +636,18 @@ class DecisionController {
     static getCustomObjectFields = asyncHandler(async (req, res) => {
         const { installId, siteId, customObjectId } = req.params;
 
-        const consumer = await Consumer.findOne({ installId });
-        if (!consumer) {
-            return res.status(404).json({ error: 'Consumer not found' });
-        }
+        logger.debug('Getting custom object fields', { 
+            installId, 
+            siteId, 
+            customObjectId 
+        });
 
-        const eloquaService = new EloquaService(
-            consumer.eloqua_access_token,
-            consumer.eloqua_refresh_token,
-            consumer.eloqua_base_url
-        );
+        // Create EloquaService with installId and siteId
+        const eloquaService = new EloquaService(installId, siteId);
+        await eloquaService.initialize();
 
         const customObject = await eloquaService.getCustomObject(customObjectId);
+        
         res.json(customObject);
     });
 }
