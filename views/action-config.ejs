@@ -434,8 +434,8 @@
           <div class="column-right">
             <div class="form-group">
               <label>Recipient Field</label>
-              <select v-model="instance.recipient_field" style="width: 240px; display:inline;" class="form-control">
-                  <option v-for="field in fields" v-bind:value="field.id ? field.id + '__' + field.internalName : field.internalName">
+              <select v-model="instance.recipient_field" class="form-control">
+                  <option v-for="field in fields" v-bind:value="field.id ? field.id + '__' + field.internalName : field.internalName" :key="'rec-' + field.internalName">
                       {{ field.name }}
                   </option>
               </select>
@@ -466,9 +466,9 @@
           <div class="column-right">
             <div class="form-group">
               <label>Country Field</label>
-              <select v-model="instance.country_field" style="width: 240px; height: 35px;" class="form-control">
+              <select v-model="instance.country_field" class="form-control">
                   <option v-if="instance.program_coid" value="Country">Contact Country</option>
-                  <option v-for="field in countryfields" v-bind:value="field.id ? field.id + '__' + field.internalName : field.internalName">
+                  <option v-for="field in countryfields" v-bind:value="field.id ? field.id + '__' + field.internalName : field.internalName" :key="'cntry-' + field.internalName">
                       {{ field.name }}
                   </option>
               </select>
@@ -491,7 +491,7 @@
                 <label>Map Contact Mobile To</label>
                 <select v-model="instance.mobile_field" class="form-control">
                   <option value="">-- Select Field --</option>
-                  <option v-for="field in cdofields" v-bind:value="field.internalName" :key="field.internalName">{{ field.name }}</option>
+                  <option v-for="field in cdofields" v-bind:value="field.internalName" :key="'mob-' + field.internalName">{{ field.name }}</option>
                 </select>
               </div>
             </div>
@@ -500,7 +500,7 @@
                 <label>Map Contact Email To *</label>
                 <select v-model="instance.email_field" class="form-control">
                   <option value="">-- Select Field --</option>
-                  <option v-for="field in cdofields" v-bind:value="field.internalName" :key="field.internalName">{{ field.name }}</option>
+                  <option v-for="field in cdofields" v-bind:value="field.internalName" :key="'email-' + field.internalName">{{ field.name }}</option>
                 </select>
               </div>
             </div>
@@ -513,7 +513,7 @@
                 <label>Map Campaign Title To</label>
                 <select v-model="instance.title_field" class="form-control">
                   <option value="">-- Select Field --</option>
-                  <option v-for="field in cdofields" v-bind:value="field.internalName" :key="field.internalName">{{ field.name }}</option>
+                  <option v-for="field in cdofields" v-bind:value="field.internalName" :key="'title-' + field.internalName">{{ field.name }}</option>
                 </select>
               </div>
             </div>
@@ -522,7 +522,7 @@
                 <label>Map Notification To</label>
                 <select v-model="instance.notification_field" class="form-control">
                   <option value="">-- Select Field --</option>
-                  <option v-for="field in cdofields" v-bind:value="field.internalName" :key="field.internalName">{{ field.name }}</option>
+                  <option v-for="field in cdofields" v-bind:value="field.internalName" :key="'notif-' + field.internalName">{{ field.name }}</option>
                 </select>
               </div>
             </div>
@@ -535,7 +535,7 @@
                 <label>Map Outgoing Message To</label>
                 <select v-model="instance.outgoing_field" class="form-control">
                   <option value="">-- Select Field --</option>
-                  <option v-for="field in cdofields" v-bind:value="field.internalName" :key="field.internalName">{{ field.name }}</option>
+                  <option v-for="field in cdofields" v-bind:value="field.internalName" :key="'out-' + field.internalName">{{ field.name }}</option>
                 </select>
               </div>
             </div>
@@ -544,7 +544,7 @@
                 <label>Map Virtual Number To</label>
                 <select v-model="instance.vn_field" class="form-control">
                   <option value="">-- Select Field --</option>
-                  <option v-for="field in cdofields" v-bind:value="field.internalName" :key="field.internalName">{{ field.name }}</option>
+                  <option v-for="field in cdofields" v-bind:value="field.internalName" :key="'vn-' + field.internalName">{{ field.name }}</option>
                 </select>
               </div>
             </div>
@@ -569,7 +569,7 @@
                   <label>Contact Field</label>
                   <select v-model="selectedContactField" @change="insertMerge(selectedContactField)" class="form-control">
                     <option value="">Choose field</option>
-                    <option v-for="field in contactFields" v-bind:value="field.value" :key="field.value">{{ field.name }}</option>
+                    <option v-for="field in contactFields" v-bind:value="field.value" :key="'cf-' + field.value">{{ field.name }}</option>
                   </select>
                 </div>
                 
@@ -589,7 +589,7 @@
                   <label>CDO Field</label>
                   <select v-model="selectedCDOField" @change="insertMerge(selectedCDOField)" class="form-control">
                     <option value="">Choose field</option>
-                    <option v-for="field in cdoMergeFields" v-bind:value="field.value" :key="field.value">{{ field.name }}</option>
+                    <option v-for="field in cdoMergeFields" v-bind:value="field.value" :key="'cdof-' + field.value">{{ field.name }}</option>
                   </select>
                 </div>
                 
@@ -628,7 +628,7 @@ Opt-out reply STOP"></textarea>
                   class="form-control" 
                   v-model="instance.tracked_link"
                   placeholder="Enter URL to track (will be shortened automatically)"/>
-            <p style="font-size: 11px;">
+            <p style="font-size: 11px; color: #666; margin-top: 5px;">
                 <i>Add [tracked-link] to your message above. The URL you enter here will be automatically shortened and inserted.</i>
             </p>
           </div>
@@ -692,6 +692,8 @@ Opt-out reply STOP"></textarea>
               <div><strong>Message ID:</strong> {{ messageStatus.details.messageId }}</div>
               <div><strong>Sent to:</strong> {{ messageStatus.details.to }}</div>
               <div><strong>Length:</strong> {{ messageStatus.details.messageLength }} characters</div>
+              <div v-if="messageStatus.details.cost"><strong>Cost:</strong> ${{ messageStatus.details.cost }}</div>
+              <div v-if="messageStatus.details.hasTrackedLink"><strong>Tracked Link:</strong> Yes</div>
             </div>
           </div>
           
@@ -746,7 +748,7 @@ Opt-out reply STOP"></textarea>
           if (field && field.name && field.internalName) {
             contactFieldsArray.push({
               name: field.name, 
-              value: '['+ field.internalName +']'
+              value: '[' + field.internalName + ']'
             });
           }
         });
@@ -784,7 +786,7 @@ Opt-out reply STOP"></textarea>
           selectedCDOField: '',
           cdoMergeFields: [],
           
-          // Test SMS - simplified
+          // Test SMS
           messageStatus: {},
           testingSms: false
         },
@@ -807,7 +809,6 @@ Opt-out reply STOP"></textarea>
               vm.status = {};
               vm.fade = false;
               vm.statusFading = false;
-              vm.testingSms = false;
             }, 300);
             vm.messageStatus = {};
           },
@@ -1079,23 +1080,37 @@ Opt-out reply STOP"></textarea>
               "caller_id": vm.instance.caller_id || ''
             };
             
+            // Add tracked link URL if it exists
             if(vm.instance.tracked_link && vm.instance.tracked_link.trim()){
               data.tracked_link_url = vm.instance.tracked_link.trim();
+              console.log('Adding tracked link URL:', data.tracked_link_url);
             }
+            
+            console.log('Test SMS data:', {
+              hasMessage: !!data.message,
+              messageLength: data.message.length,
+              hasTrackedLink: !!data.tracked_link_url,
+              trackedLinkUrl: data.tracked_link_url,
+              messageHasPlaceholder: data.message.includes('[tracked-link]')
+            });
             
             axios.post('/eloqua/action/ajax/testsms/' + vm.consumer.installId + '/' + vm.consumer.SiteId + '/' + vm.consumer.default_country + '/' + encodeURIComponent(vm.instance.test_phone), data)
               .then(function(response){
+                console.log('Test SMS response:', response.data);
                 vm.messageStatus = {
                   success: 'Test SMS sent successfully!',
                   details: {
                     messageId: response.data.messageId,
                     to: response.data.to,
-                    messageLength: response.data.messageLength
+                    messageLength: response.data.messageLength,
+                    cost: response.data.cost,
+                    hasTrackedLink: response.data.hasTrackedLink
                   }
                 };
                 vm.testingSms = false;
               })
               .catch(function (error) {
+                console.error('Test SMS error:', error);
                 vm.messageStatus = {
                   error: error.response?.data?.error || 'Failed to send test SMS',
                   description: error.response?.data?.description || error.message
@@ -1119,52 +1134,50 @@ Opt-out reply STOP"></textarea>
             if(vm.instance.message){
               vm.saving = true;
               vm.messageStatus = {};
+              
               axios.post(location.pathname + location.search, {"instance": vm.instance})
                 .then(function(response){
                   vm.messageStatus = { success: 'Configuration successfully updated' };
-                  
-                  window.scrollTo({ bottom: 0, behavior: 'smooth' });
+                  window.scrollTo({ top: 0, behavior: 'smooth' });
                   vm.saving = false;
-                  
                 })
                 .catch(function (error) {
-                  vm.messageStatus = { error: error.response?.data?.message || 'Failed to update instance!' };
-                  
-                  window.scrollTo({ bottom: 0, behavior: 'smooth' });
+                  vm.messageStatus = { 
+                    error: error.response?.data?.message || 'Failed to update instance!',
+                    description: error.response?.data?.description || ''
+                  };
+                  window.scrollTo({ top: 0, behavior: 'smooth' });
                   vm.saving = false;
-                 
                 });
             }
             else{
-              vm.status = { error: 'Message is required' };
-              
-              window.scrollTo({ bottom: 0, behavior: 'smooth' });
-              
-              
+              vm.messageStatus = { 
+                error: 'Message is required',
+                description: 'Please enter a message before saving'
+              };
+              window.scrollTo({ top: 0, behavior: 'smooth' });
             }
           }
         },
         mounted: function () {
-            // **ADD VALIDATION: Log what fields we received**
-            console.log('Fields received from backend:', this.fields);
-            console.log('First field structure:', this.fields[0]);
+          console.log('Fields received from backend:', this.fields);
+          console.log('First field structure:', this.fields[0]);
 
-            this.previousCustomObjectId = this.instance.custom_object_id || null;
-            
-            // **FIX: Ensure all fields have internalName**
-            this.fields = this.fields.map(field => {
-                if (!field.internalName) {
-                    console.warn('Field missing internalName:', field);
-                    // Try to use name as fallback
-                    field.internalName = field.name ? field.name.replace(/\s+/g, '') : 'UnknownField';
-                }
-                return field;
-            });
-            
-            console.log('Fields after validation:', this.fields[0]);
-            
-            this.getFields();
-            this.getProgramFields();
+          this.previousCustomObjectId = this.instance.custom_object_id || null;
+          
+          // Ensure all fields have internalName
+          this.fields = this.fields.map(function(field) {
+            if (!field.internalName) {
+              console.warn('Field missing internalName:', field);
+              field.internalName = field.name ? field.name.replace(/\s+/g, '') : 'UnknownField';
+            }
+            return field;
+          });
+          
+          console.log('Fields after validation:', this.fields[0]);
+          
+          this.getFields();
+          this.getProgramFields();
         }
       });
     </script>

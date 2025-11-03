@@ -1537,6 +1537,7 @@ class ActionController {
         });
     });
 
+
     /**
      * Test SMS
      * POST /eloqua/action/ajax/testsms/:installId/:siteId/:country/:phone
@@ -1549,7 +1550,9 @@ class ActionController {
             installId, 
             country, 
             phone,
-            hasMessage: !!message
+            hasMessage: !!message,
+            hasTrackedLink: !!tracked_link_url,
+            messageHasPlaceholder: message?.includes('[tracked-link]')
         });
 
         if (!message || !message.trim()) {
@@ -1608,21 +1611,38 @@ class ActionController {
                 smsOptions.from = caller_id;
             }
 
-            if (finalMessage.includes('[tracked-link]') && tracked_link_url) {
-                smsOptions.tracked_link_url = tracked_link_url;
+            // Only add tracked_link_url if both placeholder exists AND URL is provided
+            if (finalMessage.includes('[tracked-link]')) {
+                if (tracked_link_url && tracked_link_url.trim()) {
+                    smsOptions.trackedLinkUrl = tracked_link_url.trim();
+                    logger.debug('Test SMS with tracked link', {
+                        trackedLinkUrl: smsOptions.trackedLinkUrl
+                    });
+                } else {
+                    // Remove the placeholder if no URL provided
+                    logger.warn('Message has [tracked-link] but no URL provided, removing placeholder');
+                    finalMessage = finalMessage.replace(/\[tracked-link\]/g, '[No URL provided]');
+                }
             }
 
             if (consumer.dlr_callback) {
-                smsOptions.dlr_callback = `${baseUrl}/webhooks/dlr?${callbackParams}`;
+                smsOptions.dlrCallback = `${baseUrl}/webhook/dlr?${callbackParams}`;
             }
 
             if (consumer.reply_callback) {
-                smsOptions.reply_callback = `${baseUrl}/webhooks/reply?${callbackParams}`;
+                smsOptions.replyCallback = `${baseUrl}/webhook/reply?${callbackParams}`;
             }
 
-            if (consumer.link_hits_callback) {
-                smsOptions.link_hits_callback = `${baseUrl}/webhooks/linkhit?${callbackParams}`;
+            if (consumer.link_hits_callback && smsOptions.trackedLinkUrl) {
+                smsOptions.linkHitsCallback = `${baseUrl}/webhook/linkhit?${callbackParams}`;
             }
+
+            logger.debug('Sending test SMS', {
+                to: formattedNumber,
+                from: smsOptions.from,
+                messageLength: finalMessage.length,
+                hasTrackedLink: !!smsOptions.trackedLinkUrl
+            });
 
             const response = await smsService.sendSms(
                 formattedNumber,
@@ -1630,9 +1650,10 @@ class ActionController {
                 smsOptions
             );
 
-            logger.sms('test_sent', { 
+            logger.info('Test SMS sent successfully', { 
                 to: formattedNumber,
-                messageId: response.message_id
+                messageId: response.message_id,
+                cost: response.cost
             });
 
             res.json({
@@ -1640,7 +1661,10 @@ class ActionController {
                 message: 'Test SMS sent successfully',
                 messageId: response.message_id,
                 to: formattedNumber,
-                response
+                from: response.from || smsOptions.from,
+                messageLength: finalMessage.length,
+                cost: response.cost,
+                hasTrackedLink: !!response.tracked_link_requested
             });
 
         } catch (error) {
