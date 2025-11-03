@@ -9,6 +9,9 @@ class EloquaService {
         this.baseURL = null;
         this.client = null;
         this.initialized = false;
+        this.accessToken = null;
+        this.refreshToken = null;
+        this.tokenExpiry = null;
     }
 
     /**
@@ -47,10 +50,122 @@ class EloquaService {
     }
 
     /**
+     * Refresh OAuth access token
+     */
+    async refreshAccessToken(consumer) {
+        try {
+            logger.info('Refreshing Eloqua OAuth token', {
+                installId: this.installId
+            });
+
+            if (!consumer.oauth_refresh_token) {
+                throw new Error('No refresh token available');
+            }
+
+            const tokenUrl = 'https://login.eloqua.com/auth/oauth2/token';
+            
+            const params = new URLSearchParams();
+            params.append('grant_type', 'refresh_token');
+            params.append('refresh_token', consumer.oauth_refresh_token);
+            params.append('client_id', process.env.ELOQUA_CLIENT_ID);
+            params.append('client_secret', process.env.ELOQUA_CLIENT_SECRET);
+            params.append('redirect_uri', process.env.ELOQUA_REDIRECT_URI);
+
+            const response = await axios.post(tokenUrl, params, {
+                headers: {
+                    'Content-Type': 'application/x-www-form-urlencoded'
+                }
+            });
+
+            const {
+                access_token,
+                refresh_token,
+                expires_in
+            } = response.data;
+
+            // Calculate expiry time
+            const expiryDate = new Date();
+            expiryDate.setSeconds(expiryDate.getSeconds() + expires_in);
+
+            // Update consumer with new tokens
+            consumer.oauth_token = access_token;
+            consumer.oauth_refresh_token = refresh_token || consumer.oauth_refresh_token;
+            consumer.oauth_expires_at = expiryDate;
+            await consumer.save();
+
+            logger.info('OAuth token refreshed successfully', {
+                installId: this.installId,
+                expiresAt: expiryDate.toISOString()
+            });
+
+            return access_token;
+
+        } catch (error) {
+            logger.error('Failed to refresh OAuth token', {
+                installId: this.installId,
+                error: error.message,
+                response: error.response?.data
+            });
+            throw new Error('Failed to refresh OAuth token: ' + error.message);
+        }
+    }
+
+    /**
+     * Ensure token is valid and refresh if needed
+     */
+    async ensureValidToken(consumer) {
+        const now = new Date();
+        const expiryDate = new Date(consumer.oauth_expires_at);
+        const bufferTime = 5 * 60 * 1000; // 5 minutes buffer
+
+        if (expiryDate.getTime() - bufferTime < now.getTime()) {
+            logger.info('OAuth token expired or expiring soon, refreshing...', {
+                installId: this.installId,
+                expiresAt: consumer.oauth_expires_at,
+                now: now.toISOString()
+            });
+
+            // Refresh the token
+            const newToken = await this.refreshAccessToken(consumer);
+            
+            // Reload consumer with new token
+            const updatedConsumer = await Consumer.findOne({ installId: this.installId })
+                .select('+oauth_token +oauth_refresh_token +oauth_expires_at');
+
+            return {
+                token: updatedConsumer.oauth_token,
+                expiry: updatedConsumer.oauth_expires_at
+            };
+        }
+
+        return {
+            token: consumer.oauth_token,
+            expiry: consumer.oauth_expires_at
+        };
+    }
+
+    /**
      * Initialize the Eloqua client with OAuth token
      */
     async initialize() {
-        if (this.initialized) {
+        if (this.initialized && this.client) {
+            // Check if token needs refresh
+            const consumer = await Consumer.findOne({ installId: this.installId })
+                .select('+oauth_token +oauth_expires_at +oauth_refresh_token');
+
+            if (consumer) {
+                const { token } = await this.ensureValidToken(consumer);
+                
+                // Update client headers if token was refreshed
+                if (token !== this.accessToken) {
+                    this.accessToken = token;
+                    this.client.defaults.headers['Authorization'] = `Bearer ${token}`;
+                    logger.debug('Updated client with refreshed token', {
+                        installId: this.installId
+                    });
+                }
+            }
+            
             return;
         }
 
@@ -82,33 +197,32 @@ class EloquaService {
                 expiresAt: consumer.oauth_expires_at
             });
 
-            if (consumer.oauth_expires_at && new Date() >= consumer.oauth_expires_at) {
-                logger.error('OAuth token is expired', {
-                    installId: this.installId,
-                    expiresAt: consumer.oauth_expires_at,
-                    now: new Date()
-                });
-                throw new Error('OAuth token expired');
-            }
+            // Ensure token is valid and refresh if needed
+            const { token, expiry } = await this.ensureValidToken(consumer);
+            
+            this.accessToken = token;
+            this.tokenExpiry = expiry;
+            this.refreshToken = consumer.oauth_refresh_token;
 
-            // **KEY FIX: Get the actual Eloqua base URL using the /id endpoint**
-            this.baseURL = await this.getEloquaBaseUrl(consumer.oauth_token);
+            // Get the actual Eloqua base URL using the /id endpoint
+            this.baseURL = await this.getEloquaBaseUrl(this.accessToken);
 
             logger.info('Eloqua base URL set', {
                 installId: this.installId,
                 baseURL: this.baseURL
             });
 
-            // **KEY FIX: Use Bearer token, not Basic**
+            // Create axios client with Bearer token
             this.client = axios.create({
                 baseURL: this.baseURL,
                 headers: {
-                    'Authorization': `Bearer ${consumer.oauth_token}`,  // Bearer, not Basic!
+                    'Authorization': `Bearer ${this.accessToken}`,
                     'Content-Type': 'application/json'
                 },
                 timeout: 30000
             });
 
+            // Request interceptor
             this.client.interceptors.request.use(
                 config => {
                     logger.debug('Eloqua API request', {
@@ -128,6 +242,7 @@ class EloquaService {
                 }
             );
 
+            // Response interceptor with auto-retry on 401
             this.client.interceptors.response.use(
                 response => {
                     logger.debug('Eloqua API response success', {
@@ -136,7 +251,43 @@ class EloquaService {
                     });
                     return response;
                 },
-                error => {
+                async error => {
+                    const originalRequest = error.config;
+
+                    // If 401 and not already retried, refresh token and retry
+                    if (error.response?.status === 401 && !originalRequest._retry) {
+                        originalRequest._retry = true;
+
+                        logger.warn('Received 401, attempting to refresh token', {
+                            installId: this.installId,
+                            url: originalRequest.url
+                        });
+
+                        try {
+                            const consumer = await Consumer.findOne({ installId: this.installId })
+                                .select('+oauth_token +oauth_refresh_token +oauth_expires_at');
+
+                            const newToken = await this.refreshAccessToken(consumer);
+                            
+                            this.accessToken = newToken;
+                            this.client.defaults.headers['Authorization'] = `Bearer ${newToken}`;
+                            originalRequest.headers['Authorization'] = `Bearer ${newToken}`;
+
+                            logger.info('Token refreshed, retrying request', {
+                                installId: this.installId,
+                                url: originalRequest.url
+                            });
+
+                            return this.client(originalRequest);
+                        } catch (refreshError) {
+                            logger.error('Failed to refresh token on 401', {
+                                installId: this.installId,
+                                error: refreshError.message
+                            });
+                            return Promise.reject(refreshError);
+                        }
+                    }
+
                     logger.error('Eloqua API error', {
                         status: error.response?.status,
                         statusText: error.response?.statusText,
@@ -145,7 +296,8 @@ class EloquaService {
                         method: error.config?.method,
                         baseURL: this.baseURL
                     });
-                    throw error;
+                    
+                    return Promise.reject(error);
                 }
             );
 
@@ -155,7 +307,8 @@ class EloquaService {
                 installId: this.installId,
                 siteId: this.siteId,
                 baseURL: this.baseURL,
-                authType: 'Bearer'
+                authType: 'Bearer',
+                tokenExpiresAt: this.tokenExpiry
             });
 
         } catch (error) {
@@ -175,8 +328,26 @@ class EloquaService {
                 installId: this.installId
             });
             await this.initialize();
+        } else {
+            // Check token expiry even if initialized
+            const consumer = await Consumer.findOne({ installId: this.installId })
+                .select('+oauth_token +oauth_expires_at +oauth_refresh_token');
+
+            if (consumer) {
+                const { token } = await this.ensureValidToken(consumer);
+                
+                if (token !== this.accessToken) {
+                    this.accessToken = token;
+                    this.client.defaults.headers['Authorization'] = `Bearer ${token}`;
+                    logger.debug('Token refreshed during ensureInitialized', {
+                        installId: this.installId
+                    });
+                }
+            }
         }
     }
+
+    // ... [REST OF THE METHODS REMAIN THE SAME] ...
 
     async updateActionInstance(instanceId, updatePayload) {
         await this.ensureInitialized();
@@ -394,7 +565,6 @@ class EloquaService {
                 }
             });
 
-            // **LOG THE RAW RESPONSE**
             logger.debug('Bulk API raw response sample', {
                 sampleItem: response.data.items?.[0],
                 itemKeys: response.data.items?.[0] ? Object.keys(response.data.items[0]) : []
@@ -403,14 +573,13 @@ class EloquaService {
             // Bulk API returns items directly with proper structure
             const items = (response.data.items || []).map(field => {
                 const mappedField = {
-                    id: field.internalName, // Use internalName as ID for Bulk API
+                    id: field.internalName,
                     name: field.name,
                     internalName: field.internalName,
                     dataType: field.dataType,
                     uri: field.uri
                 };
                 
-                // Validate
                 if (!mappedField.internalName) {
                     logger.warn('Field missing internalName in Bulk API response', {
                         fieldName: field.name,
@@ -584,6 +753,103 @@ class EloquaService {
             return response.data;
         } catch (error) {
             logger.error('Failed to create activity', {
+                error: error.message
+            });
+            throw error;
+        }
+    }
+
+    /**
+     * Create bulk import definition
+     */
+    async createBulkImport(type, definition) {
+        await this.ensureInitialized();
+        
+        try {
+            const endpoint = type === 'contacts' 
+                ? '/api/bulk/2.0/contacts/imports'
+                : `/api/bulk/2.0/customObjects/${type}/imports`;
+
+            const response = await this.client.post(endpoint, definition);
+
+            logger.info('Bulk import definition created', {
+                uri: response.data.uri,
+                type
+            });
+
+            return response.data;
+        } catch (error) {
+            logger.error('Error creating bulk import', {
+                type,
+                error: error.message
+            });
+            throw error;
+        }
+    }
+
+    /**
+     * Upload data to bulk import
+     */
+    async uploadBulkImportData(importUri, data) {
+        await this.ensureInitialized();
+        
+        try {
+            const response = await this.client.post(`/api/bulk/2.0${importUri}/data`, data);
+
+            logger.info('Bulk import data uploaded', {
+                importUri,
+                recordCount: data.length
+            });
+
+            return response.data;
+        } catch (error) {
+            logger.error('Error uploading bulk import data', {
+                importUri,
+                error: error.message
+            });
+            throw error;
+        }
+    }
+
+    /**
+     * Sync bulk import
+     */
+    async syncBulkImport(importUri) {
+        await this.ensureInitialized();
+        
+        try {
+            const response = await this.client.post('/api/bulk/2.0/syncs', {
+                syncedInstanceURI: importUri
+            });
+
+            logger.info('Bulk import sync started', {
+                syncUri: response.data.uri,
+                status: response.data.status
+            });
+
+            return response.data;
+        } catch (error) {
+            logger.error('Error syncing bulk import', {
+                importUri,
+                error: error.message
+            });
+            throw error;
+        }
+    }
+
+    /**
+     * Check sync status
+     */
+    async checkSyncStatus(syncUri) {
+        await this.ensureInitialized();
+        
+        try {
+            const response = await this.client.get(`/api/bulk/2.0${syncUri}`);
+            
+            return response.data;
+        } catch (error) {
+            logger.error('Error checking sync status', {
+                syncUri,
                 error: error.message
             });
             throw error;
