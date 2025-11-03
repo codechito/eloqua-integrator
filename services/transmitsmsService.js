@@ -147,10 +147,26 @@ class TransmitSmsService {
             to,
             messageId: response.message_id,
             cost: response.cost,
-            hasTrackedLink: !!response.tracked_link
+            recipients: response.recipients,
+            hasTrackedLinkRequested: !!data.tracked_link_url  // ← Changed from checking response
         });
 
-        return response;
+        // Build our response object
+        return {
+            message_id: response.message_id,
+            status: response.error?.code || 'SUCCESS',
+            to: to,
+            from: data.from,
+            message: message,
+            cost: response.cost,
+            recipients: response.recipients,
+            send_at: response.send_at,
+            // Store that tracked link was requested (actual URL will come via webhook)
+            tracked_link_requested: !!data.tracked_link_url,
+            tracked_link_original_url: data.tracked_link_url || null,
+            delivery_stats: response.delivery_stats,
+            raw_response: response
+        };
     }
 
     /**

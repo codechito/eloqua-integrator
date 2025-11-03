@@ -81,6 +81,16 @@ const SmsLogSchema = new mongoose.Schema({
         shortUrl: String,
         originalUrl: String
     },
+    trackedLinkRequested: {
+        type: Boolean,
+        default: false
+    },
+    trackedLinkOriginalUrl: {
+        type: String
+    },
+    trackedLinkShortUrl: {
+        type: String  // Will be populated from webhook
+    },
     
     // Metadata
     cost: Number,

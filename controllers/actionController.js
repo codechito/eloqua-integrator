@@ -1271,12 +1271,12 @@ class ActionController {
             const smsOptions = {
                 from: job.senderId,
                 country: job.smsOptions?.country,
-                trackedLinkUrl: job.smsOptions?.trackedLinkUrl,  // ← CRITICAL!
+                trackedLinkUrl: job.smsOptions?.trackedLinkUrl,
                 messageExpiry: job.smsOptions?.messageExpiry,
                 messageValidity: job.smsOptions?.messageValidity,
-                dlr_callback: job.smsOptions?.dlr_callback,
-                reply_callback: job.smsOptions?.reply_callback,
-                link_hits_callback: job.smsOptions?.link_hits_callback
+                dlrCallback: job.smsOptions?.dlrCallback,
+                replyCallback: job.smsOptions?.replyCallback,
+                linkHitsCallback: job.smsOptions?.linkHitsCallback
             };
 
             logger.debug('Sending SMS with options', {
@@ -1297,6 +1297,7 @@ class ActionController {
 
             await job.markAsSent(smsResponse.message_id, smsResponse);
 
+            // Create SMS log entry
             const smsLog = new SmsLog({
                 installId: job.installId,
                 instanceId: job.instanceId,
@@ -1311,10 +1312,9 @@ class ActionController {
                 transmitSmsResponse: smsResponse,
                 sentAt: new Date(),
                 executionId: job.executionId,
-                trackedLink: smsResponse.tracked_link ? {
-                    shortUrl: smsResponse.tracked_link.short_url,
-                    originalUrl: smsResponse.tracked_link.original_url
-                } : undefined
+                // Store tracked link info if it was requested
+                trackedLinkRequested: smsResponse.tracked_link_requested || false,
+                trackedLinkOriginalUrl: smsResponse.tracked_link_original_url || null
             });
 
             await smsLog.save();
@@ -1340,7 +1340,7 @@ class ActionController {
                 jobId: job.jobId,
                 messageId: smsResponse.message_id,
                 to: job.mobileNumber,
-                hasTrackedLink: !!smsResponse.tracked_link
+                hasTrackedLink: smsResponse.tracked_link_requested
             });
 
             return {
