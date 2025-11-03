@@ -278,7 +278,7 @@ async function initializeWorker() {
 }
 
 // Start server
-const server = app.listen(PORT, async () => {
+const server = app.listen(PORT,'0.0.0.0', async () => {
     logger.info('Server started', {
         port: PORT,
         environment: process.env.NODE_ENV || 'development',
