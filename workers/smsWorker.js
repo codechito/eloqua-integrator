@@ -9,6 +9,62 @@ class SmsWorker {
         this.batchSize = 10; // Process 10 at a time
         this.rateLimitDelay = 100; // 100ms between sends
         this.executionBatches = new Map(); // Track executions
+        
+        // Stats tracking
+        this.stats = {
+            startedAt: new Date(),
+            totalProcessed: 0,
+            totalSuccess: 0,
+            totalFailed: 0,
+            lastPollAt: null,
+            currentBatchSize: 0
+        };
+    }
+
+    /**
+     * Get worker statistics
+     */
+    getStats() {
+        const uptime = Date.now() - this.stats.startedAt.getTime();
+        
+        return {
+            status: this.isRunning ? 'running' : 'stopped',
+            startedAt: this.stats.startedAt,
+            uptime: uptime,
+            uptimeHuman: this.formatUptime(uptime),
+            totalProcessed: this.stats.totalProcessed,
+            totalSuccess: this.stats.totalSuccess,
+            totalFailed: this.stats.totalFailed,
+            successRate: this.stats.totalProcessed > 0 
+                ? ((this.stats.totalSuccess / this.stats.totalProcessed) * 100).toFixed(2) + '%'
+                : '0%',
+            lastPollAt: this.stats.lastPollAt,
+            currentBatchSize: this.stats.currentBatchSize,
+            activeExecutions: this.executionBatches.size,
+            pollInterval: this.pollInterval,
+            batchSize: this.batchSize,
+            rateLimitDelay: this.rateLimitDelay
+        };
+    }
+
+    /**
+     * Format uptime in human readable format
+     */
+    formatUptime(ms) {
+        const seconds = Math.floor(ms / 1000);
+        const minutes = Math.floor(seconds / 60);
+        const hours = Math.floor(minutes / 60);
+        const days = Math.floor(hours / 24);
+
+        if (days > 0) {
+            return `${days}d ${hours % 24}h ${minutes % 60}m`;
+        } else if (hours > 0) {
+            return `${hours}h ${minutes % 60}m ${seconds % 60}s`;
+        } else if (minutes > 0) {
+            return `${minutes}m ${seconds % 60}s`;
+        } else {
+            return `${seconds}s`;
+        }
     }
 
     /**
@@ -21,6 +77,8 @@ class SmsWorker {
         }
 
         this.isRunning = true;
+        this.stats.startedAt = new Date();
+        
         logger.info('SMS Worker started', {
             pollInterval: this.pollInterval,
             batchSize: this.batchSize
@@ -34,7 +92,9 @@ class SmsWorker {
      */
     stop() {
         this.isRunning = false;
-        logger.info('SMS Worker stopped');
+        logger.info('SMS Worker stopped', {
+            stats: this.getStats()
+        });
     }
 
     /**
@@ -43,10 +103,12 @@ class SmsWorker {
     async poll() {
         while (this.isRunning) {
             try {
+                this.stats.lastPollAt = new Date();
                 await this.processPendingJobs();
             } catch (error) {
                 logger.error('Error in worker poll cycle', {
-                    error: error.message
+                    error: error.message,
+                    stack: error.stack
                 });
             }
 
@@ -69,9 +131,11 @@ class SmsWorker {
 
             if (jobs.length === 0) {
                 logger.debug('No pending SMS jobs found');
+                this.stats.currentBatchSize = 0;
                 return;
             }
 
+            this.stats.currentBatchSize = jobs.length;
             logger.info('Found pending SMS jobs', { count: jobs.length });
 
             // Group jobs by execution
@@ -84,7 +148,8 @@ class SmsWorker {
 
         } catch (error) {
             logger.error('Error processing pending jobs', {
-                error: error.message
+                error: error.message,
+                stack: error.stack
             });
         }
     }
@@ -127,7 +192,11 @@ class SmsWorker {
             try {
                 const result = await this.processJob(job);
                 
+                // Update stats
+                this.stats.totalProcessed++;
+                
                 if (result.success) {
+                    this.stats.totalSuccess++;
                     results.complete.push({
                         contactId: job.contactId,
                         emailAddress: job.emailAddress,
@@ -139,6 +208,7 @@ class SmsWorker {
                         Id: job.customObjectData?.recordId
                     });
                 } else {
+                    this.stats.totalFailed++;
                     results.errored.push({
                         contactId: job.contactId,
                         emailAddress: job.emailAddress,
@@ -154,8 +224,12 @@ class SmsWorker {
             } catch (error) {
                 logger.error('Error processing job', {
                     jobId: job.jobId,
-                    error: error.message
+                    error: error.message,
+                    stack: error.stack
                 });
+
+                this.stats.totalProcessed++;
+                this.stats.totalFailed++;
 
                 results.errored.push({
                     contactId: job.contactId,
@@ -184,7 +258,8 @@ class SmsWorker {
                 executionId: sampleJob.executionId,
                 complete: [],
                 errored: [],
-                totalProcessed: 0
+                totalProcessed: 0,
+                startedAt: new Date()
             });
         }
 
@@ -223,32 +298,53 @@ class SmsWorker {
                 if (execution) {
                     logger.info('Execution complete, syncing to Eloqua', {
                         executionKey,
-                        totalProcessed: execution.totalProcessed
+                        totalProcessed: execution.totalProcessed,
+                        completeCount: execution.complete.length,
+                        erroredCount: execution.errored.length,
+                        duration: Date.now() - execution.startedAt.getTime()
                     });
 
-                    await ActionController.completeActionExecution(
-                        execution.installId,
-                        execution.instanceId,
-                        execution.executionId,
-                        {
-                            complete: execution.complete,
-                            errored: execution.errored
-                        }
-                    );
+                    try {
+                        await ActionController.completeActionExecution(
+                            execution.installId,
+                            execution.instanceId,
+                            execution.executionId,
+                            {
+                                complete: execution.complete,
+                                errored: execution.errored
+                            }
+                        );
 
-                    // Clean up tracking
+                        logger.info('Execution synced and completed successfully', {
+                            executionKey,
+                            totalProcessed: execution.totalProcessed
+                        });
+                    } catch (syncError) {
+                        logger.error('Failed to sync execution to Eloqua', {
+                            executionKey,
+                            error: syncError.message,
+                            stack: syncError.stack
+                        });
+                        // Don't throw - we'll keep the execution tracked
+                        // and might retry later
+                        return;
+                    }
+
+                    // Clean up tracking only if sync was successful
                     this.executionBatches.delete(executionKey);
-
-                    logger.info('Execution synced and completed', {
-                        executionKey
-                    });
                 }
+            } else {
+                logger.debug('Execution still has pending jobs', {
+                    executionKey,
+                    pendingCount
+                });
             }
 
         } catch (error) {
             logger.error('Error checking execution completion', {
                 executionKey,
-                error: error.message
+                error: error.message,
+                stack: error.stack
             });
         }
     }
@@ -271,6 +367,11 @@ class SmsWorker {
                     jobId: job.jobId,
                     messageId: result.messageId
                 });
+            } else {
+                logger.warn('SMS job failed', {
+                    jobId: job.jobId,
+                    error: result.error
+                });
             }
 
             return result;
@@ -278,7 +379,8 @@ class SmsWorker {
         } catch (error) {
             logger.error('Error in processJob', {
                 jobId: job.jobId,
-                error: error.message
+                error: error.message,
+                stack: error.stack
             });
             return {
                 success: false,
