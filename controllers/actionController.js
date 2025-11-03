@@ -724,9 +724,70 @@ class ActionController {
         res.status(204).send();
     });
 
-
     /**
-     * Process notify asynchronously
+     * Enrich items with processed message and tracked link
+     * DO NOT modify field names - they come from Eloqua as-is
+     */
+    static enrichItems(items, instance, consumer) {
+        logger.debug('Parsed field names', {
+            recipient_field: instance.recipient_field,  // Should be "MobilePhone__C_MobilePhone"
+            country_field: instance.country_field,      // Should be "Country__C_Country"
+            hasProgramCoid: !!instance.program_coid
+        });
+
+        return items.map(item => {
+            // Process message - replace merge fields
+            let processedMessage = instance.message;
+            const mergeFields = instance.message ? instance.message.match(/\[([^\]]+)\]/g) : null;
+
+            if (mergeFields) {
+                for (const field of mergeFields) {
+                    const fieldName = field.replace(/[\[\]]/g, '');
+
+                    // Skip special fields
+                    if (fieldName === 'tracked-link' || fieldName === 'unsub-reply-link') {
+                        continue;
+                    }
+
+                    // Item has fields like: C_FirstName, C_MobilePhone, etc.
+                    // Try both with and without C_ prefix
+                    const fieldValue = item[fieldName] || item[fieldName.replace('C_', '')] || '';
+
+                    logger.debug('Replaced merge field in message', {
+                        field: fieldName,
+                        value: fieldValue
+                    });
+
+                    processedMessage = processedMessage.replace(field, fieldValue);
+                }
+            }
+
+            // Process tracked link URL if exists
+            let processedTrackedLink = null;
+            if (instance.tracked_link) {
+                processedTrackedLink = instance.tracked_link;
+                const linkMergeFields = instance.tracked_link.match(/\[([^\]]+)\]/g);
+
+                if (linkMergeFields) {
+                    for (const field of linkMergeFields) {
+                        const fieldName = field.replace(/[\[\]]/g, '');
+                        const fieldValue = item[fieldName] || item[fieldName.replace('C_', '')] || '';
+                        processedTrackedLink = processedTrackedLink.replace(field, fieldValue);
+                    }
+                }
+            }
+
+            // Return enriched item with ORIGINAL fields intact
+            // Don't add recipient_field or country_field here!
+            return {
+                ...item,  // Keep all original fields as-is
+                message: processedMessage,
+                tracked_link_url: processedTrackedLink
+            };
+        });
+    }
+    /**
+     * Process notify asynchronously (creates SMS jobs)
      */
     static async processNotifyAsync(instanceId, installId, siteId, assetId, executionId, executionData) {
         try {
@@ -736,141 +797,84 @@ class ActionController {
                 recordCount: executionData.items?.length || 0
             });
 
-            const instance = await ActionInstance.findOne({ instanceId });
+            // Get instance configuration
+            const instance = await ActionInstance.findOne({
+                instanceId,
+                installId,
+                isActive: true
+            });
+
             if (!instance) {
-                throw new Error(`Instance not found: ${instanceId}`);
+                logger.error('Instance not found or inactive', { instanceId, installId });
+                return;
             }
 
+            // Get consumer configuration
             const consumer = await Consumer.findOne({ installId })
                 .select('+transmitsms_api_key +transmitsms_api_secret');
-                
+
             if (!consumer) {
-                throw new Error(`Consumer not found: ${installId}`);
+                logger.error('Consumer not found', { installId });
+                return;
             }
 
+            // Validate TransmitSMS credentials
             if (!consumer.transmitsms_api_key || !consumer.transmitsms_api_secret) {
-                throw new Error('TransmitSMS API not configured');
+                logger.error('TransmitSMS credentials not configured', { installId });
+                return;
             }
 
-            // Update instance (like old code)
-            instance.asset_id = assetId || instance.assetId;
-            instance.entry_date = new Date();
-            await instance.save();
-
-            // Parse field names (like old code)
-            let recipient_field = instance.recipient_field;
-            let country_field = instance.country_field;
-
-            if (instance.program_coid) {
-                // If program CDO, parse the field names
-                if (instance.recipient_field.split('__').length > 1) {
-                    recipient_field = instance.recipient_field.split('__')[1];
-                } else {
-                    recipient_field = instance.recipient_field;
-                }
-
-                if (instance.country_setting === 'cc') {
-                    country_field = instance.country_field;
-                } else {
-                    if (instance.country_field.split('__').length > 1) {
-                        country_field = instance.country_field.split('__')[1];
-                    } else {
-                        country_field = instance.country_field;
-                    }
-                }
-            }
-
-            // Remove C_ prefix for field lookup (like old code does with field.replace("C_", ""))
-            recipient_field = recipient_field.replace(/^C_/, '');
-            country_field = country_field.replace(/^C_/, '');
-
-            logger.debug('Parsed field names', {
-                recipient_field,
-                country_field,
-                hasProgramCoid: !!instance.program_coid
-            });
-
-            // Process items (enrich with message and tracked_link_url)
-            executionData.items.forEach(item => {
-                item.message = instance.message;
-                item.tracked_link_url = instance.tracked_link;
-                
-                // Set default country if not present
-                if (!item.Country) {
-                    item.Country = consumer.default_country;
-                }
-                
-                item.recipient_field = recipient_field;
-                item.country_field = country_field;
-
-                // Replace merge fields in message [FieldName] format
-                const templated_fields = item.message.match(/[^[\]]+(?=])/g);
-                if (templated_fields) {
-                    templated_fields.forEach(field => {
-                        // Skip special fields
-                        if (field.indexOf("tracked-link") === -1 && field.indexOf("unsub-reply-link") === -1) {
-                            const nfield = "\\[" + field + "\\]";
-                            const msgrgex = new RegExp(nfield, "g");
-                            
-                            // Remove C_ prefix and get value from item
-                            const cleanFieldName = field.replace("C_", "");
-                            const fieldValue = item[cleanFieldName] || '';
-                            
-                            item.message = item.message.replace(msgrgex, fieldValue);
-                            
-                            logger.debug('Replaced merge field in message', {
-                                field,
-                                cleanFieldName,
-                                value: fieldValue ? fieldValue.substring(0, 20) : '(empty)'
-                            });
-                        }
-                    });
-                }
-
-                // Replace merge fields in tracked link URL
-                if (item.tracked_link_url) {
-                    const link_templated_fields = item.tracked_link_url.match(/[^[\]]+(?=])/g);
-                    if (link_templated_fields) {
-                        link_templated_fields.forEach(field => {
-                            const nfield = "\\[" + field + "\\]";
-                            const msgrgex = new RegExp(nfield, "g");
-                            
-                            const cleanFieldName = field.replace("C_", "");
-                            const fieldValue = item[cleanFieldName] || '';
-                            
-                            item.tracked_link_url = item.tracked_link_url.replace(msgrgex, fieldValue);
-                        });
-                    }
-                }
-            });
-
-            logger.info('Items enriched with message data', {
-                itemCount: executionData.items.length,
-                sampleMessage: executionData.items[0]?.message?.substring(0, 50)
-            });
-
-            // Queue SMS jobs
-            const results = await ActionController.queueSmsJobs(
-                instance, 
-                consumer, 
-                executionData
+            // Enrich items with processed message and tracked links
+            const enrichedItems = ActionController.enrichItems(
+                executionData.items || [],
+                instance,
+                consumer
             );
 
-            const successCount = results.filter(r => r.success).length;
-            const failCount = results.filter(r => !r.success).length;
-
-            logger.info('Async notify processing completed', { 
-                instanceId,
-                executionId,
-                totalRecords: results.length,
-                successCount,
-                failCount
+            logger.info('Items enriched with message data', {
+                itemCount: enrichedItems.length,
+                sampleMessage: enrichedItems[0]?.message
             });
 
+            // Queue SMS jobs (returns {success, failed, errors} object, NOT array)
+            const queueResults = await ActionController.queueSmsJobs(
+                instance,
+                consumer,
+                enrichedItems,
+                executionId
+            );
+
+            // Update instance statistics
+            instance.totalSent = (instance.totalSent || 0) + queueResults.success;
+            instance.totalFailed = (instance.totalFailed || 0) + queueResults.failed;
+            instance.lastExecutedAt = new Date();
+            await instance.save();
+
+            logger.info('Async notify processing completed', {
+                instanceId,
+                executionId,
+                totalRecords: enrichedItems.length,
+                successCount: queueResults.success,
+                failCount: queueResults.failed,
+                errorCount: queueResults.errors?.length || 0
+            });
+
+            // Log any errors
+            if (queueResults.errors && queueResults.errors.length > 0) {
+                logger.warn('Some jobs failed to queue', {
+                    instanceId,
+                    executionId,
+                    errorCount: queueResults.errors.length,
+                    sampleErrors: queueResults.errors.slice(0, 5) // Log first 5 errors
+                });
+            }
+
+            // Return summary (for logging purposes)
             return {
                 success: true,
-                successCount,
-                failCount
+                totalRecords: enrichedItems.length,
+                successCount: queueResults.success,
+                failCount: queueResults.failed
             };
 
         } catch (error) {
@@ -880,7 +884,13 @@ class ActionController {
                 error: error.message,
                 stack: error.stack
             });
-            throw error;
+            
+            // Don't throw - we already returned 204 to Eloqua
+            // Just log the error
+            return {
+                success: false,
+                error: error.message
+            };
         }
     }
 
@@ -893,11 +903,38 @@ class ActionController {
             itemCount: enrichedItems.length
         });
 
+        // DEBUG: Log instance field configuration
+        logger.debug('Instance field configuration', {
+            recipient_field: instance.recipient_field,
+            country_field: instance.country_field,
+            program_coid: instance.program_coid
+        });
+
+        // DEBUG: Log what we received
+        if (enrichedItems && enrichedItems.length > 0) {
+            logger.debug('First item structure', {
+                fields: Object.keys(enrichedItems[0]),
+                sampleValues: {
+                    ContactID: enrichedItems[0].ContactID,
+                    EmailAddress: enrichedItems[0].EmailAddress,
+                    C_MobilePhone: enrichedItems[0].C_MobilePhone,
+                    C_Country: enrichedItems[0].C_Country,
+                    C_FirstName: enrichedItems[0].C_FirstName
+                }
+            });
+        }
+
         const results = {
             success: 0,
             failed: 0,
             errors: []
         };
+
+        // Check if we have items to process
+        if (!enrichedItems || enrichedItems.length === 0) {
+            logger.warn('No items to process', { instanceId: instance.instanceId });
+            return results;
+        }
 
         // Parse field names to get the actual field names from Eloqua
         // Format can be "FieldId__C_FieldName" or just "C_FieldName" or "FieldName"
@@ -918,7 +955,9 @@ class ActionController {
             recipient_field: instance.recipient_field,
             recipientFieldName,
             country_field: instance.country_field,
-            countryFieldName
+            countryFieldName,
+            firstItemHasRecipientField: enrichedItems[0]?.[recipientFieldName] !== undefined,
+            firstItemRecipientValue: enrichedItems[0]?.[recipientFieldName]
         });
 
         for (let i = 0; i < enrichedItems.length; i++) {
@@ -942,6 +981,7 @@ class ActionController {
                     logger.warn('Item has no mobile number', {
                         contactId: item.ContactID,
                         recipientFieldName,
+                        recipientValue: item[recipientFieldName],
                         availableFields: Object.keys(item)
                     });
                     results.failed++;
@@ -967,19 +1007,17 @@ class ActionController {
                 // Format mobile number (remove spaces, ensure + prefix)
                 const formattedMobile = ActionController.formatMobileNumber(mobileNumber, country);
 
-                logger.debug('Processing item for SMS', {
-                    index: i + 1,
-                    total: enrichedItems.length,
-                    mobileNumber,
-                    formattedNumber: formattedMobile,
-                    messagePreview: item.message ? item.message.substring(0, 50) + '...' : 'N/A'
+                logger.debug('Formatted mobile number', {
+                    original: mobileNumber,
+                    formatted: formattedMobile,
+                    country
                 });
 
                 // Determine sender ID (might be dynamic from contact field)
-                let senderId = instance.caller_id;
-                if (senderId && senderId.startsWith('##')) {
-                    const senderFieldName = parseFieldName(senderId.replace('##', ''));
-                    senderId = item[senderFieldName] || senderId;
+                let senderId = instance.caller_id || 'BurstSMS';
+                if (instance.caller_id && instance.caller_id.startsWith('##')) {
+                    const senderFieldName = parseFieldName(instance.caller_id.replace('##', ''));
+                    senderId = item[senderFieldName] || instance.caller_id;
                     
                     logger.debug('Dynamic sender ID resolved', {
                         original: instance.caller_id,
@@ -1010,7 +1048,7 @@ class ActionController {
                     
                     // Message details (already processed with merge fields)
                     message: item.message,
-                    senderId: senderId || 'BurstSMS',
+                    senderId: senderId,
                     
                     // Campaign details
                     campaignId: instance.assetId,
