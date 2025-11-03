@@ -98,6 +98,16 @@ const SmsLogSchema = new mongoose.Schema({
         type: Number,
         default: 1
     },
+    decisionInstanceId: {
+        type: String,
+        index: true
+    },
+    decisionStatus: {
+        type: String,
+        enum: ['pending', 'yes', 'no'],
+        default: 'pending'
+    },
+    decisionProcessedAt: Date
     
 }, {
     timestamps: true,

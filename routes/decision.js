@@ -1,48 +1,38 @@
 const express = require('express');
 const router = express.Router();
-const { DecisionController } = require('../controllers');
-const { 
-    verifyInstallation,
-    verifyOAuthToken,
-    validateQueryParams 
-} = require('../middleware');
+const DecisionController = require('../controllers/decisionController');
+const { verifyInstallation } = require('../middleware/auth');
+const sessionAuth = require('../middleware/sessionAuth');
 
-// Decision service lifecycle
-router.post('/create', 
-    validateQueryParams('installId', 'siteId'),
-    verifyInstallation,
-    DecisionController.create
+// Create instance
+router.get('/create', verifyInstallation, DecisionController.create);
+
+// Configure instance
+router.get('/configure', verifyInstallation, DecisionController.configure);
+router.post('/configure', verifyInstallation, DecisionController.saveConfiguration);
+
+// Execute decision (notify)
+router.post('/notify', verifyInstallation, DecisionController.notify);
+
+// Retrieve instance configuration
+router.get('/retrieve', verifyInstallation, DecisionController.retrieve);
+
+// Copy instance
+router.post('/copy', verifyInstallation, DecisionController.copy);
+
+// Delete/Remove instance
+router.post('/delete', verifyInstallation, DecisionController.delete);
+router.post('/remove', verifyInstallation, DecisionController.delete);
+
+// AJAX endpoints - use sessionAuth for security
+router.get('/ajax/customobjects/:installId/:siteId/customObject',
+    sessionAuth,
+    DecisionController.getCustomObjects
 );
 
-router.get('/configure', 
-    validateQueryParams('installId', 'siteId', 'instanceId'),
-    verifyInstallation,
-    verifyOAuthToken,
-    DecisionController.configure
-);
-
-router.post('/configure', 
-    validateQueryParams('instanceId'),
-    verifyInstallation,
-    DecisionController.saveConfiguration
-);
-
-router.post('/notify', 
-    validateQueryParams('instanceId'),
-    verifyInstallation,
-    DecisionController.notify
-);
-
-router.post('/copy', 
-    validateQueryParams('instanceId'),
-    verifyInstallation,
-    DecisionController.copy
-);
-
-router.post('/delete', 
-    validateQueryParams('instanceId'),
-    verifyInstallation,
-    DecisionController.delete
+router.get('/ajax/customobject/:installId/:siteId/:customObjectId',
+    sessionAuth,
+    DecisionController.getCustomObjectFields
 );
 
 module.exports = router;
