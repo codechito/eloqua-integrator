@@ -50,7 +50,8 @@ class EloquaService {
     }
 
     /**
-     * Refresh OAuth access token
+     * Refresh OAuth access token using Eloqua's token endpoint
+     * Matches the old working implementation exactly
      */
     async refreshAccessToken(consumer) {
         try {
@@ -62,51 +63,83 @@ class EloquaService {
                 throw new Error('No refresh token available');
             }
 
-            const tokenUrl = 'https://login.eloqua.com/auth/oauth2/token';
-            
-            const params = new URLSearchParams();
-            params.append('grant_type', 'refresh_token');
-            params.append('refresh_token', consumer.oauth_refresh_token);
-            params.append('client_id', process.env.ELOQUA_CLIENT_ID);
-            params.append('client_secret', process.env.ELOQUA_CLIENT_SECRET);
-            params.append('redirect_uri', process.env.ELOQUA_REDIRECT_URI);
+            // Create Basic Auth credentials (exactly like old code)
+            const credentials = Buffer.from(
+                `${process.env.ELOQUA_CLIENT_ID}:${process.env.ELOQUA_CLIENT_SECRET}`
+            ).toString('base64');
 
-            const response = await axios.post(tokenUrl, params, {
-                headers: {
-                    'Content-Type': 'application/x-www-form-urlencoded'
-                }
+            // Build the body (exactly like old code)
+            const body = {
+                grant_type: 'refresh_token',
+                refresh_token: consumer.oauth_refresh_token,
+                scope: 'full',
+                redirect_uri: process.env.ELOQUA_REDIRECT_URI
+            };
+
+            logger.debug('Token refresh request', {
+                installId: this.installId,
+                url: 'https://login.eloqua.com/auth/oauth2/token',
+                hasRefreshToken: !!consumer.oauth_refresh_token,
+                clientId: process.env.ELOQUA_CLIENT_ID,
+                redirectUri: process.env.ELOQUA_REDIRECT_URI
             });
 
-            const {
-                access_token,
-                refresh_token,
-                expires_in
-            } = response.data;
+            // Make the request (matching old code structure)
+            const response = await axios.post(
+                'https://login.eloqua.com/auth/oauth2/token',
+                body,
+                {
+                    headers: {
+                        'Authorization': `Basic ${credentials}`,
+                        'Content-Type': 'application/json'
+                    }
+                }
+            );
+
+            const result = response.data;
+
+            // Validate response (like old code)
+            if (!result.refresh_token || !result.access_token) {
+                throw new Error('Invalid token response from Eloqua');
+            }
 
             // Calculate expiry time
             const expiryDate = new Date();
-            expiryDate.setSeconds(expiryDate.getSeconds() + expires_in);
-
-            // Update consumer with new tokens
-            consumer.oauth_token = access_token;
-            consumer.oauth_refresh_token = refresh_token || consumer.oauth_refresh_token;
-            consumer.oauth_expires_at = expiryDate;
-            await consumer.save();
+            expiryDate.setSeconds(expiryDate.getSeconds() + (result.expires_in || 28800)); // 8 hours default
 
             logger.info('OAuth token refreshed successfully', {
                 installId: this.installId,
                 expiresAt: expiryDate.toISOString()
             });
 
-            return access_token;
+            // Update consumer (like old code)
+            consumer.oauth_token = result.access_token;
+            consumer.oauth_refresh_token = result.refresh_token;
+            consumer.oauth_expires_at = expiryDate;
+            await consumer.save();
+
+            return result.access_token;
 
         } catch (error) {
+            const status = error.response?.status;
+            const responseData = error.response?.data;
+
             logger.error('Failed to refresh OAuth token', {
                 installId: this.installId,
                 error: error.message,
-                response: error.response?.data
+                status: status,
+                responseData: responseData
             });
-            throw new Error('Failed to refresh OAuth token: ' + error.message);
+
+            // Handle errors like old code
+            if (status >= 400) {
+                if (status === 401) {
+                    throw new Error('OAuth refresh token invalid. Please reinstall the app in Eloqua.');
+                }
+                throw new Error(`Eloqua token refresh failed: ${responseData?.error_description || error.message}`);
+            }
+
+            throw new Error(`Failed to refresh OAuth token: ${error.message}`);
         }
     }
 
@@ -347,8 +380,6 @@ class EloquaService {
         }
     }
 
-    // ... [REST OF THE METHODS REMAIN THE SAME] ...
-
     async updateActionInstance(instanceId, updatePayload) {
         await this.ensureInitialized();
         
@@ -545,10 +576,6 @@ class EloquaService {
         }
     }
 
-    /**
-     * Get contact fields using Bulk API
-     * Bulk API returns proper internalName structure
-     */
     async getContactFields(count = 1000) {
         await this.ensureInitialized();
         
@@ -570,7 +597,6 @@ class EloquaService {
                 itemKeys: response.data.items?.[0] ? Object.keys(response.data.items[0]) : []
             });
 
-            // Bulk API returns items directly with proper structure
             const items = (response.data.items || []).map(field => {
                 const mappedField = {
                     id: field.internalName,
@@ -759,9 +785,6 @@ class EloquaService {
         }
     }
 
-    /**
-     * Create bulk import definition
-     */
     async createBulkImport(type, definition) {
         await this.ensureInitialized();
         
@@ -787,9 +810,6 @@ class EloquaService {
         }
     }
 
-    /**
-     * Upload data to bulk import
-     */
     async uploadBulkImportData(importUri, data) {
         await this.ensureInitialized();
         
@@ -811,9 +831,6 @@ class EloquaService {
         }
     }
 
-    /**
-     * Sync bulk import
-     */
     async syncBulkImport(importUri) {
         await this.ensureInitialized();
         
@@ -837,9 +854,6 @@ class EloquaService {
         }
     }
 
-    /**
-     * Check sync status
-     */
     async checkSyncStatus(syncUri) {
         await this.ensureInitialized();
         
