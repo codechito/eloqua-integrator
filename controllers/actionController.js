@@ -12,6 +12,237 @@ const { asyncHandler } = require('../middleware');
 class ActionController {
 
     /**
+     * Mark action as complete and sync to Eloqua
+     * Called by worker after processing batch
+     */
+    static async completeActionExecution(installId, instanceId, executionId, results) {
+        try {
+            logger.info('Completing action execution', {
+                installId,
+                instanceId,
+                executionId,
+                successCount: results.complete.length,
+                errorCount: results.errored.length
+            });
+
+            const instance = await ActionInstance.findOne({ instanceId });
+            if (!instance) {
+                throw new Error('Instance not found');
+            }
+
+            const consumer = await Consumer.findOne({ installId });
+            if (!consumer) {
+                throw new Error('Consumer not found');
+            }
+
+            // Sync results to Eloqua to complete the action
+            await ActionController.syncResultsToEloqua(
+                consumer,
+                instance,
+                results
+            );
+
+            logger.info('Action execution completed', {
+                instanceId,
+                executionId
+            });
+
+        } catch (error) {
+            logger.error('Error completing action execution', {
+                installId,
+                instanceId,
+                executionId,
+                error: error.message
+            });
+            throw error;
+        }
+    }
+
+    /**
+     * Sync SMS results back to Eloqua using Bulk API
+     */
+    static async syncResultsToEloqua(consumer, instance, results) {
+        try {
+            logger.info('Syncing results to Eloqua', {
+                instanceId: instance.instanceId,
+                completeCount: results.complete.length,
+                erroredCount: results.errored.length
+            });
+
+            const eloquaService = new EloquaService(consumer.installId, consumer.SiteId);
+            await eloquaService.initialize();
+
+            // Prepare contact data for both successful and errored messages
+            const allMessages = [
+                ...results.complete.map(msg => ({
+                    ...msg,
+                    sync_status: 'sent',
+                    delivery: 'sent'
+                })),
+                ...results.errored.map(msg => ({
+                    ...msg,
+                    sync_status: 'errored',
+                    delivery: 'errored'
+                }))
+            ];
+
+            if (allMessages.length === 0) {
+                logger.warn('No messages to sync', { instanceId: instance.instanceId });
+                return;
+            }
+
+            // Create bulk import definition
+            const importDef = await ActionController.createBulkImportDefinition(
+                eloquaService,
+                instance,
+                'complete'
+            );
+
+            logger.info('Bulk import definition created', {
+                uri: importDef.uri
+            });
+
+            // Upload contact data
+            await ActionController.uploadContactData(
+                eloquaService,
+                importDef.uri,
+                allMessages
+            );
+
+            logger.info('Contact data uploaded', {
+                uri: importDef.uri,
+                count: allMessages.length
+            });
+
+            // Sync the import
+            const sync = await eloquaService.syncBulkImport(importDef.uri);
+
+            logger.info('Bulk import synced', {
+                syncUri: sync.uri,
+                status: sync.status
+            });
+
+            // Wait for sync to complete
+            await ActionController.waitForSyncCompletion(
+                eloquaService,
+                sync.uri
+            );
+
+            logger.info('Sync completed successfully', {
+                instanceId: instance.instanceId
+            });
+
+        } catch (error) {
+            logger.error('Error syncing results to Eloqua', {
+                instanceId: instance.instanceId,
+                error: error.message,
+                stack: error.stack
+            });
+            throw error;
+        }
+    }
+
+    /**
+     * Create bulk import definition for contacts
+     */
+    static async createBulkImportDefinition(eloquaService, instance, type) {
+        const fields = {
+            ContactID: '{{Contact.Id}}',
+            EmailAddress: '{{Contact.Field(C_EmailAddress)}}'
+        };
+
+        // If using program CDO, add Id field
+        if (instance.program_coid) {
+            fields.Id = '{{CustomObject.Id}}';
+        }
+
+        const importDefinition = {
+            name: `SMS_Action_${instance.instanceId.replace(/-/g, '')}_${type}_${Date.now()}`,
+            fields: fields,
+            identifierFieldName: instance.program_coid ? 'Id' : 'EmailAddress',
+            isSyncTriggeredOnImport: false,
+            dataRetentionDuration: 'P7D',
+            isUpdatingMultipleMatchedRecords: false
+        };
+
+        logger.debug('Creating import definition', {
+            name: importDefinition.name,
+            identifierField: importDefinition.identifierFieldName,
+            hasProgramCDO: !!instance.program_coid
+        });
+
+        const importType = instance.program_coid ? instance.program_coid : 'contacts';
+        return await eloquaService.createBulkImport(importType, importDefinition);
+    }
+
+    /**
+     * Upload contact data to bulk import
+     */
+    static async uploadContactData(eloquaService, importUri, messages) {
+        const contactData = messages.map(msg => {
+            const data = {
+                ContactID: msg.contactId,
+                EmailAddress: msg.emailAddress
+            };
+
+            // If using program CDO, add Id
+            if (msg.Id) {
+                data.Id = msg.Id;
+            }
+
+            return data;
+        });
+
+        logger.debug('Uploading contact data', {
+            importUri,
+            count: contactData.length,
+            sample: contactData[0]
+        });
+
+        return await eloquaService.uploadBulkImportData(importUri, contactData);
+    }
+
+    /**
+     * Wait for sync to complete (poll status)
+     */
+    static async waitForSyncCompletion(eloquaService, syncUri, maxAttempts = 30) {
+        let attempts = 0;
+        const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
+
+        while (attempts < maxAttempts) {
+            const status = await eloquaService.checkSyncStatus(syncUri);
+
+            logger.debug('Sync status check', {
+                syncUri,
+                status: status.status,
+                attempt: attempts + 1
+            });
+
+            if (status.status === 'success') {
+                logger.info('Sync completed successfully', {
+                    syncUri,
+                    status: status.status
+                });
+                return status;
+            }
+
+            if (status.status === 'error' || status.status === 'warning') {
+                logger.error('Sync failed', {
+                    syncUri,
+                    status: status.status
+                });
+                throw new Error(`Sync failed with status: ${status.status}`);
+            }
+
+            // Still pending, wait and retry
+            attempts++;
+            await delay(2000); // Wait 2 seconds between checks
+        }
+
+        throw new Error('Sync timeout - max attempts reached');
+    }
+
+    /**
      * Get sender IDs from TransmitSMS
      * GET /eloqua/action/ajax/sender-ids/:installId/:siteId
      */
@@ -320,7 +551,7 @@ class ActionController {
                 recipient_field: instanceData.recipient_field,
                 country_field: instanceData.country_field,
                 message: instanceData.message?.substring(0, 50) + '...',
-                tracked_link: instanceData.tracked_link, // ADD THIS
+                tracked_link: instanceData.tracked_link,
                 caller_id: instanceData.caller_id,
                 custom_object_id: instanceData.custom_object_id,
                 hasTrackedLink: !!instanceData.tracked_link,
@@ -453,90 +684,6 @@ class ActionController {
         }
 
         return true;
-    }
-
-    /**
-     * Create bulk import to set action status to complete
-     * This is called AFTER SMS is sent to tell Eloqua the contact is done
-     */
-    static async setActionStatusComplete(installId, siteId, instanceId, executionId, contacts) {
-        try {
-            const eloquaService = new EloquaService(installId, siteId);
-            await eloquaService.initialize();
-
-            // Remove dashes from instanceId for bulk API
-            const instanceIdNoDashes = instanceId.replace(/-/g, '');
-
-            // Create bulk import definition with sync action
-            const importDef = {
-                name: "BurstSMS Action Response Bulk Import",
-                updateRule: "always",
-                fields: {
-                    EmailAddress: "{{Contact.Field(C_EmailAddress)}}"
-                },
-                syncActions: [
-                    {
-                        destination: `{{ActionInstance(${instanceIdNoDashes}).Execution[${executionId}]}}`,
-                        action: "setStatus",
-                        status: "complete"
-                    }
-                ],
-                identifierFieldName: "EmailAddress"
-            };
-
-            logger.info('Creating bulk import for action status', {
-                instanceId,
-                executionId,
-                contactCount: contacts.length
-            });
-
-            // Create import
-            const importResponse = await eloquaService.createBulkImport('contacts', importDef);
-            const importUri = importResponse.uri;
-
-            logger.info('Bulk import created', {
-                importUri,
-                instanceId
-            });
-
-            // Upload contact data
-            const importData = contacts.map(contact => ({
-                EmailAddress: contact.emailAddress
-            }));
-
-            await eloquaService.uploadBulkImportData(importUri, importData);
-
-            logger.info('Import data uploaded', {
-                importUri,
-                recordCount: importData.length
-            });
-
-            // Sync the import
-            const syncResponse = await eloquaService.syncBulkImport(importUri);
-            const syncUri = syncResponse.uri;
-
-            logger.info('Bulk import synced', {
-                syncUri,
-                status: syncResponse.status
-            });
-
-            // Optional: Poll sync status
-            // const syncStatus = await eloquaService.checkSyncStatus(syncUri);
-
-            return {
-                success: true,
-                importUri,
-                syncUri
-            };
-
-        } catch (error) {
-            logger.error('Error setting action status', {
-                instanceId,
-                executionId,
-                error: error.message
-            });
-            throw error;
-        }
     }
 
     /**
@@ -843,11 +990,6 @@ class ActionController {
                     contactId: item.ContactID,
                     processedUrl: processedTrackedLink
                 });
-            } else {
-                logger.warn('Message has [tracked-link] but instance.tracked_link is not configured', {
-                    contactId: item.ContactID,
-                    messagePreview: processedMessage.substring(0, 100)
-                });
             }
 
             return {
@@ -1119,7 +1261,7 @@ class ActionController {
                     jobId: `${instance.instanceId}_${item.ContactID}_${Date.now()}_${i}`,
                     installId: instance.installId,
                     instanceId: instance.instanceId,
-                    executionId: executionId,
+                    executionId: executionId,  // ← CRITICAL: ADD THIS LINE!
                     
                     // Contact details
                     contactId: item.ContactID,
@@ -1160,7 +1302,8 @@ class ActionController {
                 logger.debug('SMS job created', {
                     jobId: smsJob.jobId,
                     contactId: item.ContactID,
-                    mobile: formattedMobile
+                    mobile: formattedMobile,
+                    executionId: executionId
                 });
 
                 results.success++;

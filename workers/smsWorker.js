@@ -1,33 +1,31 @@
-const mongoose = require('mongoose');
-const SmsJob = require('../models/SmsJob');
-const { ActionController } = require('../controllers');
 const { logger } = require('../utils');
+const SmsJob = require('../models/SmsJob');
+const ActionController = require('../controllers/actionController');
 
 class SmsWorker {
-    constructor(options = {}) {
+    constructor() {
         this.isRunning = false;
-        this.batchSize = options.batchSize || 10; // Process 10 jobs at a time
-        this.pollInterval = options.pollInterval || 5000; // Poll every 5 seconds
-        this.concurrency = options.concurrency || 5; // Process 5 jobs concurrently
-        this.timer = null;
+        this.pollInterval = 5000; // 5 seconds
+        this.batchSize = 10; // Process 10 at a time
+        this.rateLimitDelay = 100; // 100ms between sends
+        this.executionBatches = new Map(); // Track executions
     }
 
     /**
      * Start the worker
      */
-    async start() {
+    start() {
         if (this.isRunning) {
             logger.warn('SMS Worker already running');
             return;
         }
 
-        logger.info('Starting SMS Worker', {
-            batchSize: this.batchSize,
+        this.isRunning = true;
+        logger.info('SMS Worker started', {
             pollInterval: this.pollInterval,
-            concurrency: this.concurrency
+            batchSize: this.batchSize
         });
 
-        this.isRunning = true;
         this.poll();
     }
 
@@ -35,64 +33,223 @@ class SmsWorker {
      * Stop the worker
      */
     stop() {
-        logger.info('Stopping SMS Worker');
         this.isRunning = false;
-        
-        if (this.timer) {
-            clearTimeout(this.timer);
-            this.timer = null;
-        }
+        logger.info('SMS Worker stopped');
     }
 
     /**
      * Poll for pending jobs
      */
     async poll() {
-        if (!this.isRunning) {
-            return;
-        }
+        while (this.isRunning) {
+            try {
+                await this.processPendingJobs();
+            } catch (error) {
+                logger.error('Error in worker poll cycle', {
+                    error: error.message
+                });
+            }
 
-        try {
-            await this.processPendingJobs();
-        } catch (error) {
-            logger.error('Error in SMS worker poll', {
-                error: error.message,
-                stack: error.stack
-            });
-        }
-
-        // Schedule next poll
-        if (this.isRunning) {
-            this.timer = setTimeout(() => this.poll(), this.pollInterval);
+            // Wait before next poll
+            await this.sleep(this.pollInterval);
         }
     }
 
     /**
-     * Process pending jobs
+     * Process pending SMS jobs
      */
     async processPendingJobs() {
-        // Find pending jobs
-        const pendingJobs = await SmsJob.find({
-            status: 'pending',
-            scheduledAt: { $lte: new Date() }
-        })
-        .sort({ scheduledAt: 1 })
-        .limit(this.batchSize);
+        try {
+            const jobs = await SmsJob.find({
+                status: 'pending',
+                scheduledAt: { $lte: new Date() }
+            })
+            .sort({ scheduledAt: 1 })
+            .limit(this.batchSize);
 
-        if (pendingJobs.length === 0) {
-            logger.debug('No pending SMS jobs found');
-            return;
+            if (jobs.length === 0) {
+                logger.debug('No pending SMS jobs found');
+                return;
+            }
+
+            logger.info('Found pending SMS jobs', { count: jobs.length });
+
+            // Group jobs by execution
+            const executionGroups = this.groupJobsByExecution(jobs);
+
+            // Process each group
+            for (const [executionKey, executionJobs] of executionGroups.entries()) {
+                await this.processExecutionBatch(executionKey, executionJobs);
+            }
+
+        } catch (error) {
+            logger.error('Error processing pending jobs', {
+                error: error.message
+            });
+        }
+    }
+
+    /**
+     * Group jobs by execution ID for tracking
+     */
+    groupJobsByExecution(jobs) {
+        const groups = new Map();
+
+        jobs.forEach(job => {
+            const key = `${job.installId}_${job.instanceId}_${job.executionId || 'default'}`;
+            
+            if (!groups.has(key)) {
+                groups.set(key, []);
+            }
+            
+            groups.get(key).push(job);
+        });
+
+        return groups;
+    }
+
+    /**
+     * Process a batch of jobs from same execution
+     */
+    async processExecutionBatch(executionKey, jobs) {
+        logger.info('Processing execution batch', {
+            executionKey,
+            jobCount: jobs.length
+        });
+
+        const results = {
+            complete: [],
+            errored: []
+        };
+
+        // Process jobs with rate limiting
+        for (const job of jobs) {
+            try {
+                const result = await this.processJob(job);
+                
+                if (result.success) {
+                    results.complete.push({
+                        contactId: job.contactId,
+                        emailAddress: job.emailAddress,
+                        phone: job.mobileNumber,
+                        message: job.message,
+                        message_id: result.messageId,
+                        caller_id: job.senderId,
+                        assetId: job.campaignId,
+                        Id: job.customObjectData?.recordId
+                    });
+                } else {
+                    results.errored.push({
+                        contactId: job.contactId,
+                        emailAddress: job.emailAddress,
+                        phone: job.mobileNumber,
+                        message: job.message,
+                        error: result.error
+                    });
+                }
+
+                // Rate limiting delay
+                await this.sleep(this.rateLimitDelay);
+
+            } catch (error) {
+                logger.error('Error processing job', {
+                    jobId: job.jobId,
+                    error: error.message
+                });
+
+                results.errored.push({
+                    contactId: job.contactId,
+                    emailAddress: job.emailAddress,
+                    phone: job.mobileNumber,
+                    error: error.message
+                });
+            }
         }
 
-        logger.info('Found pending SMS jobs', { count: pendingJobs.length });
+        // Track this execution
+        this.trackExecution(executionKey, jobs[0], results);
 
-        // Process jobs with concurrency control
-        const chunks = this.chunkArray(pendingJobs, this.concurrency);
+        // Check if execution is complete and sync to Eloqua
+        await this.checkAndCompleteExecution(executionKey, jobs[0]);
+    }
 
-        for (const chunk of chunks) {
-            await Promise.allSettled(
-                chunk.map(job => this.processJob(job))
-            );
+    /**
+     * Track execution progress
+     */
+    trackExecution(executionKey, sampleJob, results) {
+        if (!this.executionBatches.has(executionKey)) {
+            this.executionBatches.set(executionKey, {
+                installId: sampleJob.installId,
+                instanceId: sampleJob.instanceId,
+                executionId: sampleJob.executionId,
+                complete: [],
+                errored: [],
+                totalProcessed: 0
+            });
+        }
+
+        const execution = this.executionBatches.get(executionKey);
+        execution.complete.push(...results.complete);
+        execution.errored.push(...results.errored);
+        execution.totalProcessed += results.complete.length + results.errored.length;
+
+        this.executionBatches.set(executionKey, execution);
+
+        logger.debug('Execution tracked', {
+            executionKey,
+            totalProcessed: execution.totalProcessed,
+            completeCount: execution.complete.length,
+            erroredCount: execution.errored.length
+        });
+    }
+
+    /**
+     * Check if execution is complete and sync to Eloqua
+     */
+    async checkAndCompleteExecution(executionKey, sampleJob) {
+        try {
+            // Check if there are any more pending jobs for this execution
+            const pendingCount = await SmsJob.countDocuments({
+                installId: sampleJob.installId,
+                instanceId: sampleJob.instanceId,
+                executionId: sampleJob.executionId,
+                status: 'pending'
+            });
+
+            if (pendingCount === 0) {
+                // All jobs processed, sync to Eloqua
+                const execution = this.executionBatches.get(executionKey);
+
+                if (execution) {
+                    logger.info('Execution complete, syncing to Eloqua', {
+                        executionKey,
+                        totalProcessed: execution.totalProcessed
+                    });
+
+                    await ActionController.completeActionExecution(
+                        execution.installId,
+                        execution.instanceId,
+                        execution.executionId,
+                        {
+                            complete: execution.complete,
+                            errored: execution.errored
+                        }
+                    );
+
+                    // Clean up tracking
+                    this.executionBatches.delete(executionKey);
+
+                    logger.info('Execution synced and completed', {
+                        executionKey
+                    });
+                }
+            }
+
+        } catch (error) {
+            logger.error('Error checking execution completion', {
+                executionKey,
+                error: error.message
+            });
         }
     }
 
@@ -114,128 +271,27 @@ class SmsWorker {
                     jobId: job.jobId,
                     messageId: result.messageId
                 });
-            } else {
-                logger.error('SMS job failed', {
-                    jobId: job.jobId,
-                    error: result.error
-                });
             }
 
             return result;
 
         } catch (error) {
-            logger.error('Error processing SMS job', {
+            logger.error('Error in processJob', {
                 jobId: job.jobId,
-                error: error.message,
-                stack: error.stack
+                error: error.message
             });
-
-            throw error;
+            return {
+                success: false,
+                error: error.message
+            };
         }
     }
 
     /**
-     * Process failed jobs for retry
+     * Sleep utility
      */
-    async processFailedJobs() {
-        const retryableJobs = await SmsJob.find({
-            status: 'failed',
-            retryCount: { $lt: 3 }, // maxRetries
-            lastRetryAt: {
-                $lt: new Date(Date.now() - 5 * 60 * 1000) // Last retry was 5+ minutes ago
-            }
-        }).limit(10);
-
-        if (retryableJobs.length === 0) {
-            return;
-        }
-
-        logger.info('Retrying failed SMS jobs', { count: retryableJobs.length });
-
-        for (const job of retryableJobs) {
-            try {
-                await job.resetForRetry();
-                logger.info('SMS job reset for retry', {
-                    jobId: job.jobId,
-                    retryCount: job.retryCount
-                });
-            } catch (error) {
-                logger.error('Error resetting job for retry', {
-                    jobId: job.jobId,
-                    error: error.message
-                });
-            }
-        }
-    }
-
-    /**
-     * Get worker statistics
-     */
-    async getStats() {
-        const stats = await SmsJob.aggregate([
-            {
-                $group: {
-                    _id: '$status',
-                    count: { $sum: 1 }
-                }
-            }
-        ]);
-
-        const statsMap = {
-            pending: 0,
-            processing: 0,
-            sent: 0,
-            failed: 0,
-            cancelled: 0
-        };
-
-        stats.forEach(stat => {
-            statsMap[stat._id] = stat.count;
-        });
-
-        // Get oldest pending job
-        const oldestPending = await SmsJob.findOne({
-            status: 'pending'
-        }).sort({ scheduledAt: 1 });
-
-        return {
-            ...statsMap,
-            total: Object.values(statsMap).reduce((a, b) => a + b, 0),
-            oldestPendingAge: oldestPending 
-                ? Date.now() - oldestPending.scheduledAt.getTime() 
-                : 0,
-            isRunning: this.isRunning
-        };
-    }
-
-    /**
-     * Clean up old completed jobs
-     */
-    async cleanupOldJobs(daysOld = 30) {
-        const cutoffDate = new Date(Date.now() - daysOld * 24 * 60 * 60 * 1000);
-
-        const result = await SmsJob.deleteMany({
-            status: { $in: ['sent', 'cancelled'] },
-            updatedAt: { $lt: cutoffDate }
-        });
-
-        logger.info('Cleaned up old SMS jobs', {
-            deletedCount: result.deletedCount,
-            olderThan: daysOld + ' days'
-        });
-
-        return result.deletedCount;
-    }
-
-    /**
-     * Utility: Split array into chunks
-     */
-    chunkArray(array, size) {
-        const chunks = [];
-        for (let i = 0; i < array.length; i += size) {
-            chunks.push(array.slice(i, i + size));
-        }
-        return chunks;
+    sleep(ms) {
+        return new Promise(resolve => setTimeout(resolve, ms));
     }
 }
 

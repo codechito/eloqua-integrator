@@ -129,6 +129,11 @@ const SmsJobSchema = new mongoose.Schema({
     lastRetryAt: {
         type: Date
     },
+
+    executionId: {
+        type: String,
+        index: true
+    },
     
     // Linked records
     smsLogId: {
