@@ -290,8 +290,10 @@ class DecisionController {
         });
     });
 
+    // controllers/decisionController.js - ADD/UPDATE these methods
+
     /**
-     * Process notify asynchronously (helper method)
+     * Process notify asynchronously - UPDATED VERSION
      */
     static async processNotifyAsync(instanceId, installId, assetId, executionId, executionData) {
         try {
@@ -299,56 +301,177 @@ class DecisionController {
                 instanceId,
                 installId,
                 assetId,
+                executionId,
                 recordCount: executionData.items?.length || 0
             });
 
-            const instance = await DecisionInstance.findOne({ instanceId, installId });
+            const instance = await DecisionInstance.findOne({ 
+                instanceId, 
+                installId,
+                isActive: true 
+            });
+            
             if (!instance) {
                 logger.error('Decision instance not found', { instanceId });
                 return;
             }
 
-            // Update instance with asset info
-            instance.assetId = assetId;
-            instance.entry_date = new Date();
-            instance.Status = 'delivered';
-            await instance.save();
-
-            // Extract contact IDs
-            const contactIds = executionData.items.map(item => item.ContactID || item.Id);
-
-            // Find SMS logs for these contacts
-            const smsLogs = await SmsLog.find({
-                installId,
-                campaignId: assetId,
-                contactId: { $in: contactIds },
-                decisionInstanceId: null
-            });
-
-            logger.info('Found SMS logs to track', {
-                instanceId,
-                smsLogCount: smsLogs.length,
-                contactIds: contactIds.length
-            });
-
-            // Assign decision instance to these SMS logs
-            if (smsLogs.length > 0) {
-                await SmsLog.updateMany(
-                    { _id: { $in: smsLogs.map(log => log._id) } },
-                    {
-                        $set: {
-                            decisionInstanceId: instanceId,
-                            decisionStatus: 'pending',
-                            decisionDeadline: new Date(Date.now() + (instance.evaluation_period * 60 * 60 * 1000))
-                        }
-                    }
-                );
-
-                logger.info('SMS logs assigned to decision instance', {
-                    instanceId,
-                    count: smsLogs.length
-                });
+            const consumer = await Consumer.findOne({ installId });
+            if (!consumer) {
+                logger.error('Consumer not found', { installId });
+                return;
             }
+
+            logger.info('Processing decision for SMS responses', {
+                instanceId,
+                evaluationPeriod: instance.evaluation_period,
+                textType: instance.text_type,
+                keyword: instance.keyword
+            });
+
+            // Process each contact in the execution
+            const results = {
+                yes: [],
+                no: [],
+                errors: []
+            };
+
+            for (const item of executionData.items || []) {
+                try {
+                    const contactId = item.ContactID || item.Id;
+                    const emailAddress = item.EmailAddress || item.C_EmailAddress;
+
+                    logger.debug('Evaluating decision for contact', {
+                        contactId,
+                        emailAddress
+                    });
+
+                    // Find the most recent SMS sent to this contact
+                    // Look for SMS sent within the evaluation period
+                    const evaluationHours = instance.evaluation_period === -1 
+                        ? 24 * 365 // 1 year for "forever"
+                        : instance.evaluation_period;
+
+                    const cutoffDate = new Date(Date.now() - evaluationHours * 60 * 60 * 1000);
+
+                    const smsLog = await SmsLog.findOne({
+                        installId,
+                        contactId: contactId,
+                        status: { $in: ['sent', 'delivered'] },
+                        sentAt: { $gte: cutoffDate },
+                        messageId: { $exists: true, $ne: null }
+                    }).sort({ sentAt: -1 });
+
+                    if (!smsLog) {
+                        logger.debug('No recent SMS found for contact', {
+                            contactId,
+                            cutoffDate
+                        });
+                        
+                        results.no.push({
+                            contactId,
+                            emailAddress,
+                            reason: 'no_sms_sent'
+                        });
+                        continue;
+                    }
+
+                    logger.debug('Found SMS to evaluate', {
+                        contactId,
+                        messageId: smsLog.messageId,
+                        sentAt: smsLog.sentAt,
+                        hasResponse: smsLog.hasResponse
+                    });
+
+                    // Assign this SMS to the decision instance
+                    smsLog.decisionInstanceId = instanceId;
+                    smsLog.decisionStatus = smsLog.hasResponse ? 'yes' : 'pending';
+                    smsLog.decisionDeadline = new Date(
+                        smsLog.sentAt.getTime() + (evaluationHours * 60 * 60 * 1000)
+                    );
+                    await smsLog.save();
+
+                    // Check if already has a response
+                    if (smsLog.hasResponse) {
+                        // Check if response matches criteria
+                        const matches = DecisionController.evaluateReply(
+                            smsLog.responseMessage,
+                            instance.text_type,
+                            instance.keyword
+                        );
+
+                        if (matches) {
+                            logger.info('Contact already responded (matches)', {
+                                contactId,
+                                messageId: smsLog.messageId
+                            });
+
+                            results.yes.push({
+                                contactId,
+                                emailAddress,
+                                messageId: smsLog.messageId,
+                                responseMessage: smsLog.responseMessage
+                            });
+                        } else {
+                            logger.info('Contact already responded (no match)', {
+                                contactId,
+                                messageId: smsLog.messageId
+                            });
+
+                            results.no.push({
+                                contactId,
+                                emailAddress,
+                                messageId: smsLog.messageId,
+                                reason: 'response_no_match'
+                            });
+                        }
+                    } else {
+                        // No response yet - will be checked by webhook
+                        logger.debug('Contact pending response', {
+                            contactId,
+                            messageId: smsLog.messageId,
+                            deadline: smsLog.decisionDeadline
+                        });
+
+                        results.no.push({
+                            contactId,
+                            emailAddress,
+                            messageId: smsLog.messageId,
+                            reason: 'no_response_yet'
+                        });
+                    }
+
+                } catch (error) {
+                    logger.error('Error processing contact decision', {
+                        contactId: item.ContactID,
+                        error: error.message
+                    });
+
+                    results.errors.push({
+                        contactId: item.ContactID,
+                        error: error.message
+                    });
+                }
+            }
+
+            logger.info('Decision evaluation completed', {
+                instanceId,
+                yesCount: results.yes.length,
+                noCount: results.no.length,
+                errorCount: results.errors.length
+            });
+
+            // Sync results to Eloqua
+            await DecisionController.syncBulkDecisionResults(
+                consumer,
+                instance,
+                results
+            );
+
+            logger.info('Decision results synced to Eloqua', {
+                instanceId,
+                executionId
+            });
 
         } catch (error) {
             logger.error('Error in decision notify async processing', {
@@ -360,96 +483,278 @@ class DecisionController {
     }
 
     /**
+     * Sync bulk decision results to Eloqua - NEW METHOD
+     */
+    static async syncBulkDecisionResults(consumer, instance, results) {
+        try {
+            logger.info('Syncing bulk decision results', {
+                instanceId: instance.instanceId,
+                yesCount: results.yes.length,
+                noCount: results.no.length
+            });
+
+            const eloquaService = new EloquaService(consumer.installId, instance.SiteId);
+            await eloquaService.initialize();
+
+            const instanceIdNoDashes = instance.instanceId.replace(/-/g, '');
+
+            // Sync YES contacts
+            if (results.yes.length > 0) {
+                await DecisionController.syncDecisionBatch(
+                    eloquaService,
+                    instance,
+                    instanceIdNoDashes,
+                    results.yes,
+                    'yes'
+                );
+            }
+
+            // Sync NO contacts
+            if (results.no.length > 0) {
+                await DecisionController.syncDecisionBatch(
+                    eloquaService,
+                    instance,
+                    instanceIdNoDashes,
+                    results.no,
+                    'no'
+                );
+            }
+
+            logger.info('Bulk decision sync completed', {
+                instanceId: instance.instanceId
+            });
+
+        } catch (error) {
+            logger.error('Error syncing bulk decision results', {
+                instanceId: instance.instanceId,
+                error: error.message
+            });
+            throw error;
+        }
+    }
+
+    /**
+     * Sync a batch of decision results - NEW METHOD
+     */
+    static async syncDecisionBatch(eloquaService, instance, instanceIdNoDashes, contacts, decision) {
+        try {
+            logger.info('Syncing decision batch', {
+                instanceId: instance.instanceId,
+                decision,
+                count: contacts.length
+            });
+
+            const importDefinition = {
+                name: `SMS_Decision_${instanceIdNoDashes}_${decision}_${Date.now()}`,
+                fields: {
+                    ContactID: '{{Contact.Id}}',
+                    EmailAddress: '{{Contact.Field(C_EmailAddress)}}'
+                },
+                identifierFieldName: 'EmailAddress',
+                isSyncTriggeredOnImport: false,
+                dataRetentionDuration: 'P7D',
+                syncActions: [
+                    {
+                        destination: `{{DecisionInstance(${instanceIdNoDashes})}}`,
+                        action: "setDecision",
+                        value: decision
+                    }
+                ]
+            };
+
+            const importDef = await eloquaService.createBulkImport('contacts', importDefinition);
+
+            const contactData = contacts.map(contact => ({
+                ContactID: contact.contactId,
+                EmailAddress: contact.emailAddress
+            }));
+
+            await eloquaService.uploadBulkImportData(importDef.uri, contactData);
+            const sync = await eloquaService.syncBulkImport(importDef.uri);
+
+            logger.info('Decision batch sync started', {
+                syncUri: sync.uri,
+                decision,
+                count: contacts.length
+            });
+
+            // Don't wait for completion - Eloqua will process it
+
+        } catch (error) {
+            logger.error('Error syncing decision batch', {
+                decision,
+                count: contacts.length,
+                error: error.message
+            });
+            throw error;
+        }
+    }
+
+    /**
      * Process SMS reply and evaluate decision
      * Called by webhook when reply is received
+     * 
+     * @param {SmsReply} reply - The reply object from webhook
+     * @param {SmsLog} smsLog - The original SMS log (optional, will search if not provided)
      */
-    static async processReply(reply) {
+    static async processReply(reply, smsLog = null) {
         try {
             logger.info('Processing reply for decision', {
                 replyId: reply._id,
-                fromMobile: reply.fromMobile,
-                message: reply.message
+                fromNumber: reply.fromNumber,
+                message: reply.message?.substring(0, 50),
+                hasSmsLog: !!smsLog
             });
 
-            // Find SMS logs waiting for replies
-            const smsLogs = await SmsLog.find({
-                mobileNumber: reply.fromMobile,
-                decisionInstanceId: { $ne: null },
-                decisionStatus: 'pending'
-            }).sort({ sentAt: -1 });
+            // If smsLog not provided, try to find it
+            if (!smsLog) {
+                // Try by message ID first
+                if (reply.messageId) {
+                    smsLog = await SmsLog.findOne({
+                        messageId: reply.messageId,
+                        decisionInstanceId: { $ne: null },
+                        decisionStatus: 'pending'
+                    });
+                }
 
-            if (smsLogs.length === 0) {
-                logger.debug('No pending SMS logs found for reply', {
-                    mobile: reply.fromMobile
-                });
-                return;
+                // If not found, try by mobile number
+                if (!smsLog && reply.fromNumber) {
+                    const recentSmsLogs = await SmsLog.find({
+                        mobileNumber: reply.fromNumber,
+                        decisionInstanceId: { $ne: null },
+                        decisionStatus: 'pending',
+                        decisionDeadline: { $gte: new Date() }
+                    }).sort({ sentAt: -1 }).limit(5);
+
+                    if (recentSmsLogs.length > 0) {
+                        smsLog = recentSmsLogs[0];
+                        
+                        logger.info('Found SMS log by mobile number', {
+                            mobile: reply.fromNumber,
+                            smsLogId: smsLog._id,
+                            candidateCount: recentSmsLogs.length
+                        });
+                    }
+                }
             }
 
-            // Process each SMS log
-            for (const smsLog of smsLogs) {
-                const instance = await DecisionInstance.findOne({
+            if (!smsLog) {
+                logger.debug('No pending SMS log found for reply', {
+                    mobile: reply.fromNumber,
+                    messageId: reply.messageId
+                });
+                return null;
+            }
+
+            // Get decision instance
+            const instance = await DecisionInstance.findOne({
+                instanceId: smsLog.decisionInstanceId,
+                isActive: true
+            });
+
+            if (!instance) {
+                logger.warn('Decision instance not found or inactive', {
                     instanceId: smsLog.decisionInstanceId
                 });
+                return null;
+            }
 
-                if (!instance) {
-                    logger.warn('Decision instance not found', {
-                        instanceId: smsLog.decisionInstanceId
-                    });
-                    continue;
-                }
+            // Check if within evaluation period
+            const isWithinPeriod = new Date() <= smsLog.decisionDeadline;
 
-                // Check if within evaluation period
-                const isWithinPeriod = DecisionController.isWithinEvaluationPeriod(
-                    smsLog.sentAt,
-                    instance.evaluation_period
+            if (!isWithinPeriod) {
+                logger.info('Reply received after deadline', {
+                    smsLogId: smsLog._id,
+                    deadline: smsLog.decisionDeadline,
+                    receivedAt: new Date()
+                });
+
+                // Mark as expired/no
+                smsLog.decisionStatus = 'no';
+                smsLog.decisionProcessedAt = new Date();
+                await smsLog.save();
+
+                await DecisionController.syncSingleDecisionResult(
+                    instance,
+                    smsLog,
+                    'no'
                 );
 
-                if (!isWithinPeriod) {
-                    logger.info('Reply outside evaluation period', {
-                        smsLogId: smsLog._id,
-                        sentAt: smsLog.sentAt,
-                        evaluationPeriod: instance.evaluation_period
+                return { decision: 'no', reason: 'expired', matches: false };
+            }
+
+            // Evaluate if reply matches criteria
+            const matches = DecisionController.evaluateReply(
+                reply.message,
+                instance.text_type,
+                instance.keyword
+            );
+
+            logger.info('Reply evaluation result', {
+                smsLogId: smsLog._id,
+                matches,
+                textType: instance.text_type,
+                keyword: instance.keyword,
+                message: reply.message?.substring(0, 50)
+            });
+
+            // Update SMS log with response
+            smsLog.hasResponse = true;
+            smsLog.responseMessage = reply.message;
+            smsLog.responseReceivedAt = new Date();
+            smsLog.responseMessageId = reply.responseId || reply.messageId;
+            smsLog.linkedReplyId = reply._id;
+            smsLog.decisionStatus = matches ? 'yes' : 'no';
+            smsLog.decisionProcessedAt = new Date();
+            await smsLog.save();
+
+            // Update reply with SMS log reference
+            reply.smsLogId = smsLog._id;
+            reply.processed = true;
+            reply.processedAt = new Date();
+            await reply.save();
+
+            // Sync result to Eloqua
+            const decision = matches ? 'yes' : 'no';
+            await DecisionController.syncSingleDecisionResult(
+                instance,
+                smsLog,
+                decision
+            );
+
+            // Update custom object if configured
+            if (instance.custom_object_id) {
+                try {
+                    const consumer = await Consumer.findOne({ installId: instance.installId });
+                    if (consumer) {
+                        const eloquaService = new EloquaService(instance.installId, instance.SiteId);
+                        await eloquaService.initialize();
+                        
+                        await DecisionController.updateCustomObject(
+                            eloquaService,
+                            instance,
+                            consumer,
+                            smsLog,
+                            reply.message
+                        );
+                    }
+                } catch (cdoError) {
+                    logger.error('Error updating custom object', {
+                        error: cdoError.message,
+                        smsLogId: smsLog._id
                     });
-
-                    await DecisionController.syncDecisionResult(
-                        instance,
-                        smsLog,
-                        'no',
-                        null
-                    );
-                    continue;
-                }
-
-                // Evaluate if reply matches criteria
-                const matches = DecisionController.evaluateReply(
-                    reply.message,
-                    instance.text_type,
-                    instance.keyword
-                );
-
-                if (matches) {
-                    logger.info('Reply matches decision criteria', {
-                        replyId: reply._id,
-                        instanceId: instance.instanceId,
-                        textType: instance.text_type,
-                        keyword: instance.keyword
-                    });
-
-                    await DecisionController.syncDecisionResult(
-                        instance,
-                        smsLog,
-                        'yes',
-                        reply.message
-                    );
-
-                    reply.smsLogId = smsLog._id;
-                    reply.processed = true;
-                    reply.processedAt = new Date();
-                    await reply.save();
-
-                    break;
+                    // Don't fail the whole process
                 }
             }
+
+            logger.info('Reply processed successfully', {
+                replyId: reply._id,
+                smsLogId: smsLog._id,
+                decision,
+                matches
+            });
+
+            return { decision, matches, smsLog };
 
         } catch (error) {
             logger.error('Error processing reply for decision', {
@@ -457,6 +762,73 @@ class DecisionController {
                 error: error.message,
                 stack: error.stack
             });
+            throw error;
+        }
+    }
+
+    /**
+     * Sync single decision result (for real-time reply processing)
+     */
+    static async syncSingleDecisionResult(instance, smsLog, decision) {
+        try {
+            logger.info('Syncing single decision result', {
+                instanceId: instance.instanceId,
+                contactId: smsLog.contactId,
+                decision
+            });
+
+            const consumer = await Consumer.findOne({ installId: instance.installId });
+            if (!consumer) {
+                throw new Error('Consumer not found');
+            }
+
+            const eloquaService = new EloquaService(instance.installId, instance.SiteId);
+            await eloquaService.initialize();
+
+            const instanceIdNoDashes = instance.instanceId.replace(/-/g, '');
+
+            const importDefinition = {
+                name: `SMS_Decision_${instanceIdNoDashes}_${decision}_${Date.now()}`,
+                fields: {
+                    ContactID: '{{Contact.Id}}',
+                    EmailAddress: '{{Contact.Field(C_EmailAddress)}}'
+                },
+                identifierFieldName: 'EmailAddress',
+                isSyncTriggeredOnImport: false,
+                dataRetentionDuration: 'P7D',
+                syncActions: [
+                    {
+                        destination: `{{DecisionInstance(${instanceIdNoDashes})}}`,
+                        action: "setDecision",
+                        value: decision
+                    }
+                ]
+            };
+
+            const importDef = await eloquaService.createBulkImport('contacts', importDefinition);
+
+            const contactData = [{
+                ContactID: smsLog.contactId,
+                EmailAddress: smsLog.emailAddress
+            }];
+
+            await eloquaService.uploadBulkImportData(importDef.uri, contactData);
+            const sync = await eloquaService.syncBulkImport(importDef.uri);
+
+            logger.info('Single decision sync completed', {
+                syncUri: sync.uri,
+                decision,
+                contactId: smsLog.contactId
+            });
+
+        } catch (error) {
+            logger.error('Error syncing single decision result', {
+                instanceId: instance.instanceId,
+                contactId: smsLog.contactId,
+                error: error.message,
+                stack: error.stack
+            });
+            throw error;
         }
     }
 
@@ -483,13 +855,18 @@ class DecisionController {
 
         const cleanMessage = replyMessage.toLowerCase().trim();
 
+        // If "Anything" - any response is a match
         if (textType === 'Anything') {
             return true;
         }
 
+        // If "Keyword" - check for specific keywords
         if (textType === 'Keyword' && keyword) {
             const keywords = keyword.toLowerCase().split(',').map(k => k.trim());
-            return keywords.some(kw => cleanMessage.includes(kw));
+            return keywords.some(kw => {
+                // Check if message contains keyword (case-insensitive)
+                return cleanMessage.includes(kw);
+            });
         }
 
         return false;
@@ -580,33 +957,66 @@ class DecisionController {
      */
     static async updateCustomObject(eloquaService, instance, consumer, smsLog, replyMessage) {
         try {
-            const actionConfig = consumer.actions?.receivesms;
-            if (!actionConfig || !actionConfig.custom_object_id) {
+            if (!instance.custom_object_id) {
                 return;
             }
 
-            const customObjectData = {
-                [actionConfig.mobile_field]: smsLog.mobileNumber,
-                [actionConfig.email_field]: smsLog.emailAddress,
-                [actionConfig.response_field]: replyMessage || '',
-                [actionConfig.title_field]: smsLog.campaignTitle,
-                [actionConfig.vn_field]: smsLog.senderId
-            };
-
-            await eloquaService.createCustomObjectRecord(
-                actionConfig.custom_object_id,
-                customObjectData
-            );
-
-            logger.info('Custom object updated with reply', {
-                customObjectId: actionConfig.custom_object_id,
+            logger.info('Updating custom object with reply', {
+                customObjectId: instance.custom_object_id,
                 contactId: smsLog.contactId
             });
 
+            const cdoData = {
+                fieldValues: []
+            };
+
+            if (instance.mobile_field) {
+                cdoData.fieldValues.push({
+                    id: instance.mobile_field,
+                    value: smsLog.mobileNumber
+                });
+            }
+
+            if (instance.email_field) {
+                cdoData.fieldValues.push({
+                    id: instance.email_field,
+                    value: smsLog.emailAddress
+                });
+            }
+
+            if (instance.response_field && replyMessage) {
+                cdoData.fieldValues.push({
+                    id: instance.response_field,
+                    value: replyMessage.substring(0, 250) // Limit length
+                });
+            }
+
+            if (instance.title_field && smsLog.campaignTitle) {
+                cdoData.fieldValues.push({
+                    id: instance.title_field,
+                    value: smsLog.campaignTitle
+                });
+            }
+
+            if (cdoData.fieldValues.length > 0) {
+                await eloquaService.createCustomObjectRecord(
+                    instance.custom_object_id,
+                    cdoData
+                );
+
+                logger.info('Custom object updated successfully', {
+                    customObjectId: instance.custom_object_id,
+                    contactId: smsLog.contactId,
+                    fieldCount: cdoData.fieldValues.length
+                });
+            }
+
         } catch (error) {
             logger.error('Error updating custom object', {
+                customObjectId: instance.custom_object_id,
                 error: error.message
             });
+            throw error;
         }
     }
 

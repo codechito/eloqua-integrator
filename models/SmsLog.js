@@ -107,7 +107,45 @@ const SmsLogSchema = new mongoose.Schema({
         enum: ['pending', 'yes', 'no'],
         default: 'pending'
     },
-    decisionProcessedAt: Date
+    decisionProcessedAt: Date,
+    // Response Tracking
+    hasResponse: {
+        type: Boolean,
+        default: false,
+        index: true
+    },
+    responseMessage: {
+        type: String
+    },
+    responseReceivedAt: {
+        type: Date
+    },
+    responseMessageId: {
+        type: String
+    },
+    
+    // Link between original SMS and response
+    linkedReplyId: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'SmsReply',
+        index: true
+    },
+    
+    // Decision tracking deadline
+    decisionDeadline: {
+        type: Date,
+        index: true
+    },
+    
+    // Campaign/Asset tracking
+    campaignId: {
+        type: String,
+        index: true
+    },
+    executionId: {
+        type: String,
+        index: true
+    }
     
 }, {
     timestamps: true,
@@ -120,6 +158,9 @@ SmsLogSchema.index({ mobileNumber: 1, createdAt: -1 });
 SmsLogSchema.index({ emailAddress: 1, createdAt: -1 });
 SmsLogSchema.index({ messageId: 1, status: 1 });
 SmsLogSchema.index({ contactId: 1, createdAt: -1 });
+SmsLogSchema.index({ messageId: 1, hasResponse: 1 });
+SmsLogSchema.index({ decisionInstanceId: 1, decisionStatus: 1, decisionDeadline: 1 });
+SmsLogSchema.index({ installId: 1, campaignId: 1, contactId: 1 });
 
 // Virtual for delivery time
 SmsLogSchema.virtual('deliveryTime').get(function() {
@@ -177,6 +218,33 @@ SmsLogSchema.statics.getStats = async function(installId, startDate, endDate) {
             }
         }
     ]);
+};
+
+// ADD this method
+SmsLogSchema.methods.markAsReplied = async function(responseMessage, responseMessageId, replyId) {
+    this.hasResponse = true;
+    this.responseMessage = responseMessage;
+    this.responseReceivedAt = new Date();
+    this.responseMessageId = responseMessageId;
+    this.linkedReplyId = replyId;
+    
+    if (this.decisionStatus === 'pending') {
+        this.decisionStatus = 'yes';
+        this.decisionProcessedAt = new Date();
+    }
+    
+    return this.save();
+};
+
+// ADD this static method
+SmsLogSchema.statics.findByMessageIdWithinPeriod = function(messageId, hours) {
+    const cutoff = new Date(Date.now() - hours * 60 * 60 * 1000);
+    return this.findOne({
+        messageId,
+        sentAt: { $gte: cutoff },
+        decisionInstanceId: { $ne: null },
+        decisionStatus: 'pending'
+    });
 };
 
 module.exports = mongoose.model('SmsLog', SmsLogSchema);

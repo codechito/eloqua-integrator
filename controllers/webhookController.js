@@ -1,7 +1,10 @@
+// controllers/webhookController.js - UPDATE handleSmsReply method
+
 const Consumer = require('../models/Consumer');
 const SmsLog = require('../models/SmsLog');
 const SmsReply = require('../models/SmsReply');
 const LinkHit = require('../models/LinkHit');
+const DecisionController = require('./decisionController'); // ADD THIS
 const { logger } = require('../utils');
 const { asyncHandler } = require('../middleware');
 
@@ -81,7 +84,7 @@ class WebhookController {
     });
 
     /**
-     * Handle SMS Replies
+     * Handle SMS Replies - UPDATED WITH DECISION PROCESSING
      * POST /webhooks/reply
      */
     static handleSmsReply = asyncHandler(async (req, res) => {
@@ -112,24 +115,42 @@ class WebhookController {
             let installId = replyData.installId || null;
             let contactId = replyData.contactId || null;
 
+            // STRATEGY 1: Try to find by message ID first
             if (messageId) {
                 smsLog = await SmsLog.findOne({ messageId });
                 if (smsLog) {
                     installId = smsLog.installId;
                     contactId = smsLog.contactId;
+                    
+                    logger.info('Found SMS log by message ID', {
+                        messageId,
+                        smsLogId: smsLog._id,
+                        hasDecision: !!smsLog.decisionInstanceId
+                    });
                 }
             }
 
-            // If not found by messageId, try by mobile number
+            // STRATEGY 2: If not found by messageId, try by mobile number (most recent)
             if (!smsLog && fromNumber) {
                 const recentSms = await SmsLog.find({
                     mobileNumber: fromNumber
-                }).sort({ createdAt: -1 }).limit(1);
+                }).sort({ createdAt: -1 }).limit(5);
 
                 if (recentSms.length > 0) {
-                    smsLog = recentSms[0];
+                    // Prefer SMS with pending decision
+                    smsLog = recentSms.find(log => 
+                        log.decisionInstanceId && 
+                        log.decisionStatus === 'pending'
+                    ) || recentSms[0];
+                    
                     installId = smsLog.installId;
                     contactId = smsLog.contactId;
+                    
+                    logger.info('Found SMS log by mobile number', {
+                        mobile: fromNumber,
+                        smsLogId: smsLog._id,
+                        hasDecision: !!smsLog.decisionInstanceId
+                    });
                 }
             }
 
@@ -157,16 +178,50 @@ class WebhookController {
                 linkedToSms: !!smsLog
             });
 
+            // ============================================
+            // NEW: Process for decision evaluation
+            // ============================================
+            let decisionResult = null;
+            
+            if (smsLog && smsLog.decisionInstanceId) {
+                try {
+                    logger.info('Processing reply for decision evaluation', {
+                        replyId: smsReply._id,
+                        smsLogId: smsLog._id,
+                        decisionInstanceId: smsLog.decisionInstanceId
+                    });
+
+                    decisionResult = await DecisionController.processReply(smsReply, smsLog);
+
+                    if (decisionResult) {
+                        logger.info('Decision processed from reply', {
+                            replyId: smsReply._id,
+                            decision: decisionResult.decision,
+                            matches: decisionResult.matches
+                        });
+                    }
+                } catch (decisionError) {
+                    logger.error('Error processing decision from reply', {
+                        replyId: smsReply._id,
+                        error: decisionError.message,
+                        stack: decisionError.stack
+                    });
+                    // Don't fail the webhook - just log the error
+                }
+            }
+
             res.json({ 
                 success: true, 
                 message: 'Reply processed',
-                replyId: smsReply._id 
+                replyId: smsReply._id,
+                decision: decisionResult?.decision || null
             });
 
         } catch (error) {
             logger.error('Error processing SMS reply', {
                 error: error.message,
-                replyData
+                replyData,
+                stack: error.stack
             });
             
             // Still return 200 to prevent retries

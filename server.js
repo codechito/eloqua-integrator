@@ -8,6 +8,7 @@ const helmet = require('helmet');
 const morgan = require('morgan');
 const path = require('path');
 
+
 // Import database connection
 const connectDB = require('./config/database');
 
@@ -35,6 +36,7 @@ const { logger } = require('./utils');
 
 // Import SMS Worker
 const SmsWorker = require('./workers/smsWorker');
+const DecisionCleanupWorker = require('./workers/decisionCleanupWorker');
 
 // Initialize Express app
 const app = express();
@@ -238,6 +240,7 @@ app.use(errorHandler);
 
 // Initialize worker after routes are set up
 let smsWorker = null;
+let decisionCleanupWorker = null
 
 async function initializeWorker() {
     try {
@@ -256,6 +259,24 @@ async function initializeWorker() {
             mode: 'in-process-scheduled',
             schedule: 'Every 30 seconds'
         });
+
+        logger.info('SMS Worker started successfully');
+        
+        // ADD DECISION CLEANUP WORKER
+        logger.info('Initializing Decision Cleanup Worker...');
+        
+        decisionCleanupWorker = new DecisionCleanupWorker();
+        global.decisionCleanupWorker = decisionCleanupWorker;
+        
+        decisionCleanupWorker.start();
+
+        logger.info('Decision Cleaup Worker started successfully', {
+            mode: 'in-process-scheduled',
+            schedule: 'Every 10 minutes'
+        });
+
+        logger.info('SMS Worker started successfully');
+
         
         // Log worker stats periodically (every 5 minutes)
         setInterval(async () => {
@@ -304,6 +325,12 @@ const server = app.listen(PORT,'0.0.0.0', async () => {
     console.log('  ✓ Cleanup: Daily at 2 AM');
     console.log('  ✓ Retry Failed: Every 10 minutes');
     console.log('========================================');
+    console.log('========================================');
+    console.log('  ✓ Decision Cleanup Worker: Active (Scheduled)');
+    console.log('  ✓ Schedule: Every 10 minutes');
+    console.log('  ✓ Cleanup: Daily at 2 AM');
+    console.log('  ✓ Retry Failed: Every 10 minutes');
+    console.log('========================================');
 });
 
 // Graceful shutdown
@@ -328,6 +355,14 @@ async function gracefulShutdown(signal) {
             console.log('  ✓ SMS Worker stopped');
         } catch (error) {
             logger.error('Error stopping SMS Worker', { error: error.message });
+        }
+    }
+    if (decisionCleanupWorker) {
+        try {
+            decisionCleanupWorker.stop();
+            logger.info('Decision Cleanup Worker stopped');
+        } catch (error) {
+            logger.error('Error stopping Decision Cleanup Worker', { error: error.message });
         }
     }
     
