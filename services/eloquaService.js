@@ -869,6 +869,59 @@ class EloquaService {
             throw error;
         }
     }
+
+    // services/eloquaService.js - ADD this method
+
+    /**
+     * Set decision for a contact
+     * POST /api/cloud/1.0/decisions/instances/{instanceId}/contacts/{contactId}
+     */
+    async setDecision(instanceId, contactId, decision) {
+        await this.ensureInitialized();
+        
+        try {
+            // Remove dashes from instanceId
+            const cleanInstanceId = instanceId.replace(/-/g, '');
+            
+            const url = `/api/cloud/1.0/decisions/instances/${cleanInstanceId}/contacts/${contactId}`;
+            
+            const payload = {
+                decision: decision // "yes" or "no"
+            };
+
+            logger.debug('Setting decision', {
+                instanceId: cleanInstanceId,
+                contactId,
+                decision,
+                url,
+                fullUrl: `${this.baseURL}${url}`
+            });
+
+            const response = await this.client.post(url, payload);
+
+            logger.info('Decision set successfully', {
+                instanceId: cleanInstanceId,
+                contactId,
+                decision,
+                status: response.status
+            });
+
+            return response.data;
+
+        } catch (error) {
+            logger.error('Failed to set decision', {
+                instanceId,
+                contactId,
+                decision,
+                error: error.message,
+                status: error.response?.status,
+                statusText: error.response?.statusText,
+                responseData: error.response?.data
+            });
+            throw error;
+        }
+    }
+    
 }
 
 module.exports = EloquaService;

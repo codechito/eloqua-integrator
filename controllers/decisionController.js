@@ -717,8 +717,11 @@ class DecisionController {
         }
     }
 
+    // controllers/decisionController.js - UPDATE these methods
+
     /**
      * Sync bulk decision results to Eloqua
+     * Uses Decision API, not Bulk API
      */
     static async syncBulkDecisionResults(consumer, instance, results) {
         try {
@@ -731,38 +734,101 @@ class DecisionController {
             const eloquaService = new EloquaService(consumer.installId, instance.SiteId);
             await eloquaService.initialize();
 
-            const instanceIdNoDashes = instance.instanceId.replace(/-/g, '');
-
-            // Sync YES contacts
-            if (results.yes.length > 0) {
-                await DecisionController.syncDecisionBatch(
-                    eloquaService,
-                    instance,
-                    instanceIdNoDashes,
-                    results.yes,
-                    'yes'
-                );
+            // Process YES decisions
+            for (const contact of results.yes) {
+                try {
+                    await DecisionController.syncSingleDecisionResult(
+                        instance,
+                        { contactId: contact.contactId, emailAddress: contact.emailAddress },
+                        'yes'
+                    );
+                } catch (error) {
+                    logger.error('Error syncing YES decision for contact', {
+                        contactId: contact.contactId,
+                        error: error.message
+                    });
+                }
             }
 
-            // Sync NO contacts
-            if (results.no.length > 0) {
-                await DecisionController.syncDecisionBatch(
-                    eloquaService,
-                    instance,
-                    instanceIdNoDashes,
-                    results.no,
-                    'no'
-                );
+            // Process NO decisions
+            for (const contact of results.no) {
+                try {
+                    await DecisionController.syncSingleDecisionResult(
+                        instance,
+                        { contactId: contact.contactId, emailAddress: contact.emailAddress },
+                        'no'
+                    );
+                } catch (error) {
+                    logger.error('Error syncing NO decision for contact', {
+                        contactId: contact.contactId,
+                        error: error.message
+                    });
+                }
             }
 
             logger.info('Bulk decision sync completed', {
-                instanceId: instance.instanceId
+                instanceId: instance.instanceId,
+                yesCount: results.yes.length,
+                noCount: results.no.length
             });
 
         } catch (error) {
             logger.error('Error syncing bulk decision results', {
                 instanceId: instance.instanceId,
                 error: error.message
+            });
+            throw error;
+        }
+    }
+
+    /**
+     * Sync single decision result using Decision API
+     * This is the correct way to set decisions in Eloqua
+     */
+    static async syncSingleDecisionResult(instance, smsLog, decision) {
+        try {
+            logger.info('Syncing single decision result', {
+                instanceId: instance.instanceId,
+                contactId: smsLog.contactId,
+                decision
+            });
+
+            const consumer = await Consumer.findOne({ installId: instance.installId });
+            if (!consumer) {
+                throw new Error('Consumer not found');
+            }
+
+            const eloquaService = new EloquaService(instance.installId, instance.SiteId);
+            await eloquaService.initialize();
+
+            // Use Decision API endpoint to set the decision
+            // Format: POST /api/cloud/1.0/decisions/instances/{instanceId}/contacts/{contactId}
+            const instanceIdNoDashes = instance.instanceId.replace(/-/g, '');
+            
+            const decisionData = {
+                decision: decision // "yes" or "no"
+            };
+
+            logger.debug('Setting decision via API', {
+                instanceId: instanceIdNoDashes,
+                contactId: smsLog.contactId,
+                decision
+            });
+
+            await eloquaService.setDecision(instanceIdNoDashes, smsLog.contactId, decision);
+
+            logger.info('Decision set successfully', {
+                instanceId: instance.instanceId,
+                contactId: smsLog.contactId,
+                decision
+            });
+
+        } catch (error) {
+            logger.error('Error syncing single decision result', {
+                instanceId: instance.instanceId,
+                contactId: smsLog.contactId,
+                error: error.message,
+                stack: error.stack
             });
             throw error;
         }
