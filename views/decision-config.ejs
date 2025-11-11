@@ -177,7 +177,7 @@
         <div class="form-group">
           <label for="evaluation_period">Evaluation Period (hours)</label>
           <select v-model="instance.evaluation_period" class="form-control" id="evaluation_period" required>
-            <option v-for="hour in evaluation" v-bind:value="hour">{{ hour }} hour{{ hour > 1 ? 's' : '' }}</option>
+            <option v-for="hour in evaluation" v-bind:value="hour" :key="hour">{{ hour }} hour{{ hour > 1 ? 's' : '' }}</option>
           </select>
           <div class="help-text">
             How long to wait for a response after SMS is sent (1-168 hours)
@@ -331,13 +331,18 @@
               return;
             }
 
+            // Prepare data with proper types and required fields
             const data = {
               instance: {
                 evaluation_period: parseInt(vm.instance.evaluation_period),
-                text_type: vm.instance.text_type,
-                keyword: vm.instance.text_type === 'Keyword' ? vm.instance.keyword : null
+                text_type: String(vm.instance.text_type), // Ensure it's a string
+                keyword: vm.instance.text_type === 'Keyword' ? vm.instance.keyword : null,
+                SiteId: vm.consumer.SiteId, // Include SiteId from consumer
+                installId: vm.consumer.installId // Include installId
               }
             };
+
+            console.log('Saving decision config:', data);
 
             const btnSave = document.getElementById('btnSave');
             const originalText = btnSave.textContent;
@@ -363,7 +368,11 @@
               })
               .catch(function (error) {
                 console.error('Save error:', error);
-                vm.showMessage('error', error.response?.data?.message || 'Failed to save configuration');
+                var errorMsg = 'Failed to save configuration';
+                if (error.response && error.response.data && error.response.data.message) {
+                  errorMsg = error.response.data.message;
+                }
+                vm.showMessage('error', errorMsg);
               })
               .finally(function() {
                 btnSave.textContent = originalText;
@@ -420,6 +429,7 @@
           }
         },
         mounted: function () {
+          // Set default values if not set
           if (!this.instance.evaluation_period) {
             this.instance.evaluation_period = 1;
           }
@@ -427,6 +437,7 @@
             this.instance.text_type = 'Anything';
           }
 
+          // Load CDO details if configured
           this.loadCdoDetails();
         }
       });
