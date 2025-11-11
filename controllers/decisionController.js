@@ -62,7 +62,6 @@ class DecisionController {
             return res.status(404).send('Consumer not found');
         }
 
-        // Set session data
         req.session.installId = installId;
         req.session.siteId = siteId;
 
@@ -83,7 +82,6 @@ class DecisionController {
             instance.program_coid = CustomObjectId;
         }
 
-        // Log CDO configuration status
         const hasCdoConfig = !!(consumer.actions?.receivesms?.custom_object_id);
         
         logger.info('Decision config page loaded', {
@@ -92,45 +90,11 @@ class DecisionController {
             customObjectId: consumer.actions?.receivesms?.custom_object_id
         });
 
-        // Render config view with consumer info (includes CDO mapping)
         res.render('decision-config', {
             consumer: consumer.toObject(),
             instance
         });
     });
-
-    /**
-     * Build recordDefinition for decision instance
-     * This defines what contact data Eloqua should send
-     */
-    static async buildRecordDefinition(instance) {
-        const recordDefinition = {};
-
-        logger.debug('Building recordDefinition for decision', {
-            instanceId: instance.instanceId,
-            hasProgramCDO: !!instance.program_coid
-        });
-
-        // ALWAYS include ContactID and EmailAddress (required!)
-        if (instance.program_coid) {
-            // Using Program Builder with CDO
-            recordDefinition.ContactID = "{{CustomObject.Contact.Id}}";
-            recordDefinition.EmailAddress = "{{CustomObject.Contact.Field(C_EmailAddress)}}";
-            recordDefinition.Id = "{{CustomObject.Id}}";
-        } else {
-            // Regular Campaign
-            recordDefinition.ContactID = "{{Contact.Id}}";
-            recordDefinition.EmailAddress = "{{Contact.Field(C_EmailAddress)}}";
-        }
-
-        logger.info('RecordDefinition built for decision', {
-            instanceId: instance.instanceId,
-            recordDefinition,
-            fieldCount: Object.keys(recordDefinition).length
-        });
-
-        return recordDefinition;
-    }
 
     /**
      * Save configuration
@@ -147,7 +111,6 @@ class DecisionController {
             receivedData: instanceData
         });
 
-        // Validate required fields
         if (!instanceData.evaluation_period) {
             return res.status(400).json({
                 success: false,
@@ -162,7 +125,6 @@ class DecisionController {
             });
         }
 
-        // Ensure text_type is a valid enum value
         const validTextTypes = ['Anything', 'Keyword'];
         if (!validTextTypes.includes(instanceData.text_type)) {
             return res.status(400).json({
@@ -171,7 +133,6 @@ class DecisionController {
             });
         }
 
-        // Validate keyword if text_type is Keyword
         if (instanceData.text_type === 'Keyword' && (!instanceData.keyword || !instanceData.keyword.trim())) {
             return res.status(400).json({
                 success: false,
@@ -192,7 +153,6 @@ class DecisionController {
             logger.info('Updating existing decision instance', { instanceId });
         }
 
-        // Update only decision-specific fields
         instance.evaluation_period = parseInt(instanceData.evaluation_period);
         instance.text_type = String(instanceData.text_type);
         instance.keyword = instanceData.keyword ? String(instanceData.keyword).trim() : null;
@@ -210,9 +170,6 @@ class DecisionController {
             requiresConfiguration: false
         });
 
-        // ============================================
-        // ADD: Update Eloqua instance with recordDefinition
-        // ============================================
         try {
             await DecisionController.updateEloquaInstance(instance);
             
@@ -231,7 +188,6 @@ class DecisionController {
                 stack: error.stack
             });
 
-            // Still return success for local save, but warn about Eloqua update
             res.json({
                 success: true,
                 message: 'Configuration saved locally, but failed to update Eloqua',
@@ -243,7 +199,6 @@ class DecisionController {
 
     /**
      * Update Eloqua decision instance with recordDefinition
-     * This tells Eloqua what data to send to the notify endpoint
      */
     static async updateEloquaInstance(instance) {
         try {
@@ -256,10 +211,8 @@ class DecisionController {
             const eloquaService = new EloquaService(instance.installId, instance.SiteId);
             await eloquaService.initialize();
 
-            // Build recordDefinition - tells Eloqua what fields to send
             const recordDefinition = await DecisionController.buildRecordDefinition(instance);
 
-            // Prepare update payload
             const updatePayload = {
                 recordDefinition: recordDefinition,
                 requiresConfiguration: false
@@ -271,7 +224,6 @@ class DecisionController {
                 requiresConfiguration: false
             });
 
-            // Call Eloqua API to update instance
             await eloquaService.updateDecisionInstance(instance.instanceId, updatePayload);
 
             logger.info('Eloqua decision instance updated successfully', {
@@ -286,6 +238,35 @@ class DecisionController {
             });
             throw error;
         }
+    }
+
+    /**
+     * Build recordDefinition for decision instance
+     */
+    static async buildRecordDefinition(instance) {
+        const recordDefinition = {};
+
+        logger.debug('Building recordDefinition for decision', {
+            instanceId: instance.instanceId,
+            hasProgramCDO: !!instance.program_coid
+        });
+
+        if (instance.program_coid) {
+            recordDefinition.ContactID = "{{CustomObject.Contact.Id}}";
+            recordDefinition.EmailAddress = "{{CustomObject.Contact.Field(C_EmailAddress)}}";
+            recordDefinition.Id = "{{CustomObject.Id}}";
+        } else {
+            recordDefinition.ContactID = "{{Contact.Id}}";
+            recordDefinition.EmailAddress = "{{Contact.Field(C_EmailAddress)}}";
+        }
+
+        logger.info('RecordDefinition built for decision', {
+            instanceId: instance.instanceId,
+            recordDefinition,
+            fieldCount: Object.keys(recordDefinition).length
+        });
+
+        return recordDefinition;
     }
 
     /**
@@ -311,8 +292,6 @@ class DecisionController {
         });
     });
 
-    // controllers/decisionController.js - UPDATE notify method with EXTENSIVE logging
-
     /**
      * Notify - Execute decision
      * POST /eloqua/decision/notify
@@ -324,7 +303,6 @@ class DecisionController {
         const executionId = req.query.ExecutionId || req.query.executionId || req.params.executionId;
         const siteId = req.query.siteId || req.query.SiteId || req.params.SiteId;
         
-        // EXTREME LOGGING - Debug body parsing
         logger.debug('Decision notify - Raw request data', {
             instanceId,
             executionId,
@@ -347,21 +325,15 @@ class DecisionController {
             }
         });
 
-        // Try multiple ways to extract items
         let items = [];
         
-        // Method 1: req.body.items (expected)
         if (req.body && req.body.items && Array.isArray(req.body.items)) {
             items = req.body.items;
             logger.info('Items found via req.body.items', { count: items.length });
-        }
-        // Method 2: req.body is the array directly
-        else if (Array.isArray(req.body)) {
+        } else if (Array.isArray(req.body)) {
             items = req.body;
             logger.info('Items found via req.body (direct array)', { count: items.length });
-        }
-        // Method 3: Check if body is a string that needs parsing
-        else if (typeof req.body === 'string') {
+        } else if (typeof req.body === 'string') {
             try {
                 const parsed = JSON.parse(req.body);
                 if (Array.isArray(parsed)) {
@@ -374,9 +346,7 @@ class DecisionController {
             } catch (e) {
                 logger.error('Failed to parse req.body as JSON', { error: e.message });
             }
-        }
-        // Method 4: Empty object/undefined
-        else {
+        } else {
             logger.warn('No items found in any format', {
                 bodyExists: !!req.body,
                 bodyType: typeof req.body,
@@ -405,10 +375,8 @@ class DecisionController {
             firstItemSample: items[0] ? JSON.stringify(items[0]).substring(0, 200) : 'none'
         });
 
-        // Return 204 immediately
         res.status(204).send();
 
-        // Process asynchronously
         DecisionController.processNotifyAsync(
             instanceId, 
             installId,
@@ -424,8 +392,6 @@ class DecisionController {
             });
         });
     });
-
-    
 
     /**
      * Copy instance
@@ -496,7 +462,7 @@ class DecisionController {
     });
 
     /**
-     * Process notify asynchronously (helper method)
+     * Process notify asynchronously
      */
     static async processNotifyAsync(instanceId, installId, siteId, assetId, executionId, executionData) {
         try {
@@ -510,7 +476,6 @@ class DecisionController {
                 hasMore: executionData.hasMore
             });
 
-            // Validate we have items
             if (!executionData.items || !Array.isArray(executionData.items)) {
                 logger.warn('No items array in execution data', {
                     instanceId,
@@ -557,7 +522,6 @@ class DecisionController {
                 itemsToProcess: executionData.items.length
             });
 
-            // Process each contact in the execution
             const results = {
                 yes: [],
                 no: [],
@@ -581,10 +545,8 @@ class DecisionController {
                         emailAddress
                     });
 
-                    // Find the most recent SMS sent to this contact
-                    // Look for SMS sent within the evaluation period
                     const evaluationHours = instance.evaluation_period === -1 
-                        ? 24 * 365 // 1 year for "forever"
+                        ? 24 * 365
                         : instance.evaluation_period;
 
                     const cutoffDate = new Date(Date.now() - evaluationHours * 60 * 60 * 1000);
@@ -618,7 +580,6 @@ class DecisionController {
                         hasResponse: smsLog.hasResponse
                     });
 
-                    // Assign this SMS to the decision instance
                     smsLog.decisionInstanceId = instanceId;
                     smsLog.decisionStatus = smsLog.hasResponse ? 'yes' : 'pending';
                     smsLog.decisionDeadline = new Date(
@@ -626,9 +587,7 @@ class DecisionController {
                     );
                     await smsLog.save();
 
-                    // Check if already has a response
                     if (smsLog.hasResponse) {
-                        // Check if response matches criteria
                         const matches = DecisionController.evaluateReply(
                             smsLog.responseMessage,
                             instance.text_type,
@@ -661,7 +620,6 @@ class DecisionController {
                             });
                         }
                     } else {
-                        // No response yet - will be checked by webhook
                         logger.debug('Contact pending response', {
                             contactId,
                             messageId: smsLog.messageId,
@@ -696,7 +654,6 @@ class DecisionController {
                 errorCount: results.errors.length
             });
 
-            // Sync results to Eloqua
             await DecisionController.syncBulkDecisionResults(
                 consumer,
                 instance,
@@ -717,11 +674,8 @@ class DecisionController {
         }
     }
 
-    // controllers/decisionController.js - UPDATE these methods
-
     /**
-     * Sync bulk decision results to Eloqua
-     * Uses Decision API, not Bulk API
+     * Sync bulk decision results to Eloqua using Decision API
      */
     static async syncBulkDecisionResults(consumer, instance, results) {
         try {
@@ -734,11 +688,11 @@ class DecisionController {
             const eloquaService = new EloquaService(consumer.installId, instance.SiteId);
             await eloquaService.initialize();
 
-            // Process YES decisions
             for (const contact of results.yes) {
                 try {
                     await DecisionController.syncSingleDecisionResult(
                         instance,
+                        eloquaService,
                         { contactId: contact.contactId, emailAddress: contact.emailAddress },
                         'yes'
                     );
@@ -750,11 +704,11 @@ class DecisionController {
                 }
             }
 
-            // Process NO decisions
             for (const contact of results.no) {
                 try {
                     await DecisionController.syncSingleDecisionResult(
                         instance,
+                        eloquaService,
                         { contactId: contact.contactId, emailAddress: contact.emailAddress },
                         'no'
                     );
@@ -782,10 +736,9 @@ class DecisionController {
     }
 
     /**
-     * Sync single decision result using Decision API
-     * This is the correct way to set decisions in Eloqua
+     * Sync single decision result using Decision API (CORRECT VERSION - NO BULK API!)
      */
-    static async syncSingleDecisionResult(instance, contact, decision) {
+    static async syncSingleDecisionResult(instance, eloquaService, contact, decision) {
         try {
             logger.info('Syncing single decision result', {
                 instanceId: instance.instanceId,
@@ -793,15 +746,6 @@ class DecisionController {
                 decision
             });
 
-            const consumer = await Consumer.findOne({ installId: instance.installId });
-            if (!consumer) {
-                throw new Error('Consumer not found');
-            }
-
-            const eloquaService = new EloquaService(instance.installId, instance.SiteId);
-            await eloquaService.initialize();
-
-            // Use Decision API endpoint to set the decision
             const instanceIdNoDashes = instance.instanceId.replace(/-/g, '');
             
             logger.debug('Setting decision via Decision API', {
@@ -811,7 +755,6 @@ class DecisionController {
                 fullUrl: `${eloquaService.baseURL}/api/cloud/1.0/decisions/instances/${instanceIdNoDashes}/contacts/${contact.contactId}`
             });
 
-            // Call the Decision API (not Bulk API!)
             await eloquaService.setDecision(instanceIdNoDashes, contact.contactId, decision);
 
             logger.info('Decision set successfully via Decision API', {
@@ -832,65 +775,7 @@ class DecisionController {
     }
 
     /**
-     * Sync a batch of decision results
-     */
-    static async syncDecisionBatch(eloquaService, instance, instanceIdNoDashes, contacts, decision) {
-        try {
-            logger.info('Syncing decision batch', {
-                instanceId: instance.instanceId,
-                decision,
-                count: contacts.length
-            });
-
-            const importDefinition = {
-                name: `SMS_Decision_${instanceIdNoDashes}_${decision}_${Date.now()}`,
-                fields: {
-                    ContactID: '{{Contact.Id}}',
-                    EmailAddress: '{{Contact.Field(C_EmailAddress)}}'
-                },
-                identifierFieldName: 'EmailAddress',
-                isSyncTriggeredOnImport: false,
-                dataRetentionDuration: 'P7D',
-                syncActions: [
-                    {
-                        destination: `{{DecisionInstance(${instanceIdNoDashes})}}`,
-                        action: "setDecision",
-                        value: decision
-                    }
-                ]
-            };
-
-            const importDef = await eloquaService.createBulkImport('contacts', importDefinition);
-
-            const contactData = contacts.map(contact => ({
-                ContactID: contact.contactId,
-                EmailAddress: contact.emailAddress
-            }));
-
-            await eloquaService.uploadBulkImportData(importDef.uri, contactData);
-            const sync = await eloquaService.syncBulkImport(importDef.uri);
-
-            logger.info('Decision batch sync started', {
-                syncUri: sync.uri,
-                decision,
-                count: contacts.length
-            });
-
-            // Don't wait for completion - Eloqua will process it
-
-        } catch (error) {
-            logger.error('Error syncing decision batch', {
-                decision,
-                count: contacts.length,
-                error: error.message
-            });
-            throw error;
-        }
-    }
-
-    /**
      * Process SMS reply and evaluate decision
-     * Called by webhook when reply is received
      */
     static async processReply(reply, smsLog = null) {
         try {
@@ -901,9 +786,7 @@ class DecisionController {
                 hasSmsLog: !!smsLog
             });
 
-            // If smsLog not provided, try to find it
             if (!smsLog) {
-                // Try by message ID first
                 if (reply.messageId) {
                     smsLog = await SmsLog.findOne({
                         messageId: reply.messageId,
@@ -912,7 +795,6 @@ class DecisionController {
                     });
                 }
 
-                // If not found, try by mobile number
                 if (!smsLog && reply.fromNumber) {
                     const recentSmsLogs = await SmsLog.find({
                         mobileNumber: reply.fromNumber,
@@ -941,7 +823,6 @@ class DecisionController {
                 return null;
             }
 
-            // Get decision instance
             const instance = await DecisionInstance.findOne({
                 instanceId: smsLog.decisionInstanceId,
                 isActive: true
@@ -954,7 +835,6 @@ class DecisionController {
                 return null;
             }
 
-            // Check if within evaluation period
             const isWithinPeriod = new Date() <= smsLog.decisionDeadline;
 
             if (!isWithinPeriod) {
@@ -964,21 +844,23 @@ class DecisionController {
                     receivedAt: new Date()
                 });
 
-                // Mark as expired/no
                 smsLog.decisionStatus = 'no';
                 smsLog.decisionProcessedAt = new Date();
                 await smsLog.save();
 
+                const eloquaService = new EloquaService(instance.installId, instance.SiteId);
+                await eloquaService.initialize();
+
                 await DecisionController.syncSingleDecisionResult(
                     instance,
-                    smsLog,
+                    eloquaService,
+                    { contactId: smsLog.contactId, emailAddress: smsLog.emailAddress },
                     'no'
                 );
 
                 return { decision: 'no', reason: 'expired', matches: false };
             }
 
-            // Evaluate if reply matches criteria
             const matches = DecisionController.evaluateReply(
                 reply.message,
                 instance.text_type,
@@ -993,7 +875,6 @@ class DecisionController {
                 message: reply.message?.substring(0, 50)
             });
 
-            // Update SMS log with response
             smsLog.hasResponse = true;
             smsLog.responseMessage = reply.message;
             smsLog.responseReceivedAt = new Date();
@@ -1003,27 +884,25 @@ class DecisionController {
             smsLog.decisionProcessedAt = new Date();
             await smsLog.save();
 
-            // Update reply with SMS log reference
             reply.smsLogId = smsLog._id;
             reply.processed = true;
             reply.processedAt = new Date();
             await reply.save();
 
-            // Sync result to Eloqua
             const decision = matches ? 'yes' : 'no';
+            const eloquaService = new EloquaService(instance.installId, instance.SiteId);
+            await eloquaService.initialize();
+            
             await DecisionController.syncSingleDecisionResult(
                 instance,
-                smsLog,
+                eloquaService,
+                { contactId: smsLog.contactId, emailAddress: smsLog.emailAddress },
                 decision
             );
 
-            // Update custom object if configured
             const consumer = await Consumer.findOne({ installId: instance.installId });
             if (consumer && consumer.actions?.receivesms?.custom_object_id) {
                 try {
-                    const eloquaService = new EloquaService(instance.installId, instance.SiteId);
-                    await eloquaService.initialize();
-                    
                     await DecisionController.updateCustomObject(
                         eloquaService,
                         instance,
@@ -1036,7 +915,6 @@ class DecisionController {
                         error: cdoError.message,
                         smsLogId: smsLog._id
                     });
-                    // Don't fail the whole process
                 }
             }
 
@@ -1060,21 +938,6 @@ class DecisionController {
     }
 
     /**
-     * Check if reply is within evaluation period
-     */
-    static isWithinEvaluationPeriod(sentAt, evaluationPeriodHours) {
-        if (evaluationPeriodHours === -1) {
-            return true;
-        }
-
-        const now = new Date();
-        const sentTime = new Date(sentAt);
-        const periodEnd = new Date(sentTime.getTime() + (evaluationPeriodHours * 60 * 60 * 1000));
-
-        return now.getTime() < periodEnd.getTime();
-    }
-
-    /**
      * Evaluate if reply matches criteria
      */
     static evaluateReply(replyMessage, textType, keyword) {
@@ -1082,96 +945,23 @@ class DecisionController {
 
         const cleanMessage = replyMessage.toLowerCase().trim();
 
-        // If "Anything" - any response is a match
         if (textType === 'Anything') {
             return true;
         }
 
-        // If "Keyword" - check for specific keywords
         if (textType === 'Keyword' && keyword) {
             const keywords = keyword.toLowerCase().split(',').map(k => k.trim());
-            return keywords.some(kw => {
-                // Check if message contains keyword (case-insensitive)
-                return cleanMessage.includes(kw);
-            });
+            return keywords.some(kw => cleanMessage.includes(kw));
         }
 
         return false;
     }
 
     /**
-     * Sync single decision result (for real-time reply processing)
-     */
-    static async syncSingleDecisionResult(instance, smsLog, decision) {
-        try {
-            logger.info('Syncing single decision result', {
-                instanceId: instance.instanceId,
-                contactId: smsLog.contactId,
-                decision
-            });
-
-            const consumer = await Consumer.findOne({ installId: instance.installId });
-            if (!consumer) {
-                throw new Error('Consumer not found');
-            }
-
-            const eloquaService = new EloquaService(instance.installId, instance.SiteId);
-            await eloquaService.initialize();
-
-            const instanceIdNoDashes = instance.instanceId.replace(/-/g, '');
-
-            const importDefinition = {
-                name: `SMS_Decision_${instanceIdNoDashes}_${decision}_${Date.now()}`,
-                fields: {
-                    ContactID: '{{Contact.Id}}',
-                    EmailAddress: '{{Contact.Field(C_EmailAddress)}}'
-                },
-                identifierFieldName: 'EmailAddress',
-                isSyncTriggeredOnImport: false,
-                dataRetentionDuration: 'P7D',
-                syncActions: [
-                    {
-                        destination: `{{DecisionInstance(${instanceIdNoDashes})}}`,
-                        action: "setDecision",
-                        value: decision
-                    }
-                ]
-            };
-
-            const importDef = await eloquaService.createBulkImport('contacts', importDefinition);
-
-            const contactData = [{
-                ContactID: smsLog.contactId,
-                EmailAddress: smsLog.emailAddress
-            }];
-
-            await eloquaService.uploadBulkImportData(importDef.uri, contactData);
-            const sync = await eloquaService.syncBulkImport(importDef.uri);
-
-            logger.info('Single decision sync completed', {
-                syncUri: sync.uri,
-                decision,
-                contactId: smsLog.contactId
-            });
-
-        } catch (error) {
-            logger.error('Error syncing single decision result', {
-                instanceId: instance.instanceId,
-                contactId: smsLog.contactId,
-                error: error.message,
-                stack: error.stack
-            });
-            throw error;
-        }
-    }
-
-    /**
      * Update custom object with reply data
-     * Uses consumer.actions.receivesms configuration
      */
     static async updateCustomObject(eloquaService, instance, consumer, smsLog, replyMessage) {
         try {
-            // Get custom object config from consumer
             const cdoConfig = consumer.actions?.receivesms;
             
             if (!cdoConfig || !cdoConfig.custom_object_id) {
@@ -1190,7 +980,6 @@ class DecisionController {
                 fieldValues: []
             };
 
-            // Map fields from consumer configuration
             if (cdoConfig.mobile_field) {
                 cdoData.fieldValues.push({
                     id: cdoConfig.mobile_field,
@@ -1208,7 +997,7 @@ class DecisionController {
             if (cdoConfig.response_field && replyMessage) {
                 cdoData.fieldValues.push({
                     id: cdoConfig.response_field,
-                    value: replyMessage.substring(0, 250) // Limit length
+                    value: replyMessage.substring(0, 250)
                 });
             }
 
@@ -1254,7 +1043,6 @@ class DecisionController {
 
     /**
      * Get custom objects (AJAX)
-     * GET /eloqua/decision/ajax/customobjects/:installId/:siteId/customObject
      */
     static getCustomObjects = asyncHandler(async (req, res) => {
         const { installId, siteId } = req.params;
@@ -1272,7 +1060,6 @@ class DecisionController {
 
     /**
      * Get custom object fields (AJAX)
-     * GET /eloqua/decision/ajax/customobject/:installId/:siteId/:customObjectId
      */
     static getCustomObjectFields = asyncHandler(async (req, res) => {
         const { installId, siteId, customObjectId } = req.params;
@@ -1291,10 +1078,8 @@ class DecisionController {
         res.json(customObject);
     });
 
-    // controllers/decisionController.js - ADD this method at the end, before module.exports
-
     /**
-     * Get decision report for decision instance
+     * Get decision report
      * GET /eloqua/decision/report/:instanceId
      */
     static getReport = asyncHandler(async (req, res) => {
@@ -1303,13 +1088,11 @@ class DecisionController {
         logger.info('Loading decision report', { instanceId });
 
         try {
-            // Get SMS logs for this decision instance
             const logs = await SmsLog.find({ decisionInstanceId: instanceId })
                 .sort({ decisionProcessedAt: -1, sentAt: -1 })
                 .limit(100)
                 .select('contactId emailAddress mobileNumber message responseMessage decisionStatus decisionProcessedAt sentAt hasResponse');
 
-            // Calculate statistics
             const stats = {
                 yes: 0,
                 no: 0,
