@@ -207,6 +207,8 @@ class DecisionController {
         });
     });
 
+    // controllers/decisionController.js - UPDATE notify method with EXTENSIVE logging
+
     /**
      * Notify - Execute decision
      * POST /eloqua/decision/notify
@@ -218,11 +220,70 @@ class DecisionController {
         const executionId = req.query.ExecutionId || req.query.executionId || req.params.executionId;
         const siteId = req.query.siteId || req.query.SiteId || req.params.SiteId;
         
-        // CRITICAL: Get items from req.body (not req.body.items)
-        // Eloqua sends the data directly in the body
+        // EXTREME LOGGING - Debug body parsing
+        logger.debug('Decision notify - Raw request data', {
+            instanceId,
+            executionId,
+            headers: {
+                contentType: req.headers['content-type'],
+                contentLength: req.headers['content-length'],
+                hasBody: !!req.body,
+                bodyType: typeof req.body,
+                bodyIsObject: typeof req.body === 'object',
+                bodyIsArray: Array.isArray(req.body),
+                bodyConstructor: req.body?.constructor?.name
+            },
+            body: {
+                raw: JSON.stringify(req.body).substring(0, 500),
+                keys: Object.keys(req.body || {}),
+                hasItems: 'items' in (req.body || {}),
+                itemsType: typeof req.body?.items,
+                itemsIsArray: Array.isArray(req.body?.items),
+                itemsLength: req.body?.items?.length
+            }
+        });
+
+        // Try multiple ways to extract items
+        let items = [];
+        
+        // Method 1: req.body.items (expected)
+        if (req.body && req.body.items && Array.isArray(req.body.items)) {
+            items = req.body.items;
+            logger.info('Items found via req.body.items', { count: items.length });
+        }
+        // Method 2: req.body is the array directly
+        else if (Array.isArray(req.body)) {
+            items = req.body;
+            logger.info('Items found via req.body (direct array)', { count: items.length });
+        }
+        // Method 3: Check if body is a string that needs parsing
+        else if (typeof req.body === 'string') {
+            try {
+                const parsed = JSON.parse(req.body);
+                if (Array.isArray(parsed)) {
+                    items = parsed;
+                    logger.info('Items found via JSON.parse(req.body) - direct array', { count: items.length });
+                } else if (parsed.items && Array.isArray(parsed.items)) {
+                    items = parsed.items;
+                    logger.info('Items found via JSON.parse(req.body).items', { count: items.length });
+                }
+            } catch (e) {
+                logger.error('Failed to parse req.body as JSON', { error: e.message });
+            }
+        }
+        // Method 4: Empty object/undefined
+        else {
+            logger.warn('No items found in any format', {
+                bodyExists: !!req.body,
+                bodyType: typeof req.body,
+                bodyKeys: Object.keys(req.body || {}),
+                rawBodyPreview: JSON.stringify(req.body).substring(0, 200)
+            });
+        }
+
         const executionData = {
-            items: req.body.items || req.body || [],
-            hasMore: req.body.hasMore || false
+            items: items,
+            hasMore: req.body?.hasMore || false
         };
 
         logger.info('Decision notify received', { 
@@ -231,14 +292,16 @@ class DecisionController {
             assetId,
             executionId,
             siteId,
-            recordCount: executionData.items.length,
+            recordCount: items.length,
             hasMore: executionData.hasMore,
-            bodyKeys: Object.keys(req.body),
-            hasItems: !!req.body.items,
-            bodyIsArray: Array.isArray(req.body)
+            bodyKeys: Object.keys(req.body || {}),
+            hasItems: !!req.body?.items,
+            bodyIsArray: Array.isArray(req.body),
+            itemsExtracted: items.length,
+            firstItemSample: items[0] ? JSON.stringify(items[0]).substring(0, 200) : 'none'
         });
 
-        // Return 204 immediately (async processing)
+        // Return 204 immediately
         res.status(204).send();
 
         // Process asynchronously

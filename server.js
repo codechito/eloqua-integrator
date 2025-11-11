@@ -8,7 +8,6 @@ const helmet = require('helmet');
 const morgan = require('morgan');
 const path = require('path');
 
-
 // Import database connection
 const connectDB = require('./config/database');
 
@@ -87,9 +86,74 @@ if (process.env.NODE_ENV === 'development') {
     app.use(morgan('dev'));
 }
 
+// ADD: Raw body capture for notify endpoints (BEFORE body-parser)
+app.use((req, res, next) => {
+    if (req.path.includes('/notify')) {
+        let rawData = '';
+        
+        req.on('data', chunk => {
+            rawData += chunk.toString('utf8');
+        });
+        
+        req.on('end', () => {
+            req.rawBody = rawData;
+            
+            logger.debug('Raw body captured', {
+                path: req.path,
+                method: req.method,
+                contentType: req.headers['content-type'],
+                contentLength: req.headers['content-length'],
+                rawBodyLength: rawData.length,
+                rawBodyPreview: rawData.substring(0, 500),
+                rawBodyFull: rawData.length < 2000 ? rawData : rawData.substring(0, 2000) + '... (truncated)'
+            });
+        });
+    }
+    next();
+});
+
 // Body parsing middleware
-app.use(bodyParser.json({ limit: '10mb' }));
-app.use(bodyParser.urlencoded({ extended: true, limit: '10mb' }));
+app.use(bodyParser.json({ 
+    limit: '10mb',
+    verify: (req, res, buf, encoding) => {
+        if (req.path.includes('/notify')) {
+            logger.debug('Body parser JSON verify', {
+                path: req.path,
+                bufferLength: buf.length,
+                bufferPreview: buf.toString('utf8').substring(0, 500),
+                encoding
+            });
+        }
+    }
+}));
+
+app.use(bodyParser.urlencoded({ 
+    extended: true, 
+    limit: '10mb'
+}));
+
+// ADD: Log parsed body for notify endpoints (AFTER body-parser)
+app.use((req, res, next) => {
+    if (req.path.includes('/notify')) {
+        logger.debug('Body after parsing', {
+            path: req.path,
+            method: req.method,
+            hasBody: !!req.body,
+            bodyType: typeof req.body,
+            bodyConstructor: req.body?.constructor?.name,
+            bodyIsArray: Array.isArray(req.body),
+            bodyIsObject: typeof req.body === 'object' && req.body !== null,
+            bodyKeys: req.body ? Object.keys(req.body) : [],
+            bodyKeysCount: req.body ? Object.keys(req.body).length : 0,
+            bodyStringified: JSON.stringify(req.body).substring(0, 1000),
+            hasItems: req.body && 'items' in req.body,
+            itemsType: req.body?.items ? typeof req.body.items : 'undefined',
+            itemsIsArray: Array.isArray(req.body?.items),
+            itemsLength: req.body?.items?.length
+        });
+    }
+    next();
+});
 
 // Cookie parser
 app.use(cookieParser());
@@ -240,7 +304,7 @@ app.use(errorHandler);
 
 // Initialize worker after routes are set up
 let smsWorker = null;
-let decisionCleanupWorker = null
+let decisionCleanupWorker = null;
 
 async function initializeWorker() {
     try {
@@ -260,8 +324,6 @@ async function initializeWorker() {
             schedule: 'Every 30 seconds'
         });
 
-        logger.info('SMS Worker started successfully');
-        
         // ADD DECISION CLEANUP WORKER
         logger.info('Initializing Decision Cleanup Worker...');
         
@@ -270,13 +332,10 @@ async function initializeWorker() {
         
         decisionCleanupWorker.start();
 
-        logger.info('Decision Cleaup Worker started successfully', {
+        logger.info('Decision Cleanup Worker started successfully', {
             mode: 'in-process-scheduled',
             schedule: 'Every 10 minutes'
         });
-
-        logger.info('SMS Worker started successfully');
-
         
         // Log worker stats periodically (every 5 minutes)
         setInterval(async () => {
@@ -289,7 +348,7 @@ async function initializeWorker() {
         }, 5 * 60 * 1000); // Every 5 minutes
         
     } catch (error) {
-        logger.error('Failed to initialize SMS Worker', {
+        logger.error('Failed to initialize workers', {
             error: error.message,
             stack: error.stack
         });
@@ -322,14 +381,8 @@ const server = app.listen(PORT,'0.0.0.0', async () => {
     console.log('========================================');
     console.log('  ✓ SMS Worker: Active (Scheduled)');
     console.log('  ✓ Schedule: Every 30 seconds');
-    console.log('  ✓ Cleanup: Daily at 2 AM');
-    console.log('  ✓ Retry Failed: Every 10 minutes');
-    console.log('========================================');
-    console.log('========================================');
-    console.log('  ✓ Decision Cleanup Worker: Active (Scheduled)');
+    console.log('  ✓ Decision Cleanup Worker: Active');
     console.log('  ✓ Schedule: Every 10 minutes');
-    console.log('  ✓ Cleanup: Daily at 2 AM');
-    console.log('  ✓ Retry Failed: Every 10 minutes');
     console.log('========================================');
 });
 
@@ -357,10 +410,13 @@ async function gracefulShutdown(signal) {
             logger.error('Error stopping SMS Worker', { error: error.message });
         }
     }
+    
+    // Stop decision cleanup worker
     if (decisionCleanupWorker) {
         try {
             decisionCleanupWorker.stop();
             logger.info('Decision Cleanup Worker stopped');
+            console.log('  ✓ Decision Cleanup Worker stopped');
         } catch (error) {
             logger.error('Error stopping Decision Cleanup Worker', { error: error.message });
         }
