@@ -214,35 +214,51 @@ class DecisionController {
     static notify = asyncHandler(async (req, res) => {
         const instanceId = req.query.instanceId || req.params.instanceId;
         const installId = req.query.installId || req.params.installId;
-        const assetId = req.query.AssetId || req.params.assetId;
-        const executionId = req.query.ExecutionId || req.params.executionId;
+        const assetId = req.query.AssetId || req.query.assetId || req.params.assetId;
+        const executionId = req.query.ExecutionId || req.query.executionId || req.params.executionId;
+        const siteId = req.query.siteId || req.query.SiteId || req.params.SiteId;
         
-        const executionData = req.body;
+        // CRITICAL: Get items from req.body (not req.body.items)
+        // Eloqua sends the data directly in the body
+        const executionData = {
+            items: req.body.items || req.body || [],
+            hasMore: req.body.hasMore || false
+        };
 
         logger.info('Decision notify received', { 
             instanceId, 
             installId,
             assetId,
             executionId,
-            recordCount: executionData.items?.length || 0
+            siteId,
+            recordCount: executionData.items.length,
+            hasMore: executionData.hasMore,
+            bodyKeys: Object.keys(req.body),
+            hasItems: !!req.body.items,
+            bodyIsArray: Array.isArray(req.body)
         });
+
+        // Return 204 immediately (async processing)
+        res.status(204).send();
 
         // Process asynchronously
         DecisionController.processNotifyAsync(
             instanceId, 
             installId,
+            siteId,
             assetId,
             executionId,
             executionData
         ).catch(error => {
             logger.error('Async decision notify failed', {
                 instanceId,
-                error: error.message
+                error: error.message,
+                stack: error.stack
             });
         });
-
-        res.status(204).send();
     });
+
+    
 
     /**
      * Copy instance
@@ -315,15 +331,36 @@ class DecisionController {
     /**
      * Process notify asynchronously (helper method)
      */
-    static async processNotifyAsync(instanceId, installId, assetId, executionId, executionData) {
+    static async processNotifyAsync(instanceId, installId, siteId, assetId, executionId, executionData) {
         try {
             logger.info('Starting async decision notify processing', {
                 instanceId,
                 installId,
+                siteId,
                 assetId,
                 executionId,
-                recordCount: executionData.items?.length || 0
+                recordCount: executionData.items?.length || 0,
+                hasMore: executionData.hasMore
             });
+
+            // Validate we have items
+            if (!executionData.items || !Array.isArray(executionData.items)) {
+                logger.warn('No items array in execution data', {
+                    instanceId,
+                    executionId,
+                    executionDataKeys: Object.keys(executionData),
+                    executionDataType: typeof executionData
+                });
+                return;
+            }
+
+            if (executionData.items.length === 0) {
+                logger.warn('Empty items array in execution data', {
+                    instanceId,
+                    executionId
+                });
+                return;
+            }
 
             const instance = await DecisionInstance.findOne({ 
                 instanceId, 
@@ -332,7 +369,10 @@ class DecisionController {
             });
             
             if (!instance) {
-                logger.error('Decision instance not found', { instanceId });
+                logger.error('Decision instance not found', { 
+                    instanceId,
+                    installId 
+                });
                 return;
             }
 
@@ -346,7 +386,8 @@ class DecisionController {
                 instanceId,
                 evaluationPeriod: instance.evaluation_period,
                 textType: instance.text_type,
-                keyword: instance.keyword
+                keyword: instance.keyword,
+                itemsToProcess: executionData.items.length
             });
 
             // Process each contact in the execution
@@ -356,10 +397,17 @@ class DecisionController {
                 errors: []
             };
 
-            for (const item of executionData.items || []) {
+            for (const item of executionData.items) {
                 try {
                     const contactId = item.ContactID || item.Id;
                     const emailAddress = item.EmailAddress || item.C_EmailAddress;
+
+                    if (!contactId) {
+                        logger.warn('Item missing ContactID', {
+                            itemKeys: Object.keys(item)
+                        });
+                        continue;
+                    }
 
                     logger.debug('Evaluating decision for contact', {
                         contactId,
