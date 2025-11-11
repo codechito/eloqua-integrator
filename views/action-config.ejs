@@ -405,6 +405,170 @@
         font-size: 13px;
         font-weight: bold;
       }
+
+      .report-section {
+        background: #fff;
+        border: 1px solid #dee2e6;
+        border-radius: 4px;
+        padding: 15px;
+        margin-bottom: 15px;
+      }
+
+      .report-section h5 {
+        margin: 0 0 15px 0;
+        font-size: 15px;
+        font-weight: bold;
+        color: #495057;
+        border-bottom: 2px solid #dee2e6;
+        padding-bottom: 8px;
+      }
+
+      .report-stats {
+        display: flex;
+        justify-content: space-around;
+        margin-bottom: 20px;
+        padding: 15px;
+        background: #f8f9fa;
+        border-radius: 4px;
+      }
+
+      .stat-card {
+        text-align: center;
+        flex: 1;
+      }
+
+      .stat-card .stat-number {
+        font-size: 32px;
+        font-weight: bold;
+        color: #007bff;
+        display: block;
+      }
+
+      .stat-card .stat-label {
+        font-size: 12px;
+        color: #6c757d;
+        text-transform: uppercase;
+        margin-top: 5px;
+      }
+
+      .stat-card.success .stat-number {
+        color: #28a745;
+      }
+
+      .stat-card.danger .stat-number {
+        color: #dc3545;
+      }
+
+      .stat-card.warning .stat-number {
+        color: #ffc107;
+      }
+
+      .report-table {
+        width: 100%;
+        border-collapse: collapse;
+        font-size: 13px;
+      }
+
+      .report-table thead {
+        background: #f8f9fa;
+      }
+
+      .report-table th {
+        padding: 10px;
+        text-align: left;
+        font-weight: bold;
+        color: #495057;
+        border-bottom: 2px solid #dee2e6;
+      }
+
+      .report-table td {
+        padding: 8px 10px;
+        border-bottom: 1px solid #e9ecef;
+      }
+
+      .report-table tbody tr:hover {
+        background: #f8f9fa;
+      }
+
+      .status-badge {
+        display: inline-block;
+        padding: 3px 8px;
+        border-radius: 12px;
+        font-size: 11px;
+        font-weight: bold;
+        text-transform: uppercase;
+      }
+
+      .status-badge.sent {
+        background: #d4edda;
+        color: #155724;
+      }
+
+      .status-badge.delivered {
+        background: #d1ecf1;
+        color: #0c5460;
+      }
+
+      .status-badge.failed {
+        background: #f8d7da;
+        color: #721c24;
+      }
+
+      .status-badge.pending {
+        background: #fff3cd;
+        color: #856404;
+      }
+
+      .report-filters {
+        display: flex;
+        gap: 10px;
+        margin-bottom: 15px;
+        align-items: center;
+      }
+
+      .report-filters select {
+        padding: 5px 10px;
+        border: 1px solid #ddd;
+        border-radius: 4px;
+        font-size: 13px;
+        height: auto;
+      }
+
+      .report-filters button {
+        padding: 5px 15px;
+        font-size: 13px;
+      }
+
+      .loading-spinner {
+        text-align: center;
+        padding: 40px;
+        color: #6c757d;
+      }
+
+      .no-data {
+        text-align: center;
+        padding: 40px;
+        color: #6c757d;
+        font-style: italic;
+      }
+
+      .pagination {
+        display: flex;
+        justify-content: center;
+        align-items: center;
+        gap: 10px;
+        margin-top: 15px;
+      }
+
+      .pagination button {
+        padding: 5px 10px;
+        font-size: 12px;
+      }
+
+      .pagination span {
+        font-size: 13px;
+        color: #6c757d;
+      }
     </style>
   </head>
   <body>
@@ -672,6 +836,106 @@ Opt-out reply STOP"></textarea>
           </div>
         </div>
 
+        <!-- SMS Report Section -->
+        <div class="report-section">
+          <h5>📊 SMS Send Report</h5>
+
+          <!-- Statistics -->
+          <div class="report-stats">
+            <div class="stat-card success">
+              <span class="stat-number">{{ reportStats.sent }}</span>
+              <span class="stat-label">Sent</span>
+            </div>
+            <div class="stat-card">
+              <span class="stat-number">{{ reportStats.delivered }}</span>
+              <span class="stat-label">Delivered</span>
+            </div>
+            <div class="stat-card danger">
+              <span class="stat-number">{{ reportStats.failed }}</span>
+              <span class="stat-label">Failed</span>
+            </div>
+            <div class="stat-card warning">
+              <span class="stat-number">{{ reportStats.pending }}</span>
+              <span class="stat-label">Pending</span>
+            </div>
+          </div>
+
+          <!-- Filters -->
+          <div class="report-filters">
+            <label style="font-size: 13px; margin: 0;">Filter:</label>
+            <select v-model="reportFilter" class="form-control" style="width: 150px;">
+              <option value="all">All Status</option>
+              <option value="sent">Sent</option>
+              <option value="delivered">Delivered</option>
+              <option value="failed">Failed</option>
+              <option value="pending">Pending</option>
+            </select>
+            <button @click="loadReport" class="btn btn-default" :disabled="loadingReport">
+              <span v-if="loadingReport">
+                <span class="spinner spinner-sm"></span>
+                Loading...
+              </span>
+              <span v-else>Refresh</span>
+            </button>
+          </div>
+
+          <!-- Loading State -->
+          <div v-if="loadingReport && reportLogs.length === 0" class="loading-spinner">
+            <div class="spinner"></div>
+            <p>Loading report data...</p>
+          </div>
+
+          <!-- No Data State -->
+          <div v-else-if="!loadingReport && reportLogs.length === 0" class="no-data">
+            No SMS sends recorded yet
+          </div>
+
+          <!-- Report Table -->
+          <div v-else>
+            <div style="overflow-x: auto;">
+              <table class="report-table">
+                <thead>
+                  <tr>
+                    <th>Contact</th>
+                    <th>Mobile Number</th>
+                    <th>Message Preview</th>
+                    <th>Status</th>
+                    <th>Sent At</th>
+                    <th>Delivered At</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr v-for="log in filteredReportLogs" :key="log._id">
+                    <td>{{ log.emailAddress || 'N/A' }}</td>
+                    <td>{{ log.mobileNumber }}</td>
+                    <td style="max-width: 200px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">
+                      {{ log.message ? log.message.substring(0, 50) + '...' : 'N/A' }}
+                    </td>
+                    <td>
+                      <span class="status-badge" :class="log.status">
+                        {{ log.status }}
+                      </span>
+                    </td>
+                    <td>{{ formatDate(log.sentAt) }}</td>
+                    <td>{{ log.deliveredAt ? formatDate(log.deliveredAt) : '-' }}</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+
+            <!-- Pagination -->
+            <div class="pagination">
+              <button @click="reportPage--" :disabled="reportPage <= 1" class="btn btn-default">
+                Previous
+              </button>
+              <span>Page {{ reportPage }} of {{ totalPages }}</span>
+              <button @click="reportPage++" :disabled="reportPage >= totalPages" class="btn btn-default">
+                Next
+              </button>
+            </div>
+          </div>
+        </div>
+
         <!-- Bottom Status (for SAVE action) -->
         <div v-if="status.success || status.error" 
              v-bind:class="{ 'alert-success': status.success, 'alert-danger': status.error, 'fade-out': statusFading }" 
@@ -757,7 +1021,20 @@ Opt-out reply STOP"></textarea>
           
           // Test SMS
           messageStatus: {},
-          testingSms: false
+          testingSms: false,
+
+          // Report data
+          reportLogs: [],
+          reportStats: {
+            sent: 0,
+            delivered: 0,
+            failed: 0,
+            pending: 0
+          },
+          reportFilter: 'all',
+          reportPage: 1,
+          reportLimit: 10,
+          loadingReport: false
         },
         computed: {
           messageLength: function() {
@@ -773,6 +1050,29 @@ Opt-out reply STOP"></textarea>
             return !!(this.consumer.actions && 
                      this.consumer.actions.sendsms && 
                      this.consumer.actions.sendsms.custom_object_id);
+          },
+          filteredReportLogs: function() {
+            if (this.reportFilter === 'all') {
+              return this.paginatedReportLogs;
+            }
+            var filtered = this.reportLogs.filter(log => log.status === this.reportFilter);
+            var start = (this.reportPage - 1) * this.reportLimit;
+            return filtered.slice(start, start + this.reportLimit);
+          },
+          paginatedReportLogs: function() {
+            var start = (this.reportPage - 1) * this.reportLimit;
+            return this.reportLogs.slice(start, start + this.reportLimit);
+          },
+          totalPages: function() {
+            var filtered = this.reportFilter === 'all' 
+              ? this.reportLogs 
+              : this.reportLogs.filter(log => log.status === this.reportFilter);
+            return Math.max(1, Math.ceil(filtered.length / this.reportLimit));
+          }
+        },
+        watch: {
+          reportFilter: function() {
+            this.reportPage = 1;
           }
         },
         methods: {
@@ -863,7 +1163,6 @@ Opt-out reply STOP"></textarea>
             
             var cdoId = this.consumer.actions.sendsms.custom_object_id;
             
-            // Load field IDs from consumer config
             this.cdoConfig = {
               mobile_field: this.consumer.actions.sendsms.mobile_field || null,
               email_field: this.consumer.actions.sendsms.email_field || null,
@@ -873,7 +1172,6 @@ Opt-out reply STOP"></textarea>
               vn_field: this.consumer.actions.sendsms.vn_field || null
             };
             
-            // Fetch CDO name
             axios.get('/eloqua/action/ajax/customobject/' + this.consumer.installId + '/' + this.consumer.SiteId + '/' + cdoId)
               .then(function(response) {
                 vm.cdoName = response.data.name || 'Custom Object';
@@ -930,7 +1228,6 @@ Opt-out reply STOP"></textarea>
             
             vm.testingSms = true;
             
-            // Process merge fields for test
             var templated_fields = testmessage.match(/\[C_[^\]]+\]/g);
             if (templated_fields) {
               templated_fields.forEach(function (field) {
@@ -978,7 +1275,6 @@ Opt-out reply STOP"></textarea>
           saveInstance: function(){
             var vm = this;
 
-            // Remove CDO fields - they shouldn't be saved here
             delete vm.instance.custom_object_id;
             delete vm.instance.email_field;
             delete vm.instance.mobile_field;
@@ -1013,10 +1309,47 @@ Opt-out reply STOP"></textarea>
               };
               window.scrollTo({ top: 0, behavior: 'smooth' });
             }
+          },
+
+          loadReport: function() {
+            var vm = this;
+            
+            if (!vm.instance.instanceId) {
+              return;
+            }
+
+            vm.loadingReport = true;
+
+            axios.get('/eloqua/action/report/' + vm.instance.instanceId)
+              .then(function(response) {
+                vm.reportLogs = response.data.logs || [];
+                vm.reportStats = response.data.stats || {
+                  sent: 0,
+                  delivered: 0,
+                  failed: 0,
+                  pending: 0
+                };
+                vm.loadingReport = false;
+              })
+              .catch(function(error) {
+                console.error('Error loading report:', error);
+                vm.loadingReport = false;
+              });
+          },
+
+          formatDate: function(dateString) {
+            if (!dateString) return '-';
+            var date = new Date(dateString);
+            return date.toLocaleString('en-US', {
+              month: 'short',
+              day: 'numeric',
+              year: 'numeric',
+              hour: '2-digit',
+              minute: '2-digit'
+            });
           }
         },
         mounted: function () {
-          // Ensure all fields have internalName
           this.fields = this.fields.map(function(field) {
             if (!field.internalName) {
               field.internalName = field.name ? field.name.replace(/\s+/g, '') : 'UnknownField';
@@ -1026,6 +1359,10 @@ Opt-out reply STOP"></textarea>
           
           this.getProgramFields();
           this.loadCdoInfo();
+          
+          if (this.instance.instanceId) {
+            this.loadReport();
+          }
         }
       });
     </script>

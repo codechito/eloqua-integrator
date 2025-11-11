@@ -1572,6 +1572,60 @@ class ActionController {
         }
     }
 
+    // controllers/actionController.js - ADD this method
+
+    /**
+     * Get SMS report for action instance
+     * GET /eloqua/action/report/:instanceId
+     */
+    static getReport = asyncHandler(async (req, res) => {
+        const { instanceId } = req.params;
+
+        logger.info('Loading action report', { instanceId });
+
+        try {
+            // Get SMS logs for this instance
+            const logs = await SmsLog.find({ instanceId })
+                .sort({ sentAt: -1 })
+                .limit(100)
+                .select('contactId emailAddress mobileNumber message status sentAt deliveredAt messageId');
+
+            // Calculate statistics
+            const stats = {
+                sent: 0,
+                delivered: 0,
+                failed: 0,
+                pending: 0
+            };
+
+            logs.forEach(log => {
+                if (log.status === 'sent') stats.sent++;
+                else if (log.status === 'delivered') stats.delivered++;
+                else if (log.status === 'failed') stats.failed++;
+                else if (log.status === 'pending') stats.pending++;
+            });
+
+            res.json({
+                success: true,
+                logs,
+                stats
+            });
+
+        } catch (error) {
+            logger.error('Error loading action report', {
+                instanceId,
+                error: error.message
+            });
+
+            res.status(500).json({
+                success: false,
+                error: error.message,
+                logs: [],
+                stats: { sent: 0, delivered: 0, failed: 0, pending: 0 }
+            });
+        }
+    });
+
     /**
      * Retrieve instance configuration
      * GET /eloqua/action/retrieve

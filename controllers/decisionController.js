@@ -1012,6 +1012,59 @@ class DecisionController {
         
         res.json(customObject);
     });
+
+    // controllers/decisionController.js - ADD this method at the end, before module.exports
+
+    /**
+     * Get decision report for decision instance
+     * GET /eloqua/decision/report/:instanceId
+     */
+    static getReport = asyncHandler(async (req, res) => {
+        const { instanceId } = req.params;
+
+        logger.info('Loading decision report', { instanceId });
+
+        try {
+            // Get SMS logs for this decision instance
+            const logs = await SmsLog.find({ decisionInstanceId: instanceId })
+                .sort({ decisionProcessedAt: -1, sentAt: -1 })
+                .limit(100)
+                .select('contactId emailAddress mobileNumber message responseMessage decisionStatus decisionProcessedAt sentAt hasResponse');
+
+            // Calculate statistics
+            const stats = {
+                yes: 0,
+                no: 0,
+                pending: 0,
+                total: logs.length
+            };
+
+            logs.forEach(log => {
+                if (log.decisionStatus === 'yes') stats.yes++;
+                else if (log.decisionStatus === 'no') stats.no++;
+                else if (log.decisionStatus === 'pending') stats.pending++;
+            });
+
+            res.json({
+                success: true,
+                logs,
+                stats
+            });
+
+        } catch (error) {
+            logger.error('Error loading decision report', {
+                instanceId,
+                error: error.message
+            });
+
+            res.status(500).json({
+                success: false,
+                error: error.message,
+                logs: [],
+                stats: { yes: 0, no: 0, pending: 0, total: 0 }
+            });
+        }
+    });
 }
 
 module.exports = DecisionController;

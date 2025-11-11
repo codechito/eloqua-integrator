@@ -11,6 +11,30 @@
     <link href="/eloqua-service/assets/css/bootstrap.min.css" rel="stylesheet">
     <link href="/eloqua-service/assets/css/main.css" rel="stylesheet">
     <style type="text/css">
+      @keyframes spin {
+        0% { transform: rotate(0deg); }
+        100% { transform: rotate(360deg); }
+      }
+
+      .spinner {
+        border: 3px solid #f3f3f3;
+        border-top: 3px solid #4CAF50;
+        border-radius: 50%;
+        width: 30px;
+        height: 30px;
+        animation: spin 1s linear infinite;
+        display: inline-block;
+        margin-right: 10px;
+      }
+
+      .spinner-sm {
+        width: 16px;
+        height: 16px;
+        border-width: 2px;
+        margin-right: 5px;
+        vertical-align: middle;
+      }
+
       body {
         font-family: Arial, sans-serif;
         padding: 0;
@@ -156,6 +180,167 @@
         border-top: 2px solid #dee2e6;
         margin: 30px 0;
       }
+
+      .report-section {
+        background: #fff;
+        border: 1px solid #dee2e6;
+        border-radius: 4px;
+        padding: 15px;
+        margin-bottom: 15px;
+      }
+
+      .report-section h5 {
+        margin: 0 0 15px 0;
+        font-size: 15px;
+        font-weight: bold;
+        color: #495057;
+        border-bottom: 2px solid #dee2e6;
+        padding-bottom: 8px;
+      }
+
+      .report-stats {
+        display: flex;
+        justify-content: space-around;
+        margin-bottom: 20px;
+        padding: 15px;
+        background: #f8f9fa;
+        border-radius: 4px;
+      }
+
+      .stat-card {
+        text-align: center;
+        flex: 1;
+      }
+
+      .stat-card .stat-number {
+        font-size: 32px;
+        font-weight: bold;
+        color: #007bff;
+        display: block;
+      }
+
+      .stat-card .stat-label {
+        font-size: 12px;
+        color: #6c757d;
+        text-transform: uppercase;
+        margin-top: 5px;
+      }
+
+      .stat-card.success .stat-number {
+        color: #28a745;
+      }
+
+      .stat-card.danger .stat-number {
+        color: #dc3545;
+      }
+
+      .stat-card.warning .stat-number {
+        color: #ffc107;
+      }
+
+      .report-table {
+        width: 100%;
+        border-collapse: collapse;
+        font-size: 13px;
+      }
+
+      .report-table thead {
+        background: #f8f9fa;
+      }
+
+      .report-table th {
+        padding: 10px;
+        text-align: left;
+        font-weight: bold;
+        color: #495057;
+        border-bottom: 2px solid #dee2e6;
+      }
+
+      .report-table td {
+        padding: 8px 10px;
+        border-bottom: 1px solid #e9ecef;
+      }
+
+      .report-table tbody tr:hover {
+        background: #f8f9fa;
+      }
+
+      .decision-badge {
+        display: inline-block;
+        padding: 3px 8px;
+        border-radius: 12px;
+        font-size: 11px;
+        font-weight: bold;
+        text-transform: uppercase;
+      }
+
+      .decision-badge.yes {
+        background: #d4edda;
+        color: #155724;
+      }
+
+      .decision-badge.no {
+        background: #f8d7da;
+        color: #721c24;
+      }
+
+      .decision-badge.pending {
+        background: #fff3cd;
+        color: #856404;
+      }
+
+      .report-filters {
+        display: flex;
+        gap: 10px;
+        margin-bottom: 15px;
+        align-items: center;
+      }
+
+      .report-filters select {
+        padding: 5px 10px;
+        border: 1px solid #ddd;
+        border-radius: 4px;
+        font-size: 13px;
+        height: auto;
+      }
+
+      .report-filters button {
+        padding: 5px 15px;
+        font-size: 13px;
+        width: auto;
+      }
+
+      .loading-spinner {
+        text-align: center;
+        padding: 40px;
+        color: #6c757d;
+      }
+
+      .no-data {
+        text-align: center;
+        padding: 40px;
+        color: #6c757d;
+        font-style: italic;
+      }
+
+      .pagination {
+        display: flex;
+        justify-content: center;
+        align-items: center;
+        gap: 10px;
+        margin-top: 15px;
+      }
+
+      .pagination button {
+        padding: 5px 10px;
+        font-size: 12px;
+        width: auto;
+      }
+
+      .pagination span {
+        font-size: 13px;
+        color: #6c757d;
+      }
     </style>
   </head>
   <body>
@@ -262,6 +447,109 @@
           </div>
         </div>
 
+        <div class="section-divider"></div>
+
+        <!-- Decision Report Section -->
+        <div class="report-section">
+          <h5>📊 Decision Evaluation Report</h5>
+
+          <!-- Statistics -->
+          <div class="report-stats">
+            <div class="stat-card success">
+              <span class="stat-number">{{ reportStats.yes }}</span>
+              <span class="stat-label">YES (Responded)</span>
+            </div>
+            <div class="stat-card danger">
+              <span class="stat-number">{{ reportStats.no }}</span>
+              <span class="stat-label">NO (No Response)</span>
+            </div>
+            <div class="stat-card warning">
+              <span class="stat-number">{{ reportStats.pending }}</span>
+              <span class="stat-label">Pending</span>
+            </div>
+            <div class="stat-card">
+              <span class="stat-number">{{ reportStats.total }}</span>
+              <span class="stat-label">Total Evaluated</span>
+            </div>
+          </div>
+
+          <!-- Filters -->
+          <div class="report-filters">
+            <label style="font-size: 13px; margin: 0;">Filter:</label>
+            <select v-model="reportFilter" class="form-control" style="width: 150px;">
+              <option value="all">All Decisions</option>
+              <option value="yes">YES</option>
+              <option value="no">NO</option>
+              <option value="pending">Pending</option>
+            </select>
+            <button @click="loadReport" class="btn btn-default" :disabled="loadingReport">
+              <span v-if="loadingReport">
+                <span class="spinner spinner-sm"></span>
+                Loading...
+              </span>
+              <span v-else>Refresh</span>
+            </button>
+          </div>
+
+          <!-- Loading State -->
+          <div v-if="loadingReport && reportLogs.length === 0" class="loading-spinner">
+            <div class="spinner"></div>
+            <p>Loading report data...</p>
+          </div>
+
+          <!-- No Data State -->
+          <div v-else-if="!loadingReport && reportLogs.length === 0" class="no-data">
+            No decisions evaluated yet
+          </div>
+
+          <!-- Report Table -->
+          <div v-else>
+            <div style="overflow-x: auto;">
+              <table class="report-table">
+                <thead>
+                  <tr>
+                    <th>Contact</th>
+                    <th>Mobile Number</th>
+                    <th>Original Message</th>
+                    <th>Response</th>
+                    <th>Decision</th>
+                    <th>Evaluated At</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr v-for="log in filteredReportLogs" :key="log._id">
+                    <td>{{ log.emailAddress || 'N/A' }}</td>
+                    <td>{{ log.mobileNumber }}</td>
+                    <td style="max-width: 150px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">
+                      {{ log.message ? log.message.substring(0, 40) + '...' : 'N/A' }}
+                    </td>
+                    <td style="max-width: 150px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">
+                      {{ log.responseMessage ? log.responseMessage.substring(0, 40) + '...' : '-' }}
+                    </td>
+                    <td>
+                      <span class="decision-badge" :class="log.decisionStatus">
+                        {{ log.decisionStatus }}
+                      </span>
+                    </td>
+                    <td>{{ formatDate(log.decisionProcessedAt || log.sentAt) }}</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+
+            <!-- Pagination -->
+            <div class="pagination">
+              <button @click="reportPage--" :disabled="reportPage <= 1" class="btn btn-default">
+                Previous
+              </button>
+              <span>Page {{ reportPage }} of {{ totalPages }}</span>
+              <button @click="reportPage++" :disabled="reportPage >= totalPages" class="btn btn-default">
+                Next
+              </button>
+            </div>
+          </div>
+        </div>
+
         <button 
           id="btnSave" 
           type="button" 
@@ -304,7 +592,19 @@
             response_field: null,
             title_field: null,
             vn_field: null
-          }
+          },
+          // Report data
+          reportLogs: [],
+          reportStats: {
+            yes: 0,
+            no: 0,
+            pending: 0,
+            total: 0
+          },
+          reportFilter: 'all',
+          reportPage: 1,
+          reportLimit: 10,
+          loadingReport: false
         },
         computed: {
           isValid: function() {
@@ -320,6 +620,29 @@
             return !!(this.consumer.actions && 
                      this.consumer.actions.receivesms && 
                      this.consumer.actions.receivesms.custom_object_id);
+          },
+          filteredReportLogs: function() {
+            if (this.reportFilter === 'all') {
+              return this.paginatedReportLogs;
+            }
+            var filtered = this.reportLogs.filter(log => log.decisionStatus === this.reportFilter);
+            var start = (this.reportPage - 1) * this.reportLimit;
+            return filtered.slice(start, start + this.reportLimit);
+          },
+          paginatedReportLogs: function() {
+            var start = (this.reportPage - 1) * this.reportLimit;
+            return this.reportLogs.slice(start, start + this.reportLimit);
+          },
+          totalPages: function() {
+            var filtered = this.reportFilter === 'all' 
+              ? this.reportLogs 
+              : this.reportLogs.filter(log => log.decisionStatus === this.reportFilter);
+            return Math.max(1, Math.ceil(filtered.length / this.reportLimit));
+          }
+        },
+        watch: {
+          reportFilter: function() {
+            this.reportPage = 1;
           }
         },
         methods: {
@@ -331,14 +654,13 @@
               return;
             }
 
-            // Prepare data with proper types and required fields
             const data = {
               instance: {
                 evaluation_period: parseInt(vm.instance.evaluation_period),
-                text_type: String(vm.instance.text_type), // Ensure it's a string
+                text_type: String(vm.instance.text_type),
                 keyword: vm.instance.text_type === 'Keyword' ? vm.instance.keyword : null,
-                SiteId: vm.consumer.SiteId, // Include SiteId from consumer
-                installId: vm.consumer.installId // Include installId
+                SiteId: vm.consumer.SiteId,
+                installId: vm.consumer.installId
               }
             };
 
@@ -426,10 +748,45 @@
                 console.error('Error loading CDO details:', error);
                 vm.cdoConfig.name = 'Custom Object (ID: ' + cdoId + ')';
               });
+          },
+          loadReport: function() {
+            var vm = this;
+            
+            if (!vm.instance.instanceId) {
+              return;
+            }
+
+            vm.loadingReport = true;
+
+            axios.get('/eloqua/decision/report/' + vm.instance.instanceId)
+              .then(function(response) {
+                vm.reportLogs = response.data.logs || [];
+                vm.reportStats = response.data.stats || {
+                  yes: 0,
+                  no: 0,
+                  pending: 0,
+                  total: 0
+                };
+                vm.loadingReport = false;
+              })
+              .catch(function(error) {
+                console.error('Error loading report:', error);
+                vm.loadingReport = false;
+              });
+          },
+          formatDate: function(dateString) {
+            if (!dateString) return '-';
+            var date = new Date(dateString);
+            return date.toLocaleString('en-US', {
+              month: 'short',
+              day: 'numeric',
+              year: 'numeric',
+              hour: '2-digit',
+              minute: '2-digit'
+            });
           }
         },
         mounted: function () {
-          // Set default values if not set
           if (!this.instance.evaluation_period) {
             this.instance.evaluation_period = 1;
           }
@@ -437,8 +794,11 @@
             this.instance.text_type = 'Anything';
           }
 
-          // Load CDO details if configured
           this.loadCdoDetails();
+          
+          if (this.instance.instanceId) {
+            this.loadReport();
+          }
         }
       });
     </script>

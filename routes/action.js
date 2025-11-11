@@ -24,6 +24,8 @@ router.post('/copy', verifyInstallation, ActionController.copy);
 router.post('/delete', verifyInstallation, ActionController.delete);
 router.post('/remove', verifyInstallation, ActionController.delete); // ADD THIS: alias
 
+router.get('/report/:instanceId', ActionController.getReport);
+
 // Worker status
 router.get('/worker/status', ActionController.getWorkerStatus);
 router.get('/worker/health', ActionController.getWorkerHealth); // ADD THIS
