@@ -100,6 +100,39 @@ class DecisionController {
     });
 
     /**
+     * Build recordDefinition for decision instance
+     * This defines what contact data Eloqua should send
+     */
+    static async buildRecordDefinition(instance) {
+        const recordDefinition = {};
+
+        logger.debug('Building recordDefinition for decision', {
+            instanceId: instance.instanceId,
+            hasProgramCDO: !!instance.program_coid
+        });
+
+        // ALWAYS include ContactID and EmailAddress (required!)
+        if (instance.program_coid) {
+            // Using Program Builder with CDO
+            recordDefinition.ContactID = "{{CustomObject.Contact.Id}}";
+            recordDefinition.EmailAddress = "{{CustomObject.Contact.Field(C_EmailAddress)}}";
+            recordDefinition.Id = "{{CustomObject.Id}}";
+        } else {
+            // Regular Campaign
+            recordDefinition.ContactID = "{{Contact.Id}}";
+            recordDefinition.EmailAddress = "{{Contact.Field(C_EmailAddress)}}";
+        }
+
+        logger.info('RecordDefinition built for decision', {
+            instanceId: instance.instanceId,
+            recordDefinition,
+            fieldCount: Object.keys(recordDefinition).length
+        });
+
+        return recordDefinition;
+    }
+
+    /**
      * Save configuration
      * POST /eloqua/decision/configure
      */
@@ -177,12 +210,83 @@ class DecisionController {
             requiresConfiguration: false
         });
 
-        res.json({
-            success: true,
-            message: 'Configuration saved successfully',
-            requiresConfiguration: false
-        });
+        // ============================================
+        // ADD: Update Eloqua instance with recordDefinition
+        // ============================================
+        try {
+            await DecisionController.updateEloquaInstance(instance);
+            
+            logger.info('Eloqua decision instance updated successfully', { instanceId });
+
+            res.json({
+                success: true,
+                message: 'Configuration saved successfully',
+                requiresConfiguration: false
+            });
+
+        } catch (error) {
+            logger.error('Failed to update Eloqua decision instance', {
+                instanceId,
+                error: error.message,
+                stack: error.stack
+            });
+
+            // Still return success for local save, but warn about Eloqua update
+            res.json({
+                success: true,
+                message: 'Configuration saved locally, but failed to update Eloqua',
+                warning: error.message,
+                requiresConfiguration: false
+            });
+        }
     });
+
+    /**
+     * Update Eloqua decision instance with recordDefinition
+     * This tells Eloqua what data to send to the notify endpoint
+     */
+    static async updateEloquaInstance(instance) {
+        try {
+            logger.info('Updating Eloqua decision instance', {
+                instanceId: instance.instanceId,
+                installId: instance.installId,
+                SiteId: instance.SiteId
+            });
+
+            const eloquaService = new EloquaService(instance.installId, instance.SiteId);
+            await eloquaService.initialize();
+
+            // Build recordDefinition - tells Eloqua what fields to send
+            const recordDefinition = await DecisionController.buildRecordDefinition(instance);
+
+            // Prepare update payload
+            const updatePayload = {
+                recordDefinition: recordDefinition,
+                requiresConfiguration: false
+            };
+
+            logger.info('Updating Eloqua decision instance with recordDefinition', {
+                instanceId: instance.instanceId,
+                recordDefinition,
+                requiresConfiguration: false
+            });
+
+            // Call Eloqua API to update instance
+            await eloquaService.updateDecisionInstance(instance.instanceId, updatePayload);
+
+            logger.info('Eloqua decision instance updated successfully', {
+                instanceId: instance.instanceId
+            });
+
+        } catch (error) {
+            logger.error('Error updating Eloqua decision instance', {
+                instanceId: instance.instanceId,
+                error: error.message,
+                stack: error.stack
+            });
+            throw error;
+        }
+    }
 
     /**
      * Retrieve instance configuration
