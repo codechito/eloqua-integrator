@@ -24,7 +24,7 @@ router.post('/copy', verifyInstallation, DecisionController.copy);
 router.post('/delete', verifyInstallation, DecisionController.delete);
 router.post('/remove', verifyInstallation, DecisionController.delete);
 
-router.get('/report/:instanceId', ActionController.getReport);
+router.get('/report/:instanceId', DecisionController.getReport);
 
 // AJAX endpoints - use sessionAuth for security
 router.get('/ajax/customobjects/:installId/:siteId/customObject',
