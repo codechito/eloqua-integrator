@@ -872,8 +872,10 @@ class EloquaService {
 
     // services/eloquaService.js - ADD this method
 
+    // services/eloquaService.js - ADD this method at the end of the class
+
     /**
-     * Set decision for a contact
+     * Set decision for a contact using Decision API
      * POST /api/cloud/1.0/decisions/instances/{instanceId}/contacts/{contactId}
      */
     async setDecision(instanceId, contactId, decision) {
@@ -889,12 +891,13 @@ class EloquaService {
                 decision: decision // "yes" or "no"
             };
 
-            logger.debug('Setting decision', {
+            logger.debug('Setting decision via Decision API', {
                 instanceId: cleanInstanceId,
                 contactId,
                 decision,
                 url,
-                fullUrl: `${this.baseURL}${url}`
+                fullUrl: `${this.baseURL}${url}`,
+                payload
             });
 
             const response = await this.client.post(url, payload);
@@ -903,7 +906,8 @@ class EloquaService {
                 instanceId: cleanInstanceId,
                 contactId,
                 decision,
-                status: response.status
+                status: response.status,
+                responseData: response.data
             });
 
             return response.data;
@@ -916,7 +920,8 @@ class EloquaService {
                 error: error.message,
                 status: error.response?.status,
                 statusText: error.response?.statusText,
-                responseData: error.response?.data
+                responseData: error.response?.data,
+                url: error.config?.url
             });
             throw error;
         }

@@ -785,11 +785,11 @@ class DecisionController {
      * Sync single decision result using Decision API
      * This is the correct way to set decisions in Eloqua
      */
-    static async syncSingleDecisionResult(instance, smsLog, decision) {
+    static async syncSingleDecisionResult(instance, contact, decision) {
         try {
             logger.info('Syncing single decision result', {
                 instanceId: instance.instanceId,
-                contactId: smsLog.contactId,
+                contactId: contact.contactId,
                 decision
             });
 
@@ -802,31 +802,28 @@ class DecisionController {
             await eloquaService.initialize();
 
             // Use Decision API endpoint to set the decision
-            // Format: POST /api/cloud/1.0/decisions/instances/{instanceId}/contacts/{contactId}
             const instanceIdNoDashes = instance.instanceId.replace(/-/g, '');
             
-            const decisionData = {
-                decision: decision // "yes" or "no"
-            };
-
-            logger.debug('Setting decision via API', {
+            logger.debug('Setting decision via Decision API', {
                 instanceId: instanceIdNoDashes,
-                contactId: smsLog.contactId,
-                decision
+                contactId: contact.contactId,
+                decision,
+                fullUrl: `${eloquaService.baseURL}/api/cloud/1.0/decisions/instances/${instanceIdNoDashes}/contacts/${contact.contactId}`
             });
 
-            await eloquaService.setDecision(instanceIdNoDashes, smsLog.contactId, decision);
+            // Call the Decision API (not Bulk API!)
+            await eloquaService.setDecision(instanceIdNoDashes, contact.contactId, decision);
 
-            logger.info('Decision set successfully', {
+            logger.info('Decision set successfully via Decision API', {
                 instanceId: instance.instanceId,
-                contactId: smsLog.contactId,
+                contactId: contact.contactId,
                 decision
             });
 
         } catch (error) {
             logger.error('Error syncing single decision result', {
                 instanceId: instance.instanceId,
-                contactId: smsLog.contactId,
+                contactId: contact.contactId,
                 error: error.message,
                 stack: error.stack
             });
