@@ -552,7 +552,9 @@ class ActionController {
         });
     });
 
-   /**
+    // controllers/actionController.js - UPDATE saveConfiguration method
+
+    /**
      * Save configuration and update Eloqua instance
      * POST /eloqua/action/configure
      */
@@ -567,10 +569,7 @@ class ActionController {
                 country_field: instanceData.country_field,
                 message: instanceData.message?.substring(0, 50) + '...',
                 tracked_link: instanceData.tracked_link,
-                caller_id: instanceData.caller_id,
-                custom_object_id: instanceData.custom_object_id,
-                hasTrackedLink: !!instanceData.tracked_link,
-                messageHasTrackedLinkPlaceholder: instanceData.message?.includes('[tracked-link]')
+                caller_id: instanceData.caller_id
             }
         });
 
@@ -583,99 +582,52 @@ class ActionController {
                 ...instanceData 
             });
         } else {
-            logger.info('Updating existing action instance', { 
-                instanceId,
-                existingFields: Object.keys(instance.toObject())
-            });
-            
-            // Update all fields from instanceData
+            logger.info('Updating existing action instance', { instanceId });
             Object.assign(instance, instanceData);
         }
 
-        // Mark configuration date
+        // Remove CDO fields - they shouldn't be stored here
+        instance.custom_object_id = undefined;
+        instance.email_field = undefined;
+        instance.mobile_field = undefined;
+        instance.title_field = undefined;
+        instance.notification_field = undefined;
+        instance.outgoing_field = undefined;
+        instance.vn_field = undefined;
+
         instance.configureAt = new Date();
-
-        // Check if configuration is complete
-        const isConfigured = ActionController.validateConfiguration(instance);
-        instance.requiresConfiguration = !isConfigured;
-
-        // **CRITICAL: Log what's about to be saved**
-        logger.debug('Instance data before save', {
-            instanceId: instance.instanceId,
-            message: instance.message?.substring(0, 50) + '...',
-            tracked_link: instance.tracked_link,
-            hasTrackedLink: !!instance.tracked_link,
-            recipient_field: instance.recipient_field,
-            country_field: instance.country_field,
-            caller_id: instance.caller_id,
-            custom_object_id: instance.custom_object_id,
-            messageHasPlaceholder: instance.message?.includes('[tracked-link]')
-        });
+        instance.requiresConfiguration = !ActionController.validateConfiguration(instance);
 
         await instance.save();
 
-        // **VERIFY what was actually saved by reloading from database**
-        const savedInstance = await ActionInstance.findOne({ instanceId });
-        
-        logger.info('Instance saved to database (verified)', {
-            instanceId: savedInstance.instanceId,
-            recipient_field: savedInstance.recipient_field,
-            country_field: savedInstance.country_field,
-            message: savedInstance.message?.substring(0, 50) + '...',
-            tracked_link: savedInstance.tracked_link,
-            hasTrackedLink: !!savedInstance.tracked_link,
-            caller_id: savedInstance.caller_id,
-            custom_object_id: savedInstance.custom_object_id,
-            messageHasPlaceholder: savedInstance.message?.includes('[tracked-link]'),
-            fieldsInDB: Object.keys(savedInstance.toObject())
-        });
-
-        // **ALERT: If message has [tracked-link] but no tracked_link URL configured**
-        if (savedInstance.message?.includes('[tracked-link]') && !savedInstance.tracked_link) {
-            logger.warn('Message contains [tracked-link] placeholder but no tracked_link URL configured!', {
-                instanceId: savedInstance.instanceId,
-                messagePreview: savedInstance.message.substring(0, 100)
-            });
-        }
-
         logger.info('Action configuration saved', { 
             instanceId,
-            requiresConfiguration: instance.requiresConfiguration,
-            isConfigured
+            requiresConfiguration: instance.requiresConfiguration
         });
 
-        // Update Eloqua instance with recordDefinition
+        // Update Eloqua instance
         try {
-            await ActionController.updateEloquaInstance(savedInstance);
+            await ActionController.updateEloquaInstance(instance);
             
             logger.info('Eloqua instance updated successfully', { instanceId });
 
             res.json({
                 success: true,
                 message: 'Configuration saved successfully',
-                requiresConfiguration: savedInstance.requiresConfiguration,
-                debug: {
-                    hasTrackedLink: !!savedInstance.tracked_link,
-                    messageHasPlaceholder: savedInstance.message?.includes('[tracked-link]')
-                }
+                requiresConfiguration: instance.requiresConfiguration
             });
 
         } catch (error) {
             logger.error('Failed to update Eloqua instance', {
                 instanceId,
-                error: error.message,
-                stack: error.stack
+                error: error.message
             });
 
             res.json({
                 success: true,
                 message: 'Configuration saved locally, but failed to update Eloqua',
                 warning: error.message,
-                requiresConfiguration: savedInstance.requiresConfiguration,
-                debug: {
-                    hasTrackedLink: !!savedInstance.tracked_link,
-                    messageHasPlaceholder: savedInstance.message?.includes('[tracked-link]')
-                }
+                requiresConfiguration: instance.requiresConfiguration
             });
         }
     });
@@ -1528,71 +1480,95 @@ class ActionController {
         }
     }
 
+    // controllers/actionController.js - UPDATE updateCustomObjectForJob
+
     /**
      * Update custom object after SMS sent
+     * Uses consumer.actions.sendsms configuration
      */
     static async updateCustomObjectForJob(eloquaService, job, smsLog) {
         try {
+            // Get consumer to access CDO configuration
+            const consumer = await Consumer.findOne({ installId: job.installId });
+            if (!consumer) {
+                throw new Error('Consumer not found');
+            }
+
+            const cdoConfig = consumer.actions?.sendsms;
+            if (!cdoConfig || !cdoConfig.custom_object_id) {
+                logger.debug('No custom object configured for sendsms', {
+                    installId: job.installId
+                });
+                return;
+            }
+
+            logger.debug('Updating custom object for SMS send', {
+                customObjectId: cdoConfig.custom_object_id,
+                jobId: job.jobId
+            });
+
             const cdoData = {
                 fieldValues: []
             };
 
-            const { customObjectId, fieldMappings } = job.customObjectData;
-
-            if (fieldMappings.mobile_field) {
+            if (cdoConfig.mobile_field) {
                 cdoData.fieldValues.push({
-                    id: fieldMappings.mobile_field,
+                    id: cdoConfig.mobile_field,
                     value: smsLog.mobileNumber
                 });
             }
 
-            if (fieldMappings.email_field) {
+            if (cdoConfig.email_field) {
                 cdoData.fieldValues.push({
-                    id: fieldMappings.email_field,
+                    id: cdoConfig.email_field,
                     value: smsLog.emailAddress
                 });
             }
 
-            if (fieldMappings.outgoing_field) {
+            if (cdoConfig.outgoing_field) {
                 cdoData.fieldValues.push({
-                    id: fieldMappings.outgoing_field,
+                    id: cdoConfig.outgoing_field,
                     value: smsLog.message
                 });
             }
 
-            if (fieldMappings.notification_field) {
+            if (cdoConfig.notification_field) {
                 cdoData.fieldValues.push({
-                    id: fieldMappings.notification_field,
+                    id: cdoConfig.notification_field,
                     value: 'sent'
                 });
             }
 
-            if (fieldMappings.vn_field && smsLog.senderId) {
+            if (cdoConfig.vn_field && smsLog.senderId) {
                 cdoData.fieldValues.push({
-                    id: fieldMappings.vn_field,
+                    id: cdoConfig.vn_field,
                     value: smsLog.senderId
                 });
             }
 
-            if (fieldMappings.title_field) {
+            if (cdoConfig.title_field) {
                 cdoData.fieldValues.push({
-                    id: fieldMappings.title_field,
+                    id: cdoConfig.title_field,
                     value: smsLog.campaignTitle || ''
                 });
             }
 
-            await eloquaService.createCustomObjectRecord(customObjectId, cdoData);
+            if (cdoData.fieldValues.length > 0) {
+                await eloquaService.createCustomObjectRecord(cdoConfig.custom_object_id, cdoData);
 
-            logger.debug('Custom object updated for job', {
-                jobId: job.jobId,
-                customObjectId
-            });
+                logger.debug('Custom object updated for job', {
+                    jobId: job.jobId,
+                    customObjectId: cdoConfig.custom_object_id,
+                    fieldCount: cdoData.fieldValues.length
+                });
+            }
 
         } catch (error) {
             logger.error('Error updating custom object for job', {
                 jobId: job.jobId,
                 error: error.message
             });
+            // Don't throw - log creation should not fail the SMS send
         }
     }
 

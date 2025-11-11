@@ -1,3 +1,4 @@
+<!-- views/decision-config.ejs -->
 <!DOCTYPE html>
 <html>
   <head>
@@ -9,143 +10,311 @@
 
     <link href="/eloqua-service/assets/css/bootstrap.min.css" rel="stylesheet">
     <link href="/eloqua-service/assets/css/main.css" rel="stylesheet">
-    <link rel="stylesheet" href="https://unpkg.com/vue-select@3.0.0/dist/vue-select.css">
     <style type="text/css">
-      .autocomplete {
-        position: relative;
+      body {
+        font-family: Arial, sans-serif;
+        padding: 0;
+        margin: 0;
       }
-      .autocomplete label {
+      .container {
+        max-width: 700px;
+        margin: 40px auto;
+        padding: 30px;
+        background: #fff;
+      }
+      h4 {
+        font-size: 20px;
+        font-weight: bold;
+        text-align: center;
+        margin-bottom: 30px;
+      }
+      h4 img {
+        vertical-align: middle;
+        margin-right: 10px;
+      }
+      .form-group {
+        margin-bottom: 20px;
+      }
+      .form-group label {
         display: block;
-        margin-bottom: 5px;
+        font-weight: bold;
+        margin-bottom: 8px;
         font-size: 14px;
-        font-weight: 100;
       }
-      .autocomplete-input {
-        padding: 7px 10px;
-        width: 93%;
+      .form-control {
+        width: 100%;
+        padding: 10px;
         border: 1px solid #ddd;
         border-radius: 4px;
+        font-size: 14px;
+        box-sizing: border-box;
+      }
+      .form-control:focus {
         outline: none;
+        border-color: #007bff;
       }
-      .autocomplete-input:focus {
-        border-color: #000;
-      }
-      .autocomplete-list {
-        position: absolute;
-        z-index: 2;
-        overflow: auto;
-        min-width: 250px;
-        max-height: 150px;
-        margin: 0;
+      .help-text {
+        font-size: 12px;
+        color: #666;
         margin-top: 5px;
-        padding: 0;
-        border: 1px solid #eee;
-        list-style: none;
+        line-height: 1.4;
+      }
+      .btn {
+        padding: 12px 30px;
+        background: #007bff;
+        color: white;
+        border: none;
         border-radius: 4px;
-        background-color: #fff;
-        box-shadow: 0 5px 25px rgba(0, 0, 0, 0.05);
+        cursor: pointer;
+        font-size: 14px;
+        font-weight: bold;
+        width: 100%;
+        margin-top: 10px;
       }
-      .autocomplete-list li {
+      .btn:hover {
+        background: #0056b3;
+      }
+      .btn:disabled {
+        background: #ccc;
+        cursor: not-allowed;
+      }
+      .alert {
+        padding: 12px 15px;
+        border-radius: 4px;
+        margin-bottom: 20px;
+        font-size: 14px;
+      }
+      .alert-success {
+        background: #d4edda;
+        border: 1px solid #c3e6cb;
+        color: #155724;
+      }
+      .alert-danger {
+        background: #f8d7da;
+        border: 1px solid #f5c6cb;
+        color: #721c24;
+      }
+      .alert.fade {
+        opacity: 0;
+        transition: opacity 0.5s ease-in-out;
+      }
+      .alert.fade.in {
+        opacity: 1;
+      }
+      .info-box {
+        background: #e7f3ff;
+        border-left: 4px solid #007bff;
+        padding: 15px;
+        margin-bottom: 20px;
+        border-radius: 4px;
+      }
+      .info-box p {
         margin: 0;
-        padding: 8px 15px;
-        border-bottom: 1px solid #f5f5f5;
+        font-size: 13px;
+        line-height: 1.6;
+        color: #004085;
       }
-      .autocomplete-list li:last-child {
-        border-bottom: 0;
+      .info-box strong {
+        display: block;
+        margin-bottom: 5px;
       }
-      .autocomplete-list li:hover, .autocomplete-list li.active {
-        background-color: #f5f5f5;
+      .warning-box {
+        background: #fff3cd;
+        border-left: 4px solid #ffc107;
+        padding: 15px;
+        margin-bottom: 20px;
+        border-radius: 4px;
+      }
+      .warning-box p {
+        margin: 0;
+        font-size: 13px;
+        line-height: 1.6;
+        color: #856404;
+      }
+      .cdo-mapping-box {
+        background: #f8f9fa;
+        border: 1px solid #dee2e6;
+        border-radius: 4px;
+        padding: 15px;
+        margin-bottom: 20px;
+      }
+      .cdo-mapping-box h5 {
+        margin: 0 0 15px 0;
+        font-size: 15px;
+        font-weight: bold;
+        color: #495057;
+        border-bottom: 2px solid #dee2e6;
+        padding-bottom: 8px;
+      }
+      .cdo-field-row {
+        display: flex;
+        justify-content: space-between;
+        padding: 8px 0;
+        border-bottom: 1px solid #e9ecef;
+        font-size: 13px;
+      }
+      .cdo-field-row:last-child {
+        border-bottom: none;
+      }
+      .cdo-field-label {
+        font-weight: 600;
+        color: #6c757d;
+        flex: 0 0 40%;
+      }
+      .cdo-field-value {
+        color: #212529;
+        flex: 1;
+        text-align: right;
+        font-family: 'Courier New', monospace;
+      }
+      .cdo-no-config {
+        text-align: center;
+        color: #6c757d;
+        font-style: italic;
+        padding: 10px;
+      }
+      .cdo-name {
+        background: #007bff;
+        color: white;
+        padding: 8px 12px;
+        border-radius: 4px;
+        margin-bottom: 15px;
+        font-size: 13px;
+        font-weight: bold;
+      }
+      .section-divider {
+        border-top: 2px solid #dee2e6;
+        margin: 30px 0;
       }
     </style>
   </head>
   <body>
-    <div class="disabler"></div>
-    <div class="container" id="receivesmsaction" style="width: 900px; text-align: center; padding-top: 40px;">
+    <div class="container" id="receivesmsaction">
       <form method="post">
-        <h4 style="font-size: 20px; font-weight: bold; text-align: center;">
-          <img src="/eloqua-service/assets/images/received-sms-el-icon.png">&nbsp;Check for Received SMS
+        <h4>
+          <img src="/eloqua-service/assets/images/received-sms-el-icon.png" width="24" height="24">
+          Check for Received SMS
         </h4>
-        <br/>
-        <div v-if="status.success || status.error" v-bind:class="{ 'alert-success': status.success, 'alert-danger': status.error, 'in': fade }" class="alert alert-dismissible fade" role="alert">
+
+        <div v-if="status.success || status.error" 
+             v-bind:class="{ 'alert-success': status.success, 'alert-danger': status.error, 'in': fade }" 
+             class="alert fade" 
+             role="alert">
           {{ status.success || status.error }}
         </div>
 
-        <!-- Left Column -->
-        <div style="width: 47%; float: left; text-align: left; padding-right: 20px; border-right: 2px solid #ccc; min-height: 500px;">
-          <div class="form-group">
-            <label for="evaluation_period" style="width: 100%; text-align: left;">How long should we wait?</label>
-            <select style="width: 100%; text-align: left;" v-model="instance.evaluation_period" class="form-control">
-              <option v-for="hour in evaluation" v-bind:value="hour">{{ hour }} HR</option>
-            </select>
-          </div>
+        <div class="info-box">
+          <p>
+            <strong>How it works:</strong>
+            This decision step checks if contacts replied to SMS messages sent earlier in the campaign.
+            Contacts who respond within the evaluation period will go down the <strong>YES</strong> path.
+            Others will go down the <strong>NO</strong> path.
+          </p>
+        </div>
 
-          <div class="form-group">
-            <label for="text_type" style="width: 100%; text-align: left;">What type of text?</label>
-            <select v-model="instance.text_type" style="width: 100%; text-align: left;" class="form-control">
-              <option v-for="type in texttype" v-bind:value="type">{{ type }}</option>
-            </select>
-          </div>
-
-          <div class="form-group" v-show="instance.text_type == 'Keyword'">
-            <label for="keyword" style="width: 100%; text-align: left;">Keyword</label>
-            <input type="text" v-model="instance.keyword" style="width: 100%;" class="form-control"/>
+        <!-- Decision Configuration -->
+        <div class="form-group">
+          <label for="evaluation_period">Evaluation Period (hours)</label>
+          <select v-model="instance.evaluation_period" class="form-control" id="evaluation_period" required>
+            <option v-for="hour in evaluation" v-bind:value="hour">{{ hour }} hour{{ hour > 1 ? 's' : '' }}</option>
+          </select>
+          <div class="help-text">
+            How long to wait for a response after SMS is sent (1-168 hours)
           </div>
         </div>
 
-        <!-- Right Column -->
-        <div style="width: 47%; float: right; text-align: left; padding-left: 20px;">
-          <div class="form-group">
-            <label for="message" style="width: 100%; text-align: left;">Custom Object Mapping</label>
-            <v-select  
-              label="name"
-              style="width: 100%;"
-              v-model="instance.custom_object_id" 
-              :reduce="element => element.id" 
-              :options="comap" 
-              @search="fetchOptionsmap" 
-              @input="getFields()">
-            </v-select>
-          </div>
-
-          <div class="form-group" v-show="instance.custom_object_id">
-            <label for="message" style="width: 100%; text-align: left;">Map Contact Mobile To</label>
-            <select v-model="instance.mobile_field" style="width: 100%;" class="form-control">
-              <option value="">-- Select --</option>
-              <option v-for="field in cdofields" v-bind:value="field.internalName">{{ field.name }}</option>
-            </select>
-          </div>
-
-          <div class="form-group" v-show="instance.custom_object_id">
-            <label for="message" style="width: 100%; text-align: left;">Map Contact Email To</label>
-            <select v-model="instance.email_field" style="width: 100%;" class="form-control">
-              <option value="">-- Select --</option>
-              <option v-for="field in cdofields" v-bind:value="field.internalName">{{ field.name }}</option>
-            </select>
-          </div>
-
-          <div class="form-group" v-show="instance.custom_object_id">
-            <label for="message" style="width: 100%; text-align: left;">Map Contact Reply To</label>
-            <select v-model="instance.response_field" style="width: 100%;" class="form-control">
-              <option value="">-- Select --</option>
-              <option v-for="field in cdofields" v-bind:value="field.internalName">{{ field.name }}</option>
-            </select>
-          </div>
-
-          <div class="form-group" v-show="instance.custom_object_id">
-            <label for="message" style="width: 100%; text-align: left;">Map Campaign Title To</label>
-            <select v-model="instance.title_field" style="width: 100%;" class="form-control">
-              <option value="">-- Select --</option>
-              <option v-for="field in cdofields" v-bind:value="field.internalName">{{ field.name }}</option>
-            </select>
+        <div class="form-group">
+          <label for="text_type">Response Type</label>
+          <select v-model="instance.text_type" class="form-control" id="text_type" required>
+            <option value="Anything">Any Response</option>
+            <option value="Keyword">Specific Keyword(s)</option>
+          </select>
+          <div class="help-text">
+            Choose whether any response counts as "YES" or only specific keywords
           </div>
         </div>
 
-        <!-- Clear float and button -->
-        <div style="clear: both; padding-top: 20px;">
-          <button id="btnSave" type="button" v-on:click="saveInstance()" class="btn btn-default" style="margin: 0 auto; display: block;">SAVE</button>
+        <div class="form-group" v-show="instance.text_type === 'Keyword'">
+          <label for="keyword">Keywords (comma-separated)</label>
+          <input 
+            type="text" 
+            v-model="instance.keyword" 
+            class="form-control" 
+            id="keyword"
+            placeholder="e.g., YES, CONFIRM, OK, INTERESTED"
+            v-bind:required="instance.text_type === 'Keyword'">
+          <div class="help-text">
+            Enter keywords to match (case-insensitive). Separate multiple keywords with commas.
+          </div>
         </div>
 
-        <div v-if="status.success || status.error" v-bind:class="{ 'alert-success': status.success, 'alert-danger': status.error, 'in': fade }" class="alert alert-dismissible fade" role="alert" style="margin-top: 20px;">
+        <div class="section-divider"></div>
+
+        <!-- Custom Object Mapping Display -->
+        <div class="cdo-mapping-box">
+          <h5>📋 Custom Object Mapping</h5>
+          
+          <div v-if="hasCdoConfig">
+            <div class="cdo-name">
+              ✓ Custom Object: {{ cdoConfig.name || 'Loading...' }}
+            </div>
+            
+            <div class="cdo-field-row" v-if="cdoConfig.mobile_field">
+              <span class="cdo-field-label">Mobile Number:</span>
+              <span class="cdo-field-value">{{ cdoConfig.mobile_field }}</span>
+            </div>
+            
+            <div class="cdo-field-row" v-if="cdoConfig.email_field">
+              <span class="cdo-field-label">Email Address:</span>
+              <span class="cdo-field-value">{{ cdoConfig.email_field }}</span>
+            </div>
+            
+            <div class="cdo-field-row" v-if="cdoConfig.response_field">
+              <span class="cdo-field-label">Reply Message:</span>
+              <span class="cdo-field-value">{{ cdoConfig.response_field }}</span>
+            </div>
+            
+            <div class="cdo-field-row" v-if="cdoConfig.title_field">
+              <span class="cdo-field-label">Campaign Title:</span>
+              <span class="cdo-field-value">{{ cdoConfig.title_field }}</span>
+            </div>
+            
+            <div class="cdo-field-row" v-if="cdoConfig.vn_field">
+              <span class="cdo-field-label">Virtual Number:</span>
+              <span class="cdo-field-value">{{ cdoConfig.vn_field }}</span>
+            </div>
+
+            <div class="help-text" style="margin-top: 15px; padding-top: 10px; border-top: 1px solid #dee2e6;">
+              <strong>Note:</strong> Reply data will be automatically logged to this custom object.
+              To change these mappings, go to <strong>Application Settings</strong>.
+            </div>
+          </div>
+
+          <div v-else>
+            <div class="cdo-no-config">
+              No custom object configured
+            </div>
+            <div class="help-text" style="text-align: center; margin-top: 10px;">
+              Replies will be tracked internally but not logged to a custom object.
+              To enable custom object logging, configure it in <strong>Application Settings</strong>.
+            </div>
+          </div>
+        </div>
+
+        <button 
+          id="btnSave" 
+          type="button" 
+          v-on:click="saveInstance()" 
+          class="btn"
+          v-bind:disabled="!isValid">
+          SAVE CONFIGURATION
+        </button>
+
+        <div v-if="status.success || status.error" 
+             v-bind:class="{ 'alert-success': status.success, 'alert-danger': status.error, 'in': fade }" 
+             class="alert fade" 
+             role="alert"
+             style="margin-top: 20px;">
           {{ status.success || status.error }}
         </div>
       </form>
@@ -153,104 +322,160 @@
 
     <script src="https://cdn.jsdelivr.net/npm/vue@2.6.11"></script>
     <script src="/eloqua-service/assets/js/axios.min.js"></script>
-    <script src="https://unpkg.com/vue-select@3.0.0"></script>
 
     <script type="text/javascript">
       var instance = <%-JSON.stringify(instance)%>;
-      Vue.component('v-select', VueSelect.VueSelect);
-      var custom_objects = <%-JSON.stringify(custom_objects)%>;
-      var comap = JSON.parse(JSON.stringify(custom_objects.elements));
+      var consumer = <%-JSON.stringify(consumer)%>;
 
       var app = new Vue({
         el: '#receivesmsaction',
         data: {
           evaluation: Array.from({length: 168}, (_, i) => i + 1),
-          texttype: ["Anything", "Keyword"],
           instance: instance,
-          consumer: <%-JSON.stringify(consumer)%>,
+          consumer: consumer,
           status: {},
-          custom_objects: custom_objects,
-          comap: comap,
-          cdofields: [],
-          fade: false
+          fade: false,
+          cdoConfig: {
+            id: null,
+            name: null,
+            mobile_field: null,
+            email_field: null,
+            response_field: null,
+            title_field: null,
+            vn_field: null
+          }
+        },
+        computed: {
+          isValid: function() {
+            if (!this.instance.evaluation_period) {
+              return false;
+            }
+            if (this.instance.text_type === 'Keyword' && !this.instance.keyword) {
+              return false;
+            }
+            return true;
+          },
+          hasCdoConfig: function() {
+            return !!(this.consumer.actions && 
+                     this.consumer.actions.receivesms && 
+                     this.consumer.actions.receivesms.custom_object_id);
+          }
         },
         methods: {
-          fetchOptionsmap: function(search, loading) {
-            var vm = this;
-            const options = {
-              method: "GET",
-              url: "/eloqua/action/ajax/customobjects/" + this.consumer.installId + "/" + this.consumer.SiteId + "/customObject?search=" + search
-            };
-            axios(options)
-              .then(function(response) {
-                vm.comap = response.data.elements;
-              })
-              .catch(function (error) {
-                vm.comap = JSON.parse(JSON.stringify(custom_objects.elements)); 
-              });
-          },
-          getFields() {
-            var vm = this;
-            if(this.instance.custom_object_id) {
-              const options = {
-                method: "GET",
-                url: "/eloqua/action/ajax/customobject/" + this.consumer.installId + "/" + this.consumer.SiteId + "/" + this.instance.custom_object_id
-              };
-              axios(options)
-                .then(function(response) {
-                  vm.cdofields = response.data.fields;
-                })
-                .catch(function (error) {
-                  console.error(error);
-                });
-            }
-          },
           saveInstance() {
             var vm = this;
 
-            if(!this.instance.custom_object_id) {
-              this.instance.email_field = null;
-              this.instance.mobile_field = null;
-              this.instance.title_field = null;
-              this.instance.response_field = null;
+            // Validate
+            if (!this.isValid) {
+              this.showMessage('error', 'Please fill in all required fields');
+              return;
             }
 
-            if(this.instance.evaluation_period) {
-              const options = {
-                method: "POST",
-                url: location.pathname + location.search,
-                headers: { 'Content-Type': 'application/json' },
-                data: JSON.stringify({"instance": vm.instance})
-              };
-              axios(options)
-                .then(function(response) {
-                  vm.fade = true;
-                  vm.status = { success: 'Configuration successfully saved' };
-                  setTimeout(() => {
-                    vm.fade = false;
-                    vm.status = {};
-                  }, 3000);
-                })
-                .catch(function (error) {
-                  vm.fade = true;
-                  vm.status = { error: 'Failed to save configuration' };
-                  setTimeout(() => {
-                    vm.fade = false;
-                    vm.status = {};
-                  }, 3000);
-                });
-            } else {
-              vm.status = { error: 'Evaluation period is required' };
-              vm.fade = true;
+            // Prepare data
+            const data = {
+              instance: {
+                evaluation_period: parseInt(vm.instance.evaluation_period),
+                text_type: vm.instance.text_type,
+                keyword: vm.instance.text_type === 'Keyword' ? vm.instance.keyword : null
+              }
+            };
+
+            // Show loading state
+            const btnSave = document.getElementById('btnSave');
+            const originalText = btnSave.textContent;
+            btnSave.textContent = 'SAVING...';
+            btnSave.disabled = true;
+
+            // Save via API
+            const options = {
+              method: "POST",
+              url: location.pathname + location.search,
+              headers: { 'Content-Type': 'application/json' },
+              data: JSON.stringify(data)
+            };
+
+            axios(options)
+              .then(function(response) {
+                vm.showMessage('success', 'Configuration successfully saved');
+                
+                // Optional: Close window after success
+                setTimeout(() => {
+                  if (window.opener) {
+                    window.close();
+                  }
+                }, 2000);
+              })
+              .catch(function (error) {
+                console.error('Save error:', error);
+                vm.showMessage('error', error.response?.data?.message || 'Failed to save configuration');
+              })
+              .finally(function() {
+                btnSave.textContent = originalText;
+                btnSave.disabled = false;
+              });
+          },
+          showMessage(type, message) {
+            this.status = {};
+            this.status[type] = message;
+            this.fade = true;
+            
+            setTimeout(() => {
+              this.fade = false;
               setTimeout(() => {
-                vm.fade = false;
-                vm.status = {};
-              }, 3000);
+                this.status = {};
+              }, 500);
+            }, 3000);
+          },
+          loadCdoDetails() {
+            var vm = this;
+            
+            if (!this.hasCdoConfig) {
+              return;
             }
+
+            const cdoId = this.consumer.actions.receivesms.custom_object_id;
+            
+            // Set field mappings
+            this.cdoConfig = {
+              id: cdoId,
+              name: 'Loading...',
+              mobile_field: this.consumer.actions.receivesms.mobile_field || null,
+              email_field: this.consumer.actions.receivesms.email_field || null,
+              response_field: this.consumer.actions.receivesms.response_field || null,
+              title_field: this.consumer.actions.receivesms.title_field || null,
+              vn_field: this.consumer.actions.receivesms.vn_field || null
+            };
+
+            // Fetch CDO name
+            const options = {
+              method: "GET",
+              url: "/eloqua/decision/ajax/customobject/" + 
+                   this.consumer.installId + "/" + 
+                   this.consumer.SiteId + "/" + 
+                   cdoId
+            };
+
+            axios(options)
+              .then(function(response) {
+                vm.cdoConfig.name = response.data.name || 'Unknown Custom Object';
+              })
+              .catch(function (error) {
+                console.error('Error loading CDO details:', error);
+                vm.cdoConfig.name = 'Custom Object (ID: ' + cdoId + ')';
+              });
           }
         },
         mounted: function () {
-          this.getFields();
+          // Set default values if not set
+          if (!this.instance.evaluation_period) {
+            this.instance.evaluation_period = 1;
+          }
+          if (!this.instance.text_type) {
+            this.instance.text_type = 'Anything';
+          }
+
+          // Load CDO details if configured
+          this.loadCdoDetails();
         }
       });
     </script>

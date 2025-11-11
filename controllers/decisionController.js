@@ -45,18 +45,20 @@ class DecisionController {
         });
     });
 
+    // controllers/decisionController.js - UPDATE configure method
+
+// controllers/decisionController.js - UPDATE configure method
+
     /**
      * Get decision configure page
      * GET /eloqua/decision/configure
      */
     static configure = asyncHandler(async (req, res) => {
-        const { installId, siteId, instanceId, CustomObjectId, AssetType } = req.query;
+        const { installId, siteId, instanceId } = req.query;
 
         logger.info('Loading decision configuration page', { 
             installId, 
-            instanceId,
-            CustomObjectId,
-            AssetType
+            instanceId
         });
 
         const consumer = await Consumer.findOne({ installId });
@@ -81,36 +83,24 @@ class DecisionController {
             };
         }
 
-        if (CustomObjectId) {
-            instance.program_coid = CustomObjectId;
-        }
+        // Log CDO configuration status
+        const hasCdoConfig = !!(consumer.actions?.receivesms?.custom_object_id);
+        
+        logger.info('Decision config page loaded', {
+            instanceId,
+            hasCdoConfig,
+            customObjectId: consumer.actions?.receivesms?.custom_object_id
+        });
 
-        // Get custom objects - Pass installId and siteId correctly
-        let custom_objects = { elements: [] };
-        try {
-            // Create EloquaService with installId and siteId
-            const eloquaService = new EloquaService(installId, siteId);
-            await eloquaService.initialize();
-            
-            custom_objects = await eloquaService.getCustomObjects('', 100);
-            
-            logger.debug('Custom objects fetched', { 
-                count: custom_objects.elements?.length || 0 
-            });
-        } catch (error) {
-            logger.warn('Could not fetch custom objects', { 
-                error: error.message,
-                installId,
-                siteId
-            });
-        }
-
+        // Render config view with consumer info (includes CDO mapping)
         res.render('decision-config', {
             consumer: consumer.toObject(),
-            instance,
-            custom_objects
+            instance
         });
     });
+
+
+    // controllers/decisionController.js - UPDATE saveConfiguration method
 
     /**
      * Save configuration
@@ -138,22 +128,28 @@ class DecisionController {
             });
         }
 
-        // Update fields
+        // Update only decision-specific fields
         instance.evaluation_period = instanceData.evaluation_period;
         instance.text_type = instanceData.text_type;
         instance.keyword = instanceData.keyword;
-        instance.custom_object_id = instanceData.custom_object_id;
-        instance.mobile_field = instanceData.mobile_field;
-        instance.email_field = instanceData.email_field;
-        instance.title_field = instanceData.title_field;
-        instance.response_field = instanceData.response_field;
-        instance.message = "--";
+        
+        // Remove custom object fields - they come from Consumer model
+        instance.custom_object_id = undefined;
+        instance.mobile_field = undefined;
+        instance.email_field = undefined;
+        instance.title_field = undefined;
+        instance.response_field = undefined;
+        instance.vn_field = undefined;
+        
         instance.configureAt = new Date();
         instance.requiresConfiguration = false;
 
         await instance.save();
 
-        logger.info('Decision configuration saved', { instanceId });
+        logger.info('Decision configuration saved', { 
+            instanceId,
+            requiresConfiguration: false
+        });
 
         res.json({
             success: true,
@@ -952,17 +948,26 @@ class DecisionController {
         }
     }
 
+    // controllers/decisionController.js - UPDATE updateCustomObject method
+
     /**
      * Update custom object with reply data
+     * Uses custom object mapping from Consumer.actions.receivesms
      */
     static async updateCustomObject(eloquaService, instance, consumer, smsLog, replyMessage) {
         try {
-            if (!instance.custom_object_id) {
+            // Get custom object config from consumer
+            const cdoConfig = consumer.actions?.receivesms;
+            
+            if (!cdoConfig || !cdoConfig.custom_object_id) {
+                logger.debug('No custom object configured for receivesms', {
+                    installId: consumer.installId
+                });
                 return;
             }
 
             logger.info('Updating custom object with reply', {
-                customObjectId: instance.custom_object_id,
+                customObjectId: cdoConfig.custom_object_id,
                 contactId: smsLog.contactId
             });
 
@@ -970,51 +975,63 @@ class DecisionController {
                 fieldValues: []
             };
 
-            if (instance.mobile_field) {
+            // Map fields from consumer configuration
+            if (cdoConfig.mobile_field) {
                 cdoData.fieldValues.push({
-                    id: instance.mobile_field,
+                    id: cdoConfig.mobile_field,
                     value: smsLog.mobileNumber
                 });
             }
 
-            if (instance.email_field) {
+            if (cdoConfig.email_field) {
                 cdoData.fieldValues.push({
-                    id: instance.email_field,
+                    id: cdoConfig.email_field,
                     value: smsLog.emailAddress
                 });
             }
 
-            if (instance.response_field && replyMessage) {
+            if (cdoConfig.response_field && replyMessage) {
                 cdoData.fieldValues.push({
-                    id: instance.response_field,
+                    id: cdoConfig.response_field,
                     value: replyMessage.substring(0, 250) // Limit length
                 });
             }
 
-            if (instance.title_field && smsLog.campaignTitle) {
+            if (cdoConfig.title_field && smsLog.campaignTitle) {
                 cdoData.fieldValues.push({
-                    id: instance.title_field,
+                    id: cdoConfig.title_field,
                     value: smsLog.campaignTitle
+                });
+            }
+
+            if (cdoConfig.vn_field && smsLog.senderId) {
+                cdoData.fieldValues.push({
+                    id: cdoConfig.vn_field,
+                    value: smsLog.senderId
                 });
             }
 
             if (cdoData.fieldValues.length > 0) {
                 await eloquaService.createCustomObjectRecord(
-                    instance.custom_object_id,
+                    cdoConfig.custom_object_id,
                     cdoData
                 );
 
                 logger.info('Custom object updated successfully', {
-                    customObjectId: instance.custom_object_id,
+                    customObjectId: cdoConfig.custom_object_id,
                     contactId: smsLog.contactId,
                     fieldCount: cdoData.fieldValues.length
+                });
+            } else {
+                logger.warn('No field mappings configured for custom object', {
+                    customObjectId: cdoConfig.custom_object_id
                 });
             }
 
         } catch (error) {
             logger.error('Error updating custom object', {
-                customObjectId: instance.custom_object_id,
-                error: error.message
+                error: error.message,
+                stack: error.stack
             });
             throw error;
         }

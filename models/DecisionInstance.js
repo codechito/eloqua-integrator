@@ -1,3 +1,5 @@
+// models/DecisionInstance.js - UPDATE schema
+
 const mongoose = require('mongoose');
 
 const DecisionInstanceSchema = new mongoose.Schema({
@@ -18,7 +20,7 @@ const DecisionInstanceSchema = new mongoose.Schema({
     },
     assetId: String,
     
-    // Configuration
+    // Decision Configuration (only decision-specific settings)
     evaluation_period: {
         type: Number,
         default: 1,
@@ -32,13 +34,8 @@ const DecisionInstanceSchema = new mongoose.Schema({
     },
     keyword: String,
     
-    // Custom Object Mapping
-    custom_object_id: String,
-    mobile_field: String,
-    email_field: String,
-    title_field: String,
-    response_field: String,
-    vn_field: String,
+    // NOTE: Custom object mapping is now in Consumer.actions.receivesms
+    // No longer storing CDO fields here
     
     // Configuration status
     requiresConfiguration: {
@@ -46,16 +43,20 @@ const DecisionInstanceSchema = new mongoose.Schema({
         default: true
     },
     
+    configureAt: Date,
+    
     // Status
     isActive: {
         type: Boolean,
         default: true
     }
 }, {
-    timestamps: true
+    timestamps: true,
+    collection: 'decision_instances'
 });
 
 // Index for efficient querying
 DecisionInstanceSchema.index({ installId: 1, isActive: 1 });
+DecisionInstanceSchema.index({ instanceId: 1, isActive: 1 });
 
 module.exports = mongoose.model('DecisionInstance', DecisionInstanceSchema);
