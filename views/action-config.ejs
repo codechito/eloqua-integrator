@@ -79,8 +79,8 @@
 
       .form-control {
         width: 100%;
-        height: 34px;
-        padding: 6px 12px;
+        height: 30px;
+        padding: 5px 12px;
         font-size: 14px;
         line-height: 1.42857143;
         color: #555;
@@ -199,6 +199,7 @@
 
       textarea.form-control {
         height: auto;
+        padding: 8px 12px;
       }
 
       .merge-toolbar {
@@ -346,44 +347,63 @@
         margin: 3px 0;
       }
 
-      .info-box {
-        background: #e7f3ff;
-        border-left: 4px solid #007bff;
-        padding: 15px;
-        margin-bottom: 20px;
-        border-radius: 4px;
-      }
-
-      .info-box p {
-        margin: 0;
-        font-size: 13px;
-        line-height: 1.6;
-        color: #004085;
-      }
-
-      .cdo-info-box {
+      .cdo-mapping-box {
         background: #f8f9fa;
         border: 1px solid #dee2e6;
         border-radius: 4px;
-        padding: 12px 15px;
+        padding: 15px;
         margin-bottom: 15px;
+      }
+
+      .cdo-mapping-box h5 {
+        margin: 0 0 15px 0;
+        font-size: 15px;
+        font-weight: bold;
+        color: #495057;
+        border-bottom: 2px solid #dee2e6;
+        padding-bottom: 8px;
+      }
+
+      .cdo-field-row {
+        display: flex;
+        justify-content: space-between;
+        padding: 8px 0;
+        border-bottom: 1px solid #e9ecef;
         font-size: 13px;
       }
 
-      .cdo-info-box .cdo-name {
-        font-weight: bold;
-        color: #007bff;
-        margin-bottom: 5px;
+      .cdo-field-row:last-child {
+        border-bottom: none;
       }
 
-      .cdo-info-box .cdo-message {
+      .cdo-field-label {
+        font-weight: 600;
         color: #6c757d;
-        font-size: 12px;
+        flex: 0 0 40%;
+      }
+
+      .cdo-field-value {
+        color: #212529;
+        flex: 1;
+        text-align: right;
+        font-family: 'Courier New', monospace;
       }
 
       .cdo-no-config {
+        text-align: center;
         color: #6c757d;
         font-style: italic;
+        padding: 10px;
+      }
+
+      .cdo-name {
+        background: #007bff;
+        color: white;
+        padding: 8px 12px;
+        border-radius: 4px;
+        margin-bottom: 15px;
+        font-size: 13px;
+        font-weight: bold;
       }
     </style>
   </head>
@@ -393,24 +413,6 @@
         <h4 style="font-size: 20px; font-weight: bold; text-align: center; margin-bottom: 20px;">
           <img src="/eloqua-service/assets/images/send-sms-el-icon.png" onerror="this.style.display='none'" style="vertical-align: middle;">&nbsp;Create your Text Message
         </h4>
-
-        <!-- Info Box -->
-        <div class="info-box">
-          <p>
-            Configure your SMS message below. Use merge fields to personalize messages with contact data.
-            <strong>Custom object logging</strong> is configured in Application Settings.
-          </p>
-        </div>
-
-        <!-- CDO Info Display (if configured) -->
-        <div class="cdo-info-box" v-if="hasCdoConfig">
-          <div class="cdo-name">✓ Custom Object Logging: {{ cdoName || 'Enabled' }}</div>
-          <div class="cdo-message">SMS send data will be logged to custom object configured in Application Settings</div>
-        </div>
-        <div class="cdo-info-box" v-else>
-          <div class="cdo-no-config">Custom object logging not configured</div>
-          <div class="cdo-message">To enable logging, configure custom object mapping in Application Settings</div>
-        </div>
 
         <!-- Row 1: Sender ID (LEFT) | Recipient Field (RIGHT) -->
         <div class="two-column-row">
@@ -446,7 +448,7 @@
           </div>
         </div>
 
-        <!-- Row 2: Country Field (Single Column) -->
+        <!-- Row 2: Country Field (Full Width) -->
         <div class="full-width">
           <div class="form-group">
             <label>Country Field</label>
@@ -614,6 +616,62 @@ Opt-out reply STOP"></textarea>
           </div>
         </div>
 
+        <!-- Custom Object Mapping Display (READ-ONLY) -->
+        <div class="cdo-mapping-box">
+          <h5>📋 Custom Object Mapping</h5>
+          
+          <div v-if="hasCdoConfig">
+            <div class="cdo-name">
+              ✓ Custom Object: {{ cdoName || 'Loading...' }}
+            </div>
+            
+            <div class="cdo-field-row" v-if="cdoConfig.mobile_field">
+              <span class="cdo-field-label">Mobile Number:</span>
+              <span class="cdo-field-value">{{ cdoConfig.mobile_field }}</span>
+            </div>
+            
+            <div class="cdo-field-row" v-if="cdoConfig.email_field">
+              <span class="cdo-field-label">Email Address:</span>
+              <span class="cdo-field-value">{{ cdoConfig.email_field }}</span>
+            </div>
+            
+            <div class="cdo-field-row" v-if="cdoConfig.outgoing_field">
+              <span class="cdo-field-label">Outgoing Message:</span>
+              <span class="cdo-field-value">{{ cdoConfig.outgoing_field }}</span>
+            </div>
+            
+            <div class="cdo-field-row" v-if="cdoConfig.notification_field">
+              <span class="cdo-field-label">Notification Status:</span>
+              <span class="cdo-field-value">{{ cdoConfig.notification_field }}</span>
+            </div>
+            
+            <div class="cdo-field-row" v-if="cdoConfig.title_field">
+              <span class="cdo-field-label">Campaign Title:</span>
+              <span class="cdo-field-value">{{ cdoConfig.title_field }}</span>
+            </div>
+            
+            <div class="cdo-field-row" v-if="cdoConfig.vn_field">
+              <span class="cdo-field-label">Virtual Number:</span>
+              <span class="cdo-field-value">{{ cdoConfig.vn_field }}</span>
+            </div>
+
+            <div style="margin-top: 15px; padding-top: 10px; border-top: 1px solid #dee2e6; font-size: 12px; color: #666;">
+              <strong>Note:</strong> SMS send data will be automatically logged to this custom object.
+              To change these mappings, go to <strong>Application Settings</strong>.
+            </div>
+          </div>
+
+          <div v-else>
+            <div class="cdo-no-config">
+              No custom object configured
+            </div>
+            <div style="text-align: center; margin-top: 10px; font-size: 12px; color: #666;">
+              SMS sends will be tracked internally but not logged to a custom object.
+              To enable custom object logging, configure it in <strong>Application Settings</strong>.
+            </div>
+          </div>
+        </div>
+
         <!-- Bottom Status (for SAVE action) -->
         <div v-if="status.success || status.error" 
              v-bind:class="{ 'alert-success': status.success, 'alert-danger': status.error, 'fade-out': statusFading }" 
@@ -686,8 +744,16 @@ Opt-out reply STOP"></textarea>
           selectedCDOField: '',
           cdoMergeFields: [],
           
-          // CDO info
+          // CDO info display
           cdoName: null,
+          cdoConfig: {
+            mobile_field: null,
+            email_field: null,
+            outgoing_field: null,
+            notification_field: null,
+            title_field: null,
+            vn_field: null
+          },
           
           // Test SMS
           messageStatus: {},
@@ -797,6 +863,17 @@ Opt-out reply STOP"></textarea>
             
             var cdoId = this.consumer.actions.sendsms.custom_object_id;
             
+            // Load field IDs from consumer config
+            this.cdoConfig = {
+              mobile_field: this.consumer.actions.sendsms.mobile_field || null,
+              email_field: this.consumer.actions.sendsms.email_field || null,
+              outgoing_field: this.consumer.actions.sendsms.outgoing_field || null,
+              notification_field: this.consumer.actions.sendsms.notification_field || null,
+              title_field: this.consumer.actions.sendsms.title_field || null,
+              vn_field: this.consumer.actions.sendsms.vn_field || null
+            };
+            
+            // Fetch CDO name
             axios.get('/eloqua/action/ajax/customobject/' + this.consumer.installId + '/' + this.consumer.SiteId + '/' + cdoId)
               .then(function(response) {
                 vm.cdoName = response.data.name || 'Custom Object';

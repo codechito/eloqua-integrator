@@ -101,36 +101,6 @@
       .alert.fade.in {
         opacity: 1;
       }
-      .info-box {
-        background: #e7f3ff;
-        border-left: 4px solid #007bff;
-        padding: 15px;
-        margin-bottom: 20px;
-        border-radius: 4px;
-      }
-      .info-box p {
-        margin: 0;
-        font-size: 13px;
-        line-height: 1.6;
-        color: #004085;
-      }
-      .info-box strong {
-        display: block;
-        margin-bottom: 5px;
-      }
-      .warning-box {
-        background: #fff3cd;
-        border-left: 4px solid #ffc107;
-        padding: 15px;
-        margin-bottom: 20px;
-        border-radius: 4px;
-      }
-      .warning-box p {
-        margin: 0;
-        font-size: 13px;
-        line-height: 1.6;
-        color: #856404;
-      }
       .cdo-mapping-box {
         background: #f8f9fa;
         border: 1px solid #dee2e6;
@@ -201,15 +171,6 @@
              class="alert fade" 
              role="alert">
           {{ status.success || status.error }}
-        </div>
-
-        <div class="info-box">
-          <p>
-            <strong>How it works:</strong>
-            This decision step checks if contacts replied to SMS messages sent earlier in the campaign.
-            Contacts who respond within the evaluation period will go down the <strong>YES</strong> path.
-            Others will go down the <strong>NO</strong> path.
-          </p>
         </div>
 
         <!-- Decision Configuration -->
@@ -365,13 +326,11 @@
           saveInstance() {
             var vm = this;
 
-            // Validate
             if (!this.isValid) {
               this.showMessage('error', 'Please fill in all required fields');
               return;
             }
 
-            // Prepare data
             const data = {
               instance: {
                 evaluation_period: parseInt(vm.instance.evaluation_period),
@@ -380,13 +339,11 @@
               }
             };
 
-            // Show loading state
             const btnSave = document.getElementById('btnSave');
             const originalText = btnSave.textContent;
             btnSave.textContent = 'SAVING...';
             btnSave.disabled = true;
 
-            // Save via API
             const options = {
               method: "POST",
               url: location.pathname + location.search,
@@ -398,7 +355,6 @@
               .then(function(response) {
                 vm.showMessage('success', 'Configuration successfully saved');
                 
-                // Optional: Close window after success
                 setTimeout(() => {
                   if (window.opener) {
                     window.close();
@@ -435,7 +391,6 @@
 
             const cdoId = this.consumer.actions.receivesms.custom_object_id;
             
-            // Set field mappings
             this.cdoConfig = {
               id: cdoId,
               name: 'Loading...',
@@ -446,7 +401,6 @@
               vn_field: this.consumer.actions.receivesms.vn_field || null
             };
 
-            // Fetch CDO name
             const options = {
               method: "GET",
               url: "/eloqua/decision/ajax/customobject/" + 
@@ -466,7 +420,6 @@
           }
         },
         mounted: function () {
-          // Set default values if not set
           if (!this.instance.evaluation_period) {
             this.instance.evaluation_period = 1;
           }
@@ -474,7 +427,6 @@
             this.instance.text_type = 'Anything';
           }
 
-          // Load CDO details if configured
           this.loadCdoDetails();
         }
       });
