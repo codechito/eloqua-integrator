@@ -463,6 +463,7 @@ class DecisionController {
 
     /**
      * Process notify asynchronously
+     * CRITICAL: executionId is required for syncing decisions
      */
     static async processNotifyAsync(instanceId, installId, siteId, assetId, executionId, executionData) {
         try {
@@ -516,6 +517,7 @@ class DecisionController {
 
             logger.info('Processing decision for SMS responses', {
                 instanceId,
+                executionId,
                 evaluationPeriod: instance.evaluation_period,
                 textType: instance.text_type,
                 keyword: instance.keyword,
@@ -649,14 +651,17 @@ class DecisionController {
 
             logger.info('Decision evaluation completed', {
                 instanceId,
+                executionId,
                 yesCount: results.yes.length,
                 noCount: results.no.length,
                 errorCount: results.errors.length
             });
 
+            // CRITICAL: Pass executionId to sync method
             await DecisionController.syncBulkDecisionResults(
                 consumer,
                 instance,
+                executionId,
                 results
             );
 
@@ -668,6 +673,7 @@ class DecisionController {
         } catch (error) {
             logger.error('Error in decision notify async processing', {
                 instanceId,
+                executionId,
                 error: error.message,
                 stack: error.stack
             });
@@ -675,12 +681,14 @@ class DecisionController {
     }
 
     /**
-     * Sync bulk decision results to Eloqua using Decision API
+     * Sync bulk decision results to Eloqua using Bulk API with executionId
+     * CRITICAL FIX: Must include executionId in syncActions destination
      */
-    static async syncBulkDecisionResults(consumer, instance, results) {
+    static async syncBulkDecisionResults(consumer, instance, executionId, results) {
         try {
             logger.info('Syncing bulk decision results', {
                 instanceId: instance.instanceId,
+                executionId,
                 yesCount: results.yes.length,
                 noCount: results.no.length
             });
@@ -688,47 +696,41 @@ class DecisionController {
             const eloquaService = new EloquaService(consumer.installId, instance.SiteId);
             await eloquaService.initialize();
 
-            for (const contact of results.yes) {
-                try {
-                    await DecisionController.syncSingleDecisionResult(
-                        instance,
-                        eloquaService,
-                        { contactId: contact.contactId, emailAddress: contact.emailAddress },
-                        'yes'
-                    );
-                } catch (error) {
-                    logger.error('Error syncing YES decision for contact', {
-                        contactId: contact.contactId,
-                        error: error.message
-                    });
-                }
+            const instanceIdNoDashes = instance.instanceId.replace(/-/g, '');
+
+            // Sync YES contacts
+            if (results.yes.length > 0) {
+                await DecisionController.syncDecisionBatch(
+                    eloquaService,
+                    instance,
+                    instanceIdNoDashes,
+                    executionId,
+                    results.yes,
+                    'yes'
+                );
             }
 
-            for (const contact of results.no) {
-                try {
-                    await DecisionController.syncSingleDecisionResult(
-                        instance,
-                        eloquaService,
-                        { contactId: contact.contactId, emailAddress: contact.emailAddress },
-                        'no'
-                    );
-                } catch (error) {
-                    logger.error('Error syncing NO decision for contact', {
-                        contactId: contact.contactId,
-                        error: error.message
-                    });
-                }
+            // Sync NO contacts
+            if (results.no.length > 0) {
+                await DecisionController.syncDecisionBatch(
+                    eloquaService,
+                    instance,
+                    instanceIdNoDashes,
+                    executionId,
+                    results.no,
+                    'no'
+                );
             }
 
             logger.info('Bulk decision sync completed', {
                 instanceId: instance.instanceId,
-                yesCount: results.yes.length,
-                noCount: results.no.length
+                executionId
             });
 
         } catch (error) {
             logger.error('Error syncing bulk decision results', {
                 instanceId: instance.instanceId,
+                executionId,
                 error: error.message
             });
             throw error;
@@ -736,39 +738,68 @@ class DecisionController {
     }
 
     /**
-     * Sync single decision result using Decision API (CORRECT VERSION - NO BULK API!)
+     * Sync a batch of decision results using Bulk API
+     * CRITICAL: Must include executionId in syncActions destination
      */
-    static async syncSingleDecisionResult(instance, eloquaService, contact, decision) {
+    static async syncDecisionBatch(eloquaService, instance, instanceIdNoDashes, executionId, contacts, decision) {
         try {
-            logger.info('Syncing single decision result', {
+            logger.info('Syncing decision batch', {
                 instanceId: instance.instanceId,
-                contactId: contact.contactId,
-                decision
-            });
-
-            const instanceIdNoDashes = instance.instanceId.replace(/-/g, '');
-            
-            logger.debug('Setting decision via Decision API', {
-                instanceId: instanceIdNoDashes,
-                contactId: contact.contactId,
+                executionId,
                 decision,
-                fullUrl: `${eloquaService.baseURL}/api/cloud/1.0/decisions/instances/${instanceIdNoDashes}/contacts/${contact.contactId}`
+                count: contacts.length
             });
 
-            await eloquaService.setDecision(instanceIdNoDashes, contact.contactId, decision);
+            const importDefinition = {
+                name: `SMS_Decision_${instanceIdNoDashes}_${decision}_${Date.now()}`,
+                fields: {
+                    ContactID: '{{Contact.Id}}',
+                    EmailAddress: '{{Contact.Field(C_EmailAddress)}}'
+                },
+                identifierFieldName: 'EmailAddress',
+                isSyncTriggeredOnImport: false,
+                dataRetentionDuration: 'P7D',
+                syncActions: [
+                    {
+                        // CRITICAL FIX: Include execution ID in the destination
+                        destination: `{{DecisionInstance(${instanceIdNoDashes}).Execution[${executionId}]}}`,
+                        action: "setStatus",
+                        status: decision
+                    }
+                ]
+            };
 
-            logger.info('Decision set successfully via Decision API', {
+            logger.debug('Creating bulk import with syncActions', {
                 instanceId: instance.instanceId,
-                contactId: contact.contactId,
+                executionId,
+                destination: importDefinition.syncActions[0].destination,
                 decision
+            });
+
+            const importDef = await eloquaService.createBulkImport('contacts', importDefinition);
+
+            const contactData = contacts.map(contact => ({
+                ContactID: contact.contactId,
+                EmailAddress: contact.emailAddress
+            }));
+
+            await eloquaService.uploadBulkImportData(importDef.uri, contactData);
+            const sync = await eloquaService.syncBulkImport(importDef.uri);
+
+            logger.info('Decision batch sync started', {
+                syncUri: sync.uri,
+                decision,
+                count: contacts.length,
+                executionId
             });
 
         } catch (error) {
-            logger.error('Error syncing single decision result', {
-                instanceId: instance.instanceId,
-                contactId: contact.contactId,
+            logger.error('Error syncing decision batch', {
+                decision,
+                count: contacts.length,
+                executionId,
                 error: error.message,
-                stack: error.stack
+                responseData: error.response?.data
             });
             throw error;
         }
@@ -776,6 +807,7 @@ class DecisionController {
 
     /**
      * Process SMS reply and evaluate decision
+     * For real-time replies, we mark the status but can't sync without executionId
      */
     static async processReply(reply, smsLog = null) {
         try {
@@ -848,16 +880,6 @@ class DecisionController {
                 smsLog.decisionProcessedAt = new Date();
                 await smsLog.save();
 
-                const eloquaService = new EloquaService(instance.installId, instance.SiteId);
-                await eloquaService.initialize();
-
-                await DecisionController.syncSingleDecisionResult(
-                    instance,
-                    eloquaService,
-                    { contactId: smsLog.contactId, emailAddress: smsLog.emailAddress },
-                    'no'
-                );
-
                 return { decision: 'no', reason: 'expired', matches: false };
             }
 
@@ -890,19 +912,21 @@ class DecisionController {
             await reply.save();
 
             const decision = matches ? 'yes' : 'no';
-            const eloquaService = new EloquaService(instance.installId, instance.SiteId);
-            await eloquaService.initialize();
-            
-            await DecisionController.syncSingleDecisionResult(
-                instance,
-                eloquaService,
-                { contactId: smsLog.contactId, emailAddress: smsLog.emailAddress },
-                decision
-            );
+
+            // NOTE: We cannot sync to Eloqua here because we don't have executionId
+            // The contact will get the correct decision on the next decision step evaluation
+            logger.info('Decision marked (will sync on next evaluation)', {
+                contactId: smsLog.contactId,
+                decision,
+                note: 'Real-time reply - no executionId available for sync'
+            });
 
             const consumer = await Consumer.findOne({ installId: instance.installId });
             if (consumer && consumer.actions?.receivesms?.custom_object_id) {
                 try {
+                    const eloquaService = new EloquaService(instance.installId, instance.SiteId);
+                    await eloquaService.initialize();
+                    
                     await DecisionController.updateCustomObject(
                         eloquaService,
                         instance,
