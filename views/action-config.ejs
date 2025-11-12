@@ -955,7 +955,9 @@ Opt-out reply STOP"></textarea>
               params: {
                 page: 1,
                 limit: 1,
-                status: 'all'
+                status: 'all',
+                installId: this.consumer.installId,  // ADDED
+                siteId: this.consumer.SiteId          // ADDED
               }
             })
             .then(function(response) {
