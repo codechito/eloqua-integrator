@@ -1,4 +1,3 @@
-<!-- views/action-config.ejs -->
 <!DOCTYPE html>
 <html>
   <head>
@@ -195,6 +194,17 @@
       .btn-default:disabled {
         opacity: 0.65;
         cursor: not-allowed;
+      }
+
+      .btn-success {
+        color: #fff;
+        background-color: #28a745;
+        border-color: #28a745;
+      }
+
+      .btn-success:hover {
+        background-color: #218838;
+        border-color: #1e7e34;
       }
 
       textarea.form-control {
@@ -406,168 +416,28 @@
         font-weight: bold;
       }
 
-      .report-section {
-        background: #fff;
+      .report-btn-wrapper {
+        text-align: center;
+        margin: 20px 0;
+        padding: 15px;
+        background: #f8f9fa;
         border: 1px solid #dee2e6;
         border-radius: 4px;
-        padding: 15px;
-        margin-bottom: 15px;
       }
 
-      .report-section h5 {
-        margin: 0 0 15px 0;
-        font-size: 15px;
+      .btn-report {
+        padding: 12px 35px;
+        font-size: 16px;
         font-weight: bold;
-        color: #495057;
-        border-bottom: 2px solid #dee2e6;
-        padding-bottom: 8px;
-      }
-
-      .report-stats {
-        display: flex;
-        justify-content: space-around;
-        margin-bottom: 20px;
-        padding: 15px;
-        background: #f8f9fa;
+        background: #28a745;
+        color: white;
+        border: none;
         border-radius: 4px;
+        cursor: pointer;
       }
 
-      .stat-card {
-        text-align: center;
-        flex: 1;
-      }
-
-      .stat-card .stat-number {
-        font-size: 32px;
-        font-weight: bold;
-        color: #007bff;
-        display: block;
-      }
-
-      .stat-card .stat-label {
-        font-size: 12px;
-        color: #6c757d;
-        text-transform: uppercase;
-        margin-top: 5px;
-      }
-
-      .stat-card.success .stat-number {
-        color: #28a745;
-      }
-
-      .stat-card.danger .stat-number {
-        color: #dc3545;
-      }
-
-      .stat-card.warning .stat-number {
-        color: #ffc107;
-      }
-
-      .report-table {
-        width: 100%;
-        border-collapse: collapse;
-        font-size: 13px;
-      }
-
-      .report-table thead {
-        background: #f8f9fa;
-      }
-
-      .report-table th {
-        padding: 10px;
-        text-align: left;
-        font-weight: bold;
-        color: #495057;
-        border-bottom: 2px solid #dee2e6;
-      }
-
-      .report-table td {
-        padding: 8px 10px;
-        border-bottom: 1px solid #e9ecef;
-      }
-
-      .report-table tbody tr:hover {
-        background: #f8f9fa;
-      }
-
-      .status-badge {
-        display: inline-block;
-        padding: 3px 8px;
-        border-radius: 12px;
-        font-size: 11px;
-        font-weight: bold;
-        text-transform: uppercase;
-      }
-
-      .status-badge.sent {
-        background: #d4edda;
-        color: #155724;
-      }
-
-      .status-badge.delivered {
-        background: #d1ecf1;
-        color: #0c5460;
-      }
-
-      .status-badge.failed {
-        background: #f8d7da;
-        color: #721c24;
-      }
-
-      .status-badge.pending {
-        background: #fff3cd;
-        color: #856404;
-      }
-
-      .report-filters {
-        display: flex;
-        gap: 10px;
-        margin-bottom: 15px;
-        align-items: center;
-      }
-
-      .report-filters select {
-        padding: 5px 10px;
-        border: 1px solid #ddd;
-        border-radius: 4px;
-        font-size: 13px;
-        height: auto;
-      }
-
-      .report-filters button {
-        padding: 5px 15px;
-        font-size: 13px;
-      }
-
-      .loading-spinner {
-        text-align: center;
-        padding: 40px;
-        color: #6c757d;
-      }
-
-      .no-data {
-        text-align: center;
-        padding: 40px;
-        color: #6c757d;
-        font-style: italic;
-      }
-
-      .pagination {
-        display: flex;
-        justify-content: center;
-        align-items: center;
-        gap: 10px;
-        margin-top: 15px;
-      }
-
-      .pagination button {
-        padding: 5px 10px;
-        font-size: 12px;
-      }
-
-      .pagination span {
-        font-size: 13px;
-        color: #6c757d;
+      .btn-report:hover {
+        background: #218838;
       }
     </style>
   </head>
@@ -577,6 +447,13 @@
         <h4 style="font-size: 20px; font-weight: bold; text-align: center; margin-bottom: 20px;">
           <img src="/eloqua-service/assets/images/send-sms-el-icon.png" onerror="this.style.display='none'" style="vertical-align: middle;">&nbsp;Create your Text Message
         </h4>
+
+        <!-- REPORT BUTTON AT TOP -->
+        <div class="report-btn-wrapper">
+          <button type="button" @click="openReport" class="btn-report">
+            📊 SMS Send Report
+          </button>
+        </div>
 
         <!-- Row 1: Sender ID (LEFT) | Recipient Field (RIGHT) -->
         <div class="two-column-row">
@@ -836,106 +713,6 @@ Opt-out reply STOP"></textarea>
           </div>
         </div>
 
-        <!-- SMS Report Section -->
-        <div class="report-section">
-          <h5>📊 SMS Send Report</h5>
-
-          <!-- Statistics -->
-          <div class="report-stats">
-            <div class="stat-card success">
-              <span class="stat-number">{{ reportStats.sent }}</span>
-              <span class="stat-label">Sent</span>
-            </div>
-            <div class="stat-card">
-              <span class="stat-number">{{ reportStats.delivered }}</span>
-              <span class="stat-label">Delivered</span>
-            </div>
-            <div class="stat-card danger">
-              <span class="stat-number">{{ reportStats.failed }}</span>
-              <span class="stat-label">Failed</span>
-            </div>
-            <div class="stat-card warning">
-              <span class="stat-number">{{ reportStats.pending }}</span>
-              <span class="stat-label">Pending</span>
-            </div>
-          </div>
-
-          <!-- Filters -->
-          <div class="report-filters">
-            <label style="font-size: 13px; margin: 0;">Filter:</label>
-            <select v-model="reportFilter" class="form-control" style="width: 150px;">
-              <option value="all">All Status</option>
-              <option value="sent">Sent</option>
-              <option value="delivered">Delivered</option>
-              <option value="failed">Failed</option>
-              <option value="pending">Pending</option>
-            </select>
-            <button @click="loadReport" class="btn btn-default" :disabled="loadingReport">
-              <span v-if="loadingReport">
-                <span class="spinner spinner-sm"></span>
-                Loading...
-              </span>
-              <span v-else>Refresh</span>
-            </button>
-          </div>
-
-          <!-- Loading State -->
-          <div v-if="loadingReport && reportLogs.length === 0" class="loading-spinner">
-            <div class="spinner"></div>
-            <p>Loading report data...</p>
-          </div>
-
-          <!-- No Data State -->
-          <div v-else-if="!loadingReport && reportLogs.length === 0" class="no-data">
-            No SMS sends recorded yet
-          </div>
-
-          <!-- Report Table -->
-          <div v-else>
-            <div style="overflow-x: auto;">
-              <table class="report-table">
-                <thead>
-                  <tr>
-                    <th>Contact</th>
-                    <th>Mobile Number</th>
-                    <th>Message Preview</th>
-                    <th>Status</th>
-                    <th>Sent At</th>
-                    <th>Delivered At</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  <tr v-for="log in filteredReportLogs" :key="log._id">
-                    <td>{{ log.emailAddress || 'N/A' }}</td>
-                    <td>{{ log.mobileNumber }}</td>
-                    <td style="max-width: 200px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">
-                      {{ log.message ? log.message.substring(0, 50) + '...' : 'N/A' }}
-                    </td>
-                    <td>
-                      <span class="status-badge" :class="log.status">
-                        {{ log.status }}
-                      </span>
-                    </td>
-                    <td>{{ formatDate(log.sentAt) }}</td>
-                    <td>{{ log.deliveredAt ? formatDate(log.deliveredAt) : '-' }}</td>
-                  </tr>
-                </tbody>
-              </table>
-            </div>
-
-            <!-- Pagination -->
-            <div class="pagination">
-              <button @click="reportPage--" :disabled="reportPage <= 1" class="btn btn-default">
-                Previous
-              </button>
-              <span>Page {{ reportPage }} of {{ totalPages }}</span>
-              <button @click="reportPage++" :disabled="reportPage >= totalPages" class="btn btn-default">
-                Next
-              </button>
-            </div>
-          </div>
-        </div>
-
         <!-- Bottom Status (for SAVE action) -->
         <div v-if="status.success || status.error" 
              v-bind:class="{ 'alert-success': status.success, 'alert-danger': status.error, 'fade-out': statusFading }" 
@@ -1021,20 +798,7 @@ Opt-out reply STOP"></textarea>
           
           // Test SMS
           messageStatus: {},
-          testingSms: false,
-
-          // Report data
-          reportLogs: [],
-          reportStats: {
-            sent: 0,
-            delivered: 0,
-            failed: 0,
-            pending: 0
-          },
-          reportFilter: 'all',
-          reportPage: 1,
-          reportLimit: 10,
-          loadingReport: false
+          testingSms: false
         },
         computed: {
           messageLength: function() {
@@ -1050,32 +814,14 @@ Opt-out reply STOP"></textarea>
             return !!(this.consumer.actions && 
                      this.consumer.actions.sendsms && 
                      this.consumer.actions.sendsms.custom_object_id);
-          },
-          filteredReportLogs: function() {
-            if (this.reportFilter === 'all') {
-              return this.paginatedReportLogs;
-            }
-            var filtered = this.reportLogs.filter(log => log.status === this.reportFilter);
-            var start = (this.reportPage - 1) * this.reportLimit;
-            return filtered.slice(start, start + this.reportLimit);
-          },
-          paginatedReportLogs: function() {
-            var start = (this.reportPage - 1) * this.reportLimit;
-            return this.reportLogs.slice(start, start + this.reportLimit);
-          },
-          totalPages: function() {
-            var filtered = this.reportFilter === 'all' 
-              ? this.reportLogs 
-              : this.reportLogs.filter(log => log.status === this.reportFilter);
-            return Math.max(1, Math.ceil(filtered.length / this.reportLimit));
-          }
-        },
-        watch: {
-          reportFilter: function() {
-            this.reportPage = 1;
           }
         },
         methods: {
+          openReport: function() {
+            var url = '/eloqua/action/report/' + this.instance.instanceId + '?installId=' + this.consumer.installId + '&siteId=' + this.consumer.SiteId;
+            window.open(url, 'ActionReport', 'width=1400,height=900,scrollbars=yes,resizable=yes');
+          },
+
           clearStatus: function() {
             var vm = this;
             vm.statusFading = true;
@@ -1309,44 +1055,6 @@ Opt-out reply STOP"></textarea>
               };
               window.scrollTo({ top: 0, behavior: 'smooth' });
             }
-          },
-
-          loadReport: function() {
-            var vm = this;
-            
-            if (!vm.instance.instanceId) {
-              return;
-            }
-
-            vm.loadingReport = true;
-
-            axios.get('/eloqua/action/report/' + vm.instance.instanceId)
-              .then(function(response) {
-                vm.reportLogs = response.data.logs || [];
-                vm.reportStats = response.data.stats || {
-                  sent: 0,
-                  delivered: 0,
-                  failed: 0,
-                  pending: 0
-                };
-                vm.loadingReport = false;
-              })
-              .catch(function(error) {
-                console.error('Error loading report:', error);
-                vm.loadingReport = false;
-              });
-          },
-
-          formatDate: function(dateString) {
-            if (!dateString) return '-';
-            var date = new Date(dateString);
-            return date.toLocaleString('en-US', {
-              month: 'short',
-              day: 'numeric',
-              year: 'numeric',
-              hour: '2-digit',
-              minute: '2-digit'
-            });
           }
         },
         mounted: function () {
@@ -1359,10 +1067,6 @@ Opt-out reply STOP"></textarea>
           
           this.getProgramFields();
           this.loadCdoInfo();
-          
-          if (this.instance.instanceId) {
-            this.loadReport();
-          }
         }
       });
     </script>

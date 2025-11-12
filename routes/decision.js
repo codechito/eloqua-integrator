@@ -5,7 +5,7 @@ const { verifyInstallation } = require('../middleware/auth');
 const sessionAuth = require('../middleware/sessionAuth');
 
 // Create instance
-router.post('/create', verifyInstallation, DecisionController.create);
+router.get('/create', verifyInstallation, DecisionController.create);
 
 // Configure instance
 router.get('/configure', verifyInstallation, DecisionController.configure);
@@ -24,9 +24,12 @@ router.post('/copy', verifyInstallation, DecisionController.copy);
 router.post('/delete', verifyInstallation, DecisionController.delete);
 router.post('/remove', verifyInstallation, DecisionController.delete);
 
-router.get('/report/:instanceId', DecisionController.getReport);
+// Report routes - NEW
+router.get('/report/:instanceId', sessionAuth, DecisionController.getReportPage);
+router.get('/report/:instanceId/data', sessionAuth, DecisionController.getReport);
+router.get('/report/:instanceId/csv', sessionAuth, DecisionController.downloadReportCSV);
 
-// AJAX endpoints - use sessionAuth for security
+// AJAX endpoints
 router.get('/ajax/customobjects/:installId/:siteId/customObject',
     sessionAuth,
     DecisionController.getCustomObjects

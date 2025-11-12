@@ -2056,6 +2056,217 @@ class ActionController {
         const parts = fieldValue.split('__');
         return parts.length > 1 ? parts[1] : parts[0];
     }
+
+    /**
+     * Get action report page
+     * GET /eloqua/action/report/:instanceId
+     */
+    static getReportPage = asyncHandler(async (req, res) => {
+        const { instanceId } = req.params;
+        const { installId, siteId } = req.query;
+
+        logger.info('Loading action report page', { instanceId, installId, siteId });
+
+        const instance = await ActionInstance.findOne({ instanceId });
+        if (!instance) {
+            return res.status(404).send('Instance not found');
+        }
+
+        res.render('action-report', {
+            instanceId,
+            installId: installId || instance.installId,
+            siteId: siteId || instance.SiteId
+        });
+    });
+
+    /**
+     * Get action report data (JSON)
+     * GET /eloqua/action/report/:instanceId/data
+     */
+    static getReport = asyncHandler(async (req, res) => {
+        const { instanceId } = req.params;
+        const { page = 1, limit = 100, status = 'all' } = req.query;
+
+        logger.info('Loading action report data', { instanceId, page, limit, status });
+
+        try {
+            const instance = await ActionInstance.findOne({ instanceId });
+            if (!instance) {
+                return res.status(404).json({
+                    success: false,
+                    error: 'Instance not found'
+                });
+            }
+
+            // Build query
+            const query = { instanceId };
+            if (status !== 'all') {
+                query.status = status;
+            }
+
+            // Get total count
+            const total = await SmsLog.countDocuments(query);
+
+            // Get paginated logs
+            const logs = await SmsLog.find(query)
+                .sort({ createdAt: -1 })
+                .limit(parseInt(limit))
+                .skip((parseInt(page) - 1) * parseInt(limit))
+                .select('contactId emailAddress mobileNumber message messageId status sentAt deliveredAt errorMessage cost campaignTitle');
+
+            // Get statistics
+            const stats = await SmsLog.aggregate([
+                { $match: { instanceId } },
+                {
+                    $group: {
+                        _id: '$status',
+                        count: { $sum: 1 },
+                        totalCost: { $sum: '$cost' }
+                    }
+                }
+            ]);
+
+            const statsMap = {
+                pending: { count: 0, cost: 0 },
+                sent: { count: 0, cost: 0 },
+                delivered: { count: 0, cost: 0 },
+                failed: { count: 0, cost: 0 }
+            };
+
+            stats.forEach(stat => {
+                if (statsMap[stat._id]) {
+                    statsMap[stat._id] = {
+                        count: stat.count,
+                        cost: stat.totalCost || 0
+                    };
+                }
+            });
+
+            res.json({
+                success: true,
+                instance: {
+                    instanceId: instance.instanceId,
+                    assetName: instance.assetName,
+                    message: instance.message
+                },
+                logs,
+                stats: statsMap,
+                pagination: {
+                    page: parseInt(page),
+                    limit: parseInt(limit),
+                    total,
+                    pages: Math.ceil(total / parseInt(limit))
+                }
+            });
+
+        } catch (error) {
+            logger.error('Error loading action report', {
+                instanceId,
+                error: error.message
+            });
+
+            res.status(500).json({
+                success: false,
+                error: error.message,
+                logs: [],
+                stats: {
+                    pending: { count: 0, cost: 0 },
+                    sent: { count: 0, cost: 0 },
+                    delivered: { count: 0, cost: 0 },
+                    failed: { count: 0, cost: 0 }
+                }
+            });
+        }
+    });
+
+    /**
+     * Download action report as CSV
+     * GET /eloqua/action/report/:instanceId/csv
+     */
+    static downloadReportCSV = asyncHandler(async (req, res) => {
+        const { instanceId } = req.params;
+        const { status = 'all' } = req.query;
+
+        logger.info('Downloading action report CSV', { instanceId, status });
+
+        try {
+            const instance = await ActionInstance.findOne({ instanceId });
+            if (!instance) {
+                return res.status(404).send('Instance not found');
+            }
+
+            // Build query
+            const query = { instanceId };
+            if (status !== 'all') {
+                query.status = status;
+            }
+
+            // Get all logs (no pagination for CSV)
+            const logs = await SmsLog.find(query)
+                .sort({ createdAt: -1 })
+                .limit(10000) // Max 10k records for performance
+                .select('contactId emailAddress mobileNumber message messageId status sentAt deliveredAt errorMessage cost campaignTitle createdAt');
+
+            // Build CSV content
+            const csvRows = [];
+            
+            // Header
+            csvRows.push([
+                'Contact ID',
+                'Email Address',
+                'Mobile Number',
+                'Message',
+                'Message ID',
+                'Status',
+                'Sent At',
+                'Delivered At',
+                'Cost',
+                'Campaign Title',
+                'Error Message',
+                'Created At'
+            ].join(','));
+
+            // Data rows
+            logs.forEach(log => {
+                csvRows.push([
+                    log.contactId || '',
+                    log.emailAddress || '',
+                    log.mobileNumber || '',
+                    `"${(log.message || '').replace(/"/g, '""')}"`, // Escape quotes
+                    log.messageId || '',
+                    log.status || '',
+                    log.sentAt ? log.sentAt.toISOString() : '',
+                    log.deliveredAt ? log.deliveredAt.toISOString() : '',
+                    log.cost || 0,
+                    `"${(log.campaignTitle || '').replace(/"/g, '""')}"`,
+                    `"${(log.errorMessage || '').replace(/"/g, '""')}"`,
+                    log.createdAt ? log.createdAt.toISOString() : ''
+                ].join(','));
+            });
+
+            const csv = csvRows.join('\n');
+
+            // Set headers for file download
+            const filename = `sms-action-report-${instanceId}-${Date.now()}.csv`;
+            res.setHeader('Content-Type', 'text/csv');
+            res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+            res.send(csv);
+
+            logger.info('Action report CSV downloaded', {
+                instanceId,
+                recordCount: logs.length
+            });
+
+        } catch (error) {
+            logger.error('Error downloading action report CSV', {
+                instanceId,
+                error: error.message
+            });
+
+            res.status(500).send('Error generating CSV report');
+        }
+    });
+
 }
 
 module.exports = ActionController;

@@ -1150,6 +1150,207 @@ class DecisionController {
             });
         }
     });
+
+    /**
+     * Get decision report page
+     * GET /eloqua/decision/report/:instanceId
+     */
+    static getReportPage = asyncHandler(async (req, res) => {
+        const { instanceId } = req.params;
+        const { installId, siteId } = req.query;
+
+        logger.info('Loading decision report page', { instanceId, installId, siteId });
+
+        const instance = await DecisionInstance.findOne({ instanceId });
+        if (!instance) {
+            return res.status(404).send('Instance not found');
+        }
+
+        res.render('decision-report', {
+            instanceId,
+            installId: installId || instance.installId,
+            siteId: siteId || instance.SiteId
+        });
+    });
+
+    /**
+     * Get decision report data (JSON)
+     * GET /eloqua/decision/report/:instanceId/data
+     */
+    static getReport = asyncHandler(async (req, res) => {
+        const { instanceId } = req.params;
+        const { page = 1, limit = 100, status = 'all' } = req.query;
+
+        logger.info('Loading decision report data', { instanceId, page, limit, status });
+
+        try {
+            const instance = await DecisionInstance.findOne({ instanceId });
+            if (!instance) {
+                return res.status(404).json({
+                    success: false,
+                    error: 'Instance not found'
+                });
+            }
+
+            // Build query
+            const query = { decisionInstanceId: instanceId };
+            if (status !== 'all') {
+                query.decisionStatus = status;
+            }
+
+            // Get total count
+            const total = await SmsLog.countDocuments(query);
+
+            // Get paginated logs
+            const logs = await SmsLog.find(query)
+                .sort({ decisionProcessedAt: -1, sentAt: -1 })
+                .limit(parseInt(limit))
+                .skip((parseInt(page) - 1) * parseInt(limit))
+                .select('contactId emailAddress mobileNumber message responseMessage decisionStatus decisionProcessedAt sentAt hasResponse messageId decisionDeadline');
+
+            // Get statistics
+            const stats = await SmsLog.aggregate([
+                { $match: { decisionInstanceId: instanceId } },
+                {
+                    $group: {
+                        _id: '$decisionStatus',
+                        count: { $sum: 1 }
+                    }
+                }
+            ]);
+
+            const statsMap = {
+                yes: 0,
+                no: 0,
+                pending: 0,
+                total: 0
+            };
+
+            stats.forEach(stat => {
+                if (stat._id) {
+                    statsMap[stat._id] = stat.count;
+                    statsMap.total += stat.count;
+                }
+            });
+
+            res.json({
+                success: true,
+                instance: {
+                    instanceId: instance.instanceId,
+                    evaluation_period: instance.evaluation_period,
+                    text_type: instance.text_type,
+                    keyword: instance.keyword
+                },
+                logs,
+                stats: statsMap,
+                pagination: {
+                    page: parseInt(page),
+                    limit: parseInt(limit),
+                    total,
+                    pages: Math.ceil(total / parseInt(limit))
+                }
+            });
+
+        } catch (error) {
+            logger.error('Error loading decision report', {
+                instanceId,
+                error: error.message
+            });
+
+            res.status(500).json({
+                success: false,
+                error: error.message,
+                logs: [],
+                stats: { yes: 0, no: 0, pending: 0, total: 0 }
+            });
+        }
+    });
+
+    /**
+     * Download decision report as CSV
+     * GET /eloqua/decision/report/:instanceId/csv
+     */
+    static downloadReportCSV = asyncHandler(async (req, res) => {
+        const { instanceId } = req.params;
+        const { status = 'all' } = req.query;
+
+        logger.info('Downloading decision report CSV', { instanceId, status });
+
+        try {
+            const instance = await DecisionInstance.findOne({ instanceId });
+            if (!instance) {
+                return res.status(404).send('Instance not found');
+            }
+
+            // Build query
+            const query = { decisionInstanceId: instanceId };
+            if (status !== 'all') {
+                query.decisionStatus = status;
+            }
+
+            // Get all logs (no pagination for CSV)
+            const logs = await SmsLog.find(query)
+                .sort({ decisionProcessedAt: -1, sentAt: -1 })
+                .limit(10000) // Max 10k records
+                .select('contactId emailAddress mobileNumber message responseMessage decisionStatus decisionProcessedAt sentAt hasResponse messageId decisionDeadline');
+
+            // Build CSV content
+            const csvRows = [];
+            
+            // Header
+            csvRows.push([
+                'Contact ID',
+                'Email Address',
+                'Mobile Number',
+                'Original Message',
+                'Response Message',
+                'Decision Status',
+                'Has Response',
+                'Message ID',
+                'Sent At',
+                'Decision Processed At',
+                'Decision Deadline'
+            ].join(','));
+
+            // Data rows
+            logs.forEach(log => {
+                csvRows.push([
+                    log.contactId || '',
+                    log.emailAddress || '',
+                    log.mobileNumber || '',
+                    `"${(log.message || '').replace(/"/g, '""')}"`,
+                    `"${(log.responseMessage || '').replace(/"/g, '""')}"`,
+                    log.decisionStatus || '',
+                    log.hasResponse ? 'Yes' : 'No',
+                    log.messageId || '',
+                    log.sentAt ? log.sentAt.toISOString() : '',
+                    log.decisionProcessedAt ? log.decisionProcessedAt.toISOString() : '',
+                    log.decisionDeadline ? log.decisionDeadline.toISOString() : ''
+                ].join(','));
+            });
+
+            const csv = csvRows.join('\n');
+
+            // Set headers for file download
+            const filename = `sms-decision-report-${instanceId}-${Date.now()}.csv`;
+            res.setHeader('Content-Type', 'text/csv');
+            res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+            res.send(csv);
+
+            logger.info('Decision report CSV downloaded', {
+                instanceId,
+                recordCount: logs.length
+            });
+
+        } catch (error) {
+            logger.error('Error downloading decision report CSV', {
+                instanceId,
+                error: error.message
+            });
+
+            res.status(500).send('Error generating CSV report');
+        }
+    });
 }
 
 module.exports = DecisionController;

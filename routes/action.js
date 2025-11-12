@@ -14,7 +14,7 @@ router.post('/configure', verifyInstallation, ActionController.saveConfiguration
 // Execute action (notify)
 router.post('/notify', verifyInstallation, ActionController.notify);
 
-// Retrieve instance configuration - ADD THIS
+// Retrieve instance configuration
 router.get('/retrieve', verifyInstallation, ActionController.retrieve);
 
 // Copy instance
@@ -22,15 +22,18 @@ router.post('/copy', verifyInstallation, ActionController.copy);
 
 // Delete/Remove instance
 router.post('/delete', verifyInstallation, ActionController.delete);
-router.post('/remove', verifyInstallation, ActionController.delete); // ADD THIS: alias
-
-router.get('/report/:instanceId', ActionController.getReport);
+router.post('/remove', verifyInstallation, ActionController.delete);
 
 // Worker status
 router.get('/worker/status', ActionController.getWorkerStatus);
-router.get('/worker/health', ActionController.getWorkerHealth); // ADD THIS
+router.get('/worker/health', ActionController.getWorkerHealth);
 
-// AJAX endpoints - use sessionAuth for security
+// Report routes - NEW
+router.get('/report/:instanceId', sessionAuth, ActionController.getReportPage);
+router.get('/report/:instanceId/data', sessionAuth, ActionController.getReport);
+router.get('/report/:instanceId/csv', sessionAuth, ActionController.downloadReportCSV);
+
+// AJAX endpoints
 router.get('/ajax/sender-ids/:installId/:siteId', 
     sessionAuth, 
     ActionController.getSenderIds

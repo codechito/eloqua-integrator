@@ -1,0 +1,342 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>SMS Decision Report</title>
+    <link href="/eloqua-service/assets/css/bootstrap.min.css" rel="stylesheet">
+    <style>
+        body { 
+            font-family: Arial, sans-serif; 
+            padding: 20px;
+            background: #f5f5f5;
+        }
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+            background: white;
+            padding: 30px;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        h2 {
+            margin-bottom: 20px;
+            color: #333;
+        }
+        .stats-grid { 
+            display: grid; 
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); 
+            gap: 15px; 
+            margin-bottom: 30px; 
+        }
+        .stat-card { 
+            background: #f8f9fa; 
+            border: 1px solid #dee2e6; 
+            border-radius: 8px; 
+            padding: 20px; 
+            text-align: center;
+            transition: transform 0.2s;
+        }
+        .stat-card:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 4px 8px rgba(0,0,0,0.1);
+        }
+        .stat-number { 
+            font-size: 36px; 
+            font-weight: bold; 
+            margin: 10px 0; 
+        }
+        .stat-label { 
+            font-size: 14px; 
+            color: #666;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+        }
+        .stat-sublabel {
+            font-size: 12px;
+            color: #999;
+            margin-top: 5px;
+        }
+        .stat-card.yes { border-left: 4px solid #28a745; }
+        .stat-card.no { border-left: 4px solid #dc3545; }
+        .stat-card.pending { border-left: 4px solid #ffc107; }
+        
+        table { 
+            width: 100%; 
+            border-collapse: collapse; 
+            margin-top: 20px;
+            background: white;
+        }
+        th, td { 
+            padding: 12px; 
+            text-align: left; 
+            border-bottom: 1px solid #dee2e6; 
+            font-size: 13px; 
+        }
+        th { 
+            background: #f8f9fa; 
+            font-weight: bold;
+            position: sticky;
+            top: 0;
+            z-index: 10;
+        }
+        tr:hover { 
+            background: #f8f9fa; 
+        }
+        .status-badge { 
+            padding: 4px 10px; 
+            border-radius: 12px; 
+            font-size: 11px; 
+            font-weight: bold;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+        .status-yes { background: #d1e7dd; color: #0f5132; }
+        .status-no { background: #f8d7da; color: #842029; }
+        .status-pending { background: #fff3cd; color: #997404; }
+        
+        .btn { 
+            padding: 10px 20px; 
+            border: none; 
+            border-radius: 4px; 
+            cursor: pointer; 
+            font-size: 14px;
+            font-weight: 500;
+            transition: all 0.2s;
+        }
+        .btn:hover {
+            transform: translateY(-1px);
+            box-shadow: 0 2px 4px rgba(0,0,0,0.2);
+        }
+        .btn-primary { background: #007bff; color: white; }
+        .btn-primary:hover { background: #0056b3; }
+        .btn-success { background: #28a745; color: white; }
+        .btn-success:hover { background: #218838; }
+        
+        .filter-bar { 
+            margin: 20px 0; 
+            display: flex; 
+            gap: 10px; 
+            align-items: center;
+            flex-wrap: wrap;
+        }
+        .filter-bar select {
+            padding: 8px 12px;
+            border: 1px solid #dee2e6;
+            border-radius: 4px;
+            font-size: 14px;
+        }
+        .pagination { 
+            display: flex; 
+            gap: 10px; 
+            justify-content: center; 
+            margin: 20px 0;
+            align-items: center;
+        }
+        .pagination button {
+            min-width: 100px;
+        }
+        .pagination button:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+        .loading {
+            text-align: center;
+            padding: 40px;
+            color: #666;
+        }
+        .no-data {
+            text-align: center;
+            padding: 60px;
+            color: #999;
+            font-size: 16px;
+        }
+        .info-banner {
+            background: #e7f3ff;
+            border-left: 4px solid #007bff;
+            padding: 15px;
+            margin-bottom: 20px;
+            border-radius: 4px;
+        }
+        .message-preview {
+            max-width: 250px;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+    </style>
+</head>
+<body>
+    <div class="container" id="app">
+        <h2>🔀 SMS Decision Report</h2>
+        
+        <div class="info-banner">
+            <strong>Evaluation Period:</strong> {{ instance.evaluation_period }} hour(s)<br>
+            <strong>Response Type:</strong> {{ instance.text_type }}<br>
+            <strong>Keywords:</strong> {{ instance.keyword || 'Any response' }}<br>
+            <strong>Instance ID:</strong> {{ instanceId }}
+        </div>
+
+        <!-- Stats Cards -->
+        <div class="stats-grid">
+            <div class="stat-card yes">
+                <div class="stat-label">YES Path</div>
+                <div class="stat-number">{{ stats.yes }}</div>
+                <div class="stat-sublabel">Responded & Matched</div>
+            </div>
+            <div class="stat-card no">
+                <div class="stat-label">NO Path</div>
+                <div class="stat-number">{{ stats.no }}</div>
+                <div class="stat-sublabel">No Response / No Match</div>
+            </div>
+            <div class="stat-card pending">
+                <div class="stat-label">Pending</div>
+                <div class="stat-number">{{ stats.pending }}</div>
+                <div class="stat-sublabel">Waiting for Response</div>
+            </div>
+        </div>
+
+        <!-- Filter and Download -->
+        <div class="filter-bar">
+            <select v-model="statusFilter" @change="loadReport" class="form-control" style="width: 200px;">
+                <option value="all">All Status</option>
+                <option value="yes">YES</option>
+                <option value="no">NO</option>
+                <option value="pending">Pending</option>
+            </select>
+            <button @click="downloadCSV" class="btn btn-success">📥 Download CSV</button>
+            <button @click="loadReport" class="btn btn-primary">🔄 Refresh</button>
+            <span style="margin-left: auto; color: #666;">
+                Total: {{ pagination.total }} records
+            </span>
+        </div>
+
+        <!-- Loading State -->
+        <div v-if="loading" class="loading">
+            <div>Loading report data...</div>
+        </div>
+
+        <!-- No Data State -->
+        <div v-else-if="logs.length === 0" class="no-data">
+            <div>📭</div>
+            <div style="margin-top: 10px;">No decision logs found</div>
+        </div>
+
+        <!-- Table -->
+        <div v-else style="overflow-x: auto;">
+            <table>
+                <thead>
+                    <tr>
+                        <th>Contact ID</th>
+                        <th>Email</th>
+                        <th>Mobile</th>
+                        <th>Original Message</th>
+                        <th>Response</th>
+                        <th>Decision</th>
+                        <th>Processed At</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr v-for="log in logs" :key="log._id">
+                        <td>{{ log.contactId }}</td>
+                        <td>{{ log.emailAddress }}</td>
+                        <td>{{ log.mobileNumber }}</td>
+                        <td>
+                            <div class="message-preview" :title="log.message">
+                                {{ log.message || '-' }}
+                            </div>
+                        </td>
+                        <td>
+                            <div class="message-preview" :title="log.responseMessage">
+                                {{ log.responseMessage || '-' }}
+                            </div>
+                        </td>
+                        <td>
+                            <span :class="'status-badge status-' + log.decisionStatus">
+                                {{ log.decisionStatus ? log.decisionStatus.toUpperCase() : 'N/A' }}
+                            </span>
+                        </td>
+                        <td>{{ formatDate(log.decisionProcessedAt) }}</td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+
+        <!-- Pagination -->
+        <div class="pagination" v-if="pagination.pages > 1">
+            <button @click="changePage(page - 1)" :disabled="page === 1" class="btn btn-primary">
+                ← Previous
+            </button>
+            <span style="padding: 0 15px;">
+                Page {{ page }} of {{ pagination.pages }}
+            </span>
+            <button @click="changePage(page + 1)" :disabled="page >= pagination.pages" class="btn btn-primary">
+                Next →
+            </button>
+        </div>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/vue@2.6.11"></script>
+    <script src="/eloqua-service/assets/js/axios.min.js"></script>
+    <script>
+        const instanceId = '<%= instanceId %>';
+        const installId = '<%= installId %>';
+        const siteId = '<%= siteId %>';
+
+        new Vue({
+            el: '#app',
+            data: {
+                instanceId: instanceId,
+                instance: {},
+                logs: [],
+                stats: { yes: 0, no: 0, pending: 0, total: 0 },
+                pagination: { page: 1, pages: 1, total: 0 },
+                page: 1,
+                statusFilter: 'all',
+                loading: true
+            },
+            methods: {
+                async loadReport() {
+                    try {
+                        this.loading = true;
+                        const response = await axios.get(`/eloqua/decision/report/${instanceId}/data`, {
+                            params: {
+                                page: this.page,
+                                limit: 100,
+                                status: this.statusFilter
+                            }
+                        });
+
+                        this.instance = response.data.instance;
+                        this.logs = response.data.logs;
+                        this.stats = response.data.stats;
+                        this.pagination = response.data.pagination;
+                    } catch (error) {
+                        console.error('Error loading report:', error);
+                        alert('Failed to load report: ' + (error.response?.data?.error || error.message));
+                    } finally {
+                        this.loading = false;
+                    }
+                },
+                changePage(newPage) {
+                    if (newPage >= 1 && newPage <= this.pagination.pages) {
+                        this.page = newPage;
+                        this.loadReport();
+                    }
+                },
+                downloadCSV() {
+                    window.location.href = `/eloqua/decision/report/${instanceId}/csv?status=${this.statusFilter}`;
+                },
+                formatDate(dateString) {
+                    if (!dateString) return '-';
+                    const date = new Date(dateString);
+                    return date.toLocaleString();
+                }
+            },
+            mounted() {
+                this.loadReport();
+            }
+        });
+    </script>
+</body>
+</html>
