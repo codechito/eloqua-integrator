@@ -926,6 +926,53 @@ class EloquaService {
             throw error;
         }
     }
+
+    // services/eloquaService.js - ADD this method
+
+    /**
+     * Get custom object field mapping (name -> id)
+     * Returns an object like: { "mobile1": {id: "100001", name: "Mobile", ...}, ... }
+     */
+    async getCustomObjectFieldMap(customObjectId) {
+        await this.ensureInitialized();
+        
+        try {
+            logger.debug('Getting custom object field map', { customObjectId });
+
+            const customObject = await this.getCustomObject(customObjectId);
+            
+            if (!customObject || !customObject.fields) {
+                throw new Error('Custom object has no fields');
+            }
+
+            // Build map: internalName -> field object
+            const fieldMap = {};
+            customObject.fields.forEach(field => {
+                if (field.internalName) {
+                    fieldMap[field.internalName] = {
+                        id: field.id,
+                        name: field.name,
+                        internalName: field.internalName,
+                        dataType: field.dataType
+                    };
+                }
+            });
+
+            logger.debug('Custom object field map built', {
+                customObjectId,
+                fieldCount: Object.keys(fieldMap).length,
+                fields: Object.keys(fieldMap)
+            });
+
+            return fieldMap;
+        } catch (error) {
+            logger.error('Failed to get custom object field map', {
+                customObjectId,
+                error: error.message
+            });
+            throw error;
+        }
+    }
     
 }
 

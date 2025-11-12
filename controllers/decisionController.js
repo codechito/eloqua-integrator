@@ -1136,6 +1136,7 @@ class DecisionController {
 
     /**
      * Update custom object with reply data
+     * FIXED: Now uses field IDs from CDO structure
      */
     static async updateCustomObject(eloquaService, instance, consumer, smsLog, replyMessage) {
         try {
@@ -1153,70 +1154,89 @@ class DecisionController {
                 contactId: smsLog.contactId
             });
 
-            const cdoData = {
-                fieldValues: []
+            // Fetch CDO structure to get field IDs
+            const cdoFieldMap = await eloquaService.getCustomObjectFieldMap(cdoConfig.custom_object_id);
+
+            const fieldMap = new Map();
+
+            const addField = (fieldName, value) => {
+                if (!fieldName || fieldName.trim() === '') {
+                    return;
+                }
+                
+                const field = cdoFieldMap[fieldName.trim()];
+                
+                if (!field || !field.id) {
+                    logger.warn('Field not found in CDO structure for reply', {
+                        fieldName: fieldName.trim()
+                    });
+                    return;
+                }
+                
+                const fieldId = field.id;
+                
+                if (!fieldMap.has(fieldId)) {
+                    fieldMap.set(fieldId, value || '');
+                    logger.debug('Added CDO field for reply', {
+                        fieldName: fieldName.trim(),
+                        fieldId: fieldId,
+                        valueLength: (value || '').length
+                    });
+                }
             };
 
-            if (cdoConfig.mobile_field) {
-                cdoData.fieldValues.push({
-                    id: cdoConfig.mobile_field,
-                    value: smsLog.mobileNumber
-                });
-            }
+            addField(cdoConfig.mobile_field, smsLog.mobileNumber);
+            addField(cdoConfig.email_field, smsLog.emailAddress);
+            addField(cdoConfig.response_field, replyMessage ? replyMessage.substring(0, 250) : '');
+            addField(cdoConfig.title_field, smsLog.campaignTitle);
+            addField(cdoConfig.vn_field, smsLog.senderId);
 
-            if (cdoConfig.email_field) {
-                cdoData.fieldValues.push({
-                    id: cdoConfig.email_field,
-                    value: smsLog.emailAddress
-                });
-            }
-
-            if (cdoConfig.response_field && replyMessage) {
-                cdoData.fieldValues.push({
-                    id: cdoConfig.response_field,
-                    value: replyMessage.substring(0, 250)
-                });
-            }
-
-            if (cdoConfig.title_field && smsLog.campaignTitle) {
-                cdoData.fieldValues.push({
-                    id: cdoConfig.title_field,
-                    value: smsLog.campaignTitle
-                });
-            }
-
-            if (cdoConfig.vn_field && smsLog.senderId) {
-                cdoData.fieldValues.push({
-                    id: cdoConfig.vn_field,
-                    value: smsLog.senderId
-                });
-            }
-
-            if (cdoData.fieldValues.length > 0) {
-                await eloquaService.createCustomObjectRecord(
-                    cdoConfig.custom_object_id,
-                    cdoData
-                );
-
-                logger.info('Custom object updated successfully', {
-                    customObjectId: cdoConfig.custom_object_id,
-                    contactId: smsLog.contactId,
-                    fieldCount: cdoData.fieldValues.length
-                });
-            } else {
-                logger.warn('No field mappings configured for custom object', {
+            if (fieldMap.size === 0) {
+                logger.warn('No valid fields to insert for reply', {
                     customObjectId: cdoConfig.custom_object_id
                 });
+                return;
             }
 
+            const cdoData = {
+                type: "CustomObjectData",
+                contactId: smsLog.contactId,
+                fieldValues: Array.from(fieldMap.entries()).map(([id, value]) => ({
+                    id: id,
+                    value: value
+                }))
+            };
+
+            logger.info('CDO data prepared for reply with field IDs', {
+                customObjectId: cdoConfig.custom_object_id,
+                fieldCount: cdoData.fieldValues.length,
+                fields: cdoData.fieldValues.map(f => ({ 
+                    id: f.id, 
+                    valuePreview: (f.value || '').substring(0, 30) 
+                }))
+            });
+
+            await eloquaService.createCustomObjectRecord(
+                cdoConfig.custom_object_id,
+                cdoData
+            );
+
+            logger.info('Custom object updated successfully with reply', {
+                customObjectId: cdoConfig.custom_object_id,
+                contactId: smsLog.contactId,
+                fieldCount: cdoData.fieldValues.length
+            });
+
         } catch (error) {
-            logger.error('Error updating custom object', {
+            logger.error('Error updating custom object with reply', {
                 error: error.message,
-                stack: error.stack
+                stack: error.stack,
+                customObjectId: consumer.actions?.receivesms?.custom_object_id,
+                responseData: error.response?.data
             });
             throw error;
         }
-    }
+}
 
     /**
      * Get custom objects (AJAX)
