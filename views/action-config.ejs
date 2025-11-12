@@ -439,6 +439,81 @@
       .btn-report:hover {
         background: #218838;
       }
+
+      /* Summary Chart Styles - ADDED */
+      .report-section {
+        background: #fff;
+        border: 1px solid #dee2e6;
+        border-radius: 4px;
+        padding: 15px;
+        margin-bottom: 15px;
+      }
+
+      .report-section h5 {
+        margin: 0 0 15px 0;
+        font-size: 15px;
+        font-weight: bold;
+        color: #495057;
+        border-bottom: 2px solid #dee2e6;
+        padding-bottom: 8px;
+      }
+
+      .report-stats {
+        display: flex;
+        justify-content: space-around;
+        margin-bottom: 15px;
+        padding: 15px;
+        background: #f8f9fa;
+        border-radius: 4px;
+      }
+
+      .stat-card {
+        text-align: center;
+        flex: 1;
+      }
+
+      .stat-card .stat-number {
+        font-size: 32px;
+        font-weight: bold;
+        color: #007bff;
+        display: block;
+      }
+
+      .stat-card .stat-label {
+        font-size: 12px;
+        color: #6c757d;
+        text-transform: uppercase;
+        margin-top: 5px;
+        display: block;
+      }
+
+      .stat-card.sent .stat-number {
+        color: #007bff;
+      }
+
+      .stat-card.delivered .stat-number {
+        color: #28a745;
+      }
+
+      .stat-card.failed .stat-number {
+        color: #dc3545;
+      }
+
+      .stat-card.pending .stat-number {
+        color: #ffc107;
+      }
+
+      .loading-spinner {
+        text-align: center;
+        padding: 20px;
+        color: #6c757d;
+      }
+
+      .report-actions {
+        text-align: center;
+        padding-top: 10px;
+        border-top: 1px solid #dee2e6;
+      }
     </style>
   </head>
   <body>
@@ -657,6 +732,53 @@ Opt-out reply STOP"></textarea>
           </div>
         </div>
 
+        <!-- SMS Summary Chart - ADDED -->
+        <div class="report-section">
+          <h5>📊 SMS Send Summary</h5>
+
+          <!-- Loading State -->
+          <div v-if="loadingReport" class="loading-spinner">
+            <div class="spinner"></div>
+            <p>Loading statistics...</p>
+          </div>
+
+          <!-- Statistics Cards -->
+          <div v-else class="report-stats">
+            <div class="stat-card sent">
+              <span class="stat-number">{{ reportStats.sent.count }}</span>
+              <span class="stat-label">Sent</span>
+              <span class="stat-label" style="font-size: 10px; color: #999;">${{ reportStats.sent.cost.toFixed(2) }}</span>
+            </div>
+            <div class="stat-card delivered">
+              <span class="stat-number">{{ reportStats.delivered.count }}</span>
+              <span class="stat-label">Delivered</span>
+              <span class="stat-label" style="font-size: 10px; color: #999;">${{ reportStats.delivered.cost.toFixed(2) }}</span>
+            </div>
+            <div class="stat-card failed">
+              <span class="stat-number">{{ reportStats.failed.count }}</span>
+              <span class="stat-label">Failed</span>
+            </div>
+            <div class="stat-card pending">
+              <span class="stat-number">{{ reportStats.pending.count }}</span>
+              <span class="stat-label">Pending</span>
+            </div>
+          </div>
+
+          <!-- Refresh and View Full Report -->
+          <div class="report-actions">
+            <button type="button" @click="loadReport" class="btn btn-default" :disabled="loadingReport" style="width: auto; padding: 8px 20px; font-size: 13px; margin-right: 10px;">
+              <span v-if="loadingReport">
+                <span class="spinner spinner-sm"></span>
+                Refreshing...
+              </span>
+              <span v-else>🔄 Refresh</span>
+            </button>
+            <button type="button" @click="openReport" class="btn-report" style="padding: 8px 20px; font-size: 13px;">
+              View Full Report
+            </button>
+          </div>
+        </div>
+
         <!-- Custom Object Mapping Display (READ-ONLY) -->
         <div class="cdo-mapping-box">
           <h5>📋 Custom Object Mapping</h5>
@@ -798,7 +920,16 @@ Opt-out reply STOP"></textarea>
           
           // Test SMS
           messageStatus: {},
-          testingSms: false
+          testingSms: false,
+          
+          // Report summary data - ADDED
+          reportStats: {
+            sent: { count: 0, cost: 0 },
+            delivered: { count: 0, cost: 0 },
+            failed: { count: 0, cost: 0 },
+            pending: { count: 0, cost: 0 }
+          },
+          loadingReport: false
         },
         computed: {
           messageLength: function() {
@@ -820,6 +951,28 @@ Opt-out reply STOP"></textarea>
           openReport: function() {
             var url = '/eloqua/action/report/' + this.instance.instanceId + '?installId=' + this.consumer.installId + '&siteId=' + this.consumer.SiteId;
             window.open(url, 'ActionReport', 'width=1400,height=900,scrollbars=yes,resizable=yes');
+          },
+
+          // ADDED: Load report summary
+          loadReport: function() {
+            var vm = this;
+            vm.loadingReport = true;
+
+            axios.get('/eloqua/action/report/' + this.instance.instanceId + '/data', {
+              params: {
+                page: 1,
+                limit: 1,
+                status: 'all'
+              }
+            })
+            .then(function(response) {
+              vm.reportStats = response.data.stats;
+              vm.loadingReport = false;
+            })
+            .catch(function(error) {
+              console.error('Error loading report:', error);
+              vm.loadingReport = false;
+            });
           },
 
           clearStatus: function() {
@@ -1038,6 +1191,8 @@ Opt-out reply STOP"></textarea>
                   vm.messageStatus = { success: 'Configuration successfully updated' };
                   window.scrollTo({ top: 0, behavior: 'smooth' });
                   vm.saving = false;
+                  // Reload report after save
+                  vm.loadReport();
                 })
                 .catch(function (error) {
                   vm.messageStatus = { 
@@ -1067,6 +1222,7 @@ Opt-out reply STOP"></textarea>
           
           this.getProgramFields();
           this.loadCdoInfo();
+          this.loadReport(); // ADDED: Load report on mount
         }
       });
     </script>
