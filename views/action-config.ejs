@@ -955,10 +955,10 @@ Opt-out reply STOP"></textarea>
               params: {
                 page: 1,
                 limit: 1,
-                status: 'all',
-                installId: this.consumer.installId,  // ADDED
-                siteId: this.consumer.SiteId          // ADDED
-              }
+                status: 'all'
+              },
+              installId: vm.consumer.installId,  // ADDED
+              siteId: vm.consumer.SiteId          // ADDED
             })
             .then(function(response) {
               vm.reportStats = response.data.stats;
