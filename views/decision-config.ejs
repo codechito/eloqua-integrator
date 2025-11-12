@@ -299,13 +299,6 @@
           Check for Received SMS
         </h4>
 
-        <!-- REPORT BUTTON AT TOP -->
-        <div class="report-btn-wrapper">
-          <button type="button" @click="openReport" class="btn-report">
-            📊 Decision Evaluation Report
-          </button>
-        </div>
-
         <div v-if="status.success || status.error" 
              v-bind:class="{ 'alert-success': status.success, 'alert-danger': status.error, 'in': fade }" 
              class="alert fade" 
