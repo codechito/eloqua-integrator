@@ -101,6 +101,15 @@
         background: #ccc;
         cursor: not-allowed;
       }
+      .btn-default {
+        background: #fff;
+        color: #333;
+        border: 1px solid #ccc;
+        width: auto;
+      }
+      .btn-default:hover {
+        background: #e6e6e6;
+      }
       .alert {
         padding: 12px 15px;
         border-radius: 4px;
@@ -246,6 +255,7 @@
         color: #6c757d;
         text-transform: uppercase;
         margin-top: 5px;
+        display: block;
       }
 
       .stat-card.success .stat-number {
@@ -436,7 +446,7 @@
               </span>
               <span v-else>🔄 Refresh</span>
             </button>
-            <button type="button" @click="openReport" class="btn btn-report" style="padding: 8px 20px; font-size: 13px;">
+            <button type="button" @click="openReport" class="btn-report" style="padding: 8px 20px; font-size: 13px;">
               View Full Report
             </button>
           </div>
@@ -523,10 +533,10 @@
             axios.get('/eloqua/decision/report/' + this.instance.instanceId + '/data', {
               params: {
                 page: 1,
-                limit: 100,
+                limit: 1,
                 status: 'all',
-                installId: this.consumer.installId,  // ADDED
-                siteId: this.consumer.SiteId          // ADDED
+                installId: this.consumer.installId,
+                siteId: this.consumer.SiteId
               }
             })
             .then(function(response) {
@@ -579,6 +589,9 @@
             axios(options)
               .then(function(response) {
                 vm.showMessage('success', 'Configuration successfully saved');
+                
+                // Reload report after save
+                vm.loadReport();
                 
                 setTimeout(() => {
                   if (window.opener) {
@@ -659,7 +672,7 @@
           }
 
           this.loadCdoDetails();
-          this.loadReport();
+          this.loadReport(); // Load report on page load
         }
       });
     </script>
