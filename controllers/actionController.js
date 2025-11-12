@@ -1352,6 +1352,7 @@ class ActionController {
 
     /**
      * Process a single SMS job (called by worker)
+     * FIXED: Now logs to CDO after successful send
      */
     static async processSmsJob(job) {
         try {
@@ -1432,26 +1433,52 @@ class ActionController {
             job.smsLogId = smsLog._id;
             await job.save();
 
-            // Update custom object if configured
-            if (job.customObjectData && job.customObjectData.customObjectId) {
-                const instance = await ActionInstance.findOne({ instanceId: job.instanceId });
-                if (instance) {
-                    const eloquaService = new EloquaService(job.installId, instance.SiteId);
-                    await eloquaService.initialize();
-                    await ActionController.updateCustomObjectForJob(
-                        eloquaService,
-                        job,
-                        smsLog
-                    );
-                }
-            }
-
             logger.info('SMS sent successfully', {
                 jobId: job.jobId,
                 messageId: smsResponse.message_id,
                 to: job.mobileNumber,
                 hasTrackedLink: smsResponse.tracked_link_requested
             });
+
+            // UPDATE CUSTOM OBJECT IF CONFIGURED
+            const hasCdoConfig = !!(consumer.actions?.sendsms?.custom_object_id);
+            
+            if (hasCdoConfig) {
+                try {
+                    const instance = await ActionInstance.findOne({ instanceId: job.instanceId });
+                    if (!instance) {
+                        logger.warn('Instance not found for CDO update', {
+                            instanceId: job.instanceId
+                        });
+                    } else {
+                        const eloquaService = new EloquaService(job.installId, instance.SiteId);
+                        await eloquaService.initialize();
+                        
+                        await ActionController.updateCustomObjectForJob(
+                            eloquaService,
+                            consumer,
+                            job,
+                            smsLog
+                        );
+
+                        logger.info('CDO updated for sent SMS', {
+                            jobId: job.jobId,
+                            contactId: job.contactId,
+                            customObjectId: consumer.actions.sendsms.custom_object_id
+                        });
+                    }
+                } catch (cdoError) {
+                    logger.error('Error updating custom object for sent SMS', {
+                        jobId: job.jobId,
+                        error: cdoError.message
+                    });
+                    // Don't fail the job if CDO update fails
+                }
+            } else {
+                logger.debug('No CDO configured for send SMS action', {
+                    jobId: job.jobId
+                });
+            }
 
             return {
                 success: true,
@@ -1484,26 +1511,24 @@ class ActionController {
 
     /**
      * Update custom object after SMS sent
-     * Uses consumer.actions.sendsms configuration
+     * FIXED: Now uses consumer.actions.sendsms config
      */
-    static async updateCustomObjectForJob(eloquaService, job, smsLog) {
+    static async updateCustomObjectForJob(eloquaService, consumer, job, smsLog) {
         try {
-            // Get consumer to access CDO configuration
-            const consumer = await Consumer.findOne({ installId: job.installId });
-            if (!consumer) {
-                throw new Error('Consumer not found');
-            }
-
             const cdoConfig = consumer.actions?.sendsms;
+            
             if (!cdoConfig || !cdoConfig.custom_object_id) {
-                logger.debug('No custom object configured for sendsms', {
-                    installId: job.installId
+                logger.warn('No CDO config found for sendsms', {
+                    installId: consumer.installId,
+                    hasActions: !!consumer.actions,
+                    hasSendsms: !!consumer.actions?.sendsms
                 });
                 return;
             }
 
-            logger.debug('Updating custom object for SMS send', {
+            logger.info('Updating custom object for sent SMS', {
                 customObjectId: cdoConfig.custom_object_id,
+                contactId: smsLog.contactId,
                 jobId: job.jobId
             });
 
@@ -1511,6 +1536,7 @@ class ActionController {
                 fieldValues: []
             };
 
+            // Mobile field
             if (cdoConfig.mobile_field) {
                 cdoData.fieldValues.push({
                     id: cdoConfig.mobile_field,
@@ -1518,6 +1544,7 @@ class ActionController {
                 });
             }
 
+            // Email field
             if (cdoConfig.email_field) {
                 cdoData.fieldValues.push({
                     id: cdoConfig.email_field,
@@ -1525,13 +1552,15 @@ class ActionController {
                 });
             }
 
+            // Outgoing message field
             if (cdoConfig.outgoing_field) {
                 cdoData.fieldValues.push({
                     id: cdoConfig.outgoing_field,
-                    value: smsLog.message
+                    value: smsLog.message ? smsLog.message.substring(0, 1000) : ''
                 });
             }
 
+            // Notification/Status field
             if (cdoConfig.notification_field) {
                 cdoData.fieldValues.push({
                     id: cdoConfig.notification_field,
@@ -1539,6 +1568,7 @@ class ActionController {
                 });
             }
 
+            // Virtual number / Sender ID field
             if (cdoConfig.vn_field && smsLog.senderId) {
                 cdoData.fieldValues.push({
                     id: cdoConfig.vn_field,
@@ -1546,6 +1576,7 @@ class ActionController {
                 });
             }
 
+            // Campaign title field
             if (cdoConfig.title_field) {
                 cdoData.fieldValues.push({
                     id: cdoConfig.title_field,
@@ -1553,22 +1584,37 @@ class ActionController {
                 });
             }
 
-            if (cdoData.fieldValues.length > 0) {
-                await eloquaService.createCustomObjectRecord(cdoConfig.custom_object_id, cdoData);
-
-                logger.debug('Custom object updated for job', {
-                    jobId: job.jobId,
+            if (cdoData.fieldValues.length === 0) {
+                logger.warn('No field mappings found in CDO config', {
                     customObjectId: cdoConfig.custom_object_id,
-                    fieldCount: cdoData.fieldValues.length
+                    configKeys: Object.keys(cdoConfig)
                 });
+                return;
             }
+
+            logger.debug('CDO data prepared', {
+                customObjectId: cdoConfig.custom_object_id,
+                fieldCount: cdoData.fieldValues.length,
+                fields: cdoData.fieldValues.map(f => ({ id: f.id, valueLength: f.value?.length }))
+            });
+
+            await eloquaService.createCustomObjectRecord(cdoConfig.custom_object_id, cdoData);
+
+            logger.info('Custom object record created successfully', {
+                customObjectId: cdoConfig.custom_object_id,
+                contactId: smsLog.contactId,
+                fieldCount: cdoData.fieldValues.length
+            });
 
         } catch (error) {
             logger.error('Error updating custom object for job', {
                 jobId: job.jobId,
-                error: error.message
+                customObjectId: consumer.actions?.sendsms?.custom_object_id,
+                error: error.message,
+                stack: error.stack,
+                responseData: error.response?.data
             });
-            // Don't throw - log creation should not fail the SMS send
+            throw error;
         }
     }
 

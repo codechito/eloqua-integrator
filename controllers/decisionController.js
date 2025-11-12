@@ -463,7 +463,7 @@ class DecisionController {
 
     /**
      * Process notify asynchronously
-     * CRITICAL: executionId is required for syncing decisions
+     * FIXED: Now logs to CDO for all decision results
      */
     static async processNotifyAsync(instanceId, installId, siteId, assetId, executionId, executionData) {
         try {
@@ -515,19 +515,39 @@ class DecisionController {
                 return;
             }
 
+            // Initialize Eloqua service for CDO updates
+            let eloquaService = null;
+            const hasCdoConfig = !!(consumer.actions?.receivesms?.custom_object_id);
+            
+            if (hasCdoConfig) {
+                try {
+                    eloquaService = new EloquaService(consumer.installId, instance.SiteId);
+                    await eloquaService.initialize();
+                    
+                    logger.info('Eloqua service initialized for CDO logging', {
+                        customObjectId: consumer.actions.receivesms.custom_object_id
+                    });
+                } catch (error) {
+                    logger.error('Failed to initialize Eloqua service for CDO', {
+                        error: error.message
+                    });
+                }
+            }
+
             logger.info('Processing decision for SMS responses', {
                 instanceId,
                 executionId,
                 evaluationPeriod: instance.evaluation_period,
                 textType: instance.text_type,
                 keyword: instance.keyword,
-                itemsToProcess: executionData.items.length
+                itemsToProcess: executionData.items.length,
+                hasCdoConfig
             });
 
             const results = {
                 yes: [],
                 no: [],
-                errors: []
+                pending: []
             };
 
             for (const item of executionData.items) {
@@ -553,6 +573,7 @@ class DecisionController {
 
                     const cutoffDate = new Date(Date.now() - evaluationHours * 60 * 60 * 1000);
 
+                    // Find the most recent SMS sent to this contact
                     const smsLog = await SmsLog.findOne({
                         installId,
                         contactId: contactId,
@@ -567,6 +588,7 @@ class DecisionController {
                             cutoffDate
                         });
                         
+                        // No SMS sent = immediate NO
                         results.no.push({
                             contactId,
                             emailAddress,
@@ -579,70 +601,175 @@ class DecisionController {
                         contactId,
                         messageId: smsLog.messageId,
                         sentAt: smsLog.sentAt,
-                        hasResponse: smsLog.hasResponse
+                        hasResponse: smsLog.hasResponse,
+                        decisionDeadline: smsLog.decisionDeadline
                     });
 
-                    smsLog.decisionInstanceId = instanceId;
-                    smsLog.decisionStatus = smsLog.hasResponse ? 'yes' : 'pending';
-                    smsLog.decisionDeadline = new Date(
+                    // Calculate evaluation deadline
+                    const evaluationDeadline = new Date(
                         smsLog.sentAt.getTime() + (evaluationHours * 60 * 60 * 1000)
                     );
-                    await smsLog.save();
 
-                    if (smsLog.hasResponse) {
-                        const matches = DecisionController.evaluateReply(
-                            smsLog.responseMessage,
-                            instance.text_type,
-                            instance.keyword
-                        );
+                    const now = new Date();
 
-                        if (matches) {
-                            logger.info('Contact already responded (matches)', {
-                                contactId,
-                                messageId: smsLog.messageId
-                            });
+                    // Link SMS to this decision instance
+                    smsLog.decisionInstanceId = instanceId;
+                    smsLog.decisionDeadline = evaluationDeadline;
 
-                            results.yes.push({
-                                contactId,
-                                emailAddress,
-                                messageId: smsLog.messageId,
-                                responseMessage: smsLog.responseMessage
-                            });
+                    let shouldLogToCdo = false;
+                    let decisionResult = null;
+
+                    // Check if evaluation period has PASSED
+                    if (now > evaluationDeadline) {
+                        // Evaluation period is over
+                        if (smsLog.hasResponse) {
+                            const matches = DecisionController.evaluateReply(
+                                smsLog.responseMessage,
+                                instance.text_type,
+                                instance.keyword
+                            );
+
+                            if (matches) {
+                                smsLog.decisionStatus = 'yes';
+                                decisionResult = 'yes';
+                                results.yes.push({
+                                    contactId,
+                                    emailAddress,
+                                    messageId: smsLog.messageId,
+                                    responseMessage: smsLog.responseMessage
+                                });
+
+                                logger.info('Contact responded and matched - YES', {
+                                    contactId,
+                                    messageId: smsLog.messageId
+                                });
+                            } else {
+                                smsLog.decisionStatus = 'no';
+                                decisionResult = 'no';
+                                results.no.push({
+                                    contactId,
+                                    emailAddress,
+                                    messageId: smsLog.messageId,
+                                    reason: 'response_no_match'
+                                });
+
+                                logger.info('Contact responded but no match - NO', {
+                                    contactId,
+                                    messageId: smsLog.messageId
+                                });
+                            }
+                            shouldLogToCdo = true; // Has response, log it
                         } else {
-                            logger.info('Contact already responded (no match)', {
-                                contactId,
-                                messageId: smsLog.messageId
-                            });
-
+                            // Period expired, no response
+                            smsLog.decisionStatus = 'no';
+                            decisionResult = 'no';
                             results.no.push({
                                 contactId,
                                 emailAddress,
                                 messageId: smsLog.messageId,
-                                reason: 'response_no_match'
+                                reason: 'no_response_timeout'
+                            });
+
+                            logger.info('Evaluation period expired, no response - NO', {
+                                contactId,
+                                messageId: smsLog.messageId,
+                                deadline: evaluationDeadline
+                            });
+                            // Don't log to CDO if no response
+                        }
+
+                        smsLog.decisionProcessedAt = new Date();
+                    } else {
+                        // Evaluation period is STILL ACTIVE
+                        if (smsLog.hasResponse) {
+                            // Already has response - evaluate now
+                            const matches = DecisionController.evaluateReply(
+                                smsLog.responseMessage,
+                                instance.text_type,
+                                instance.keyword
+                            );
+
+                            if (matches) {
+                                smsLog.decisionStatus = 'yes';
+                                decisionResult = 'yes';
+                                results.yes.push({
+                                    contactId,
+                                    emailAddress,
+                                    messageId: smsLog.messageId,
+                                    responseMessage: smsLog.responseMessage
+                                });
+
+                                logger.info('Contact already responded (matches) - YES', {
+                                    contactId,
+                                    messageId: smsLog.messageId
+                                });
+                            } else {
+                                smsLog.decisionStatus = 'no';
+                                decisionResult = 'no';
+                                results.no.push({
+                                    contactId,
+                                    emailAddress,
+                                    messageId: smsLog.messageId,
+                                    reason: 'response_no_match'
+                                });
+
+                                logger.info('Contact already responded (no match) - NO', {
+                                    contactId,
+                                    messageId: smsLog.messageId
+                                });
+                            }
+
+                            smsLog.decisionProcessedAt = new Date();
+                            shouldLogToCdo = true; // Has response, log it
+                        } else {
+                            // NO response yet, still within period - mark as PENDING
+                            smsLog.decisionStatus = 'pending';
+                            
+                            // Don't add to results yet - will be evaluated later by cleanup worker
+                            results.pending.push({
+                                contactId,
+                                emailAddress,
+                                messageId: smsLog.messageId,
+                                deadline: evaluationDeadline
+                            });
+
+                            logger.info('Contact marked as PENDING - waiting for response', {
+                                contactId,
+                                messageId: smsLog.messageId,
+                                deadline: evaluationDeadline,
+                                remainingHours: ((evaluationDeadline - now) / (60 * 60 * 1000)).toFixed(2)
                             });
                         }
-                    } else {
-                        logger.debug('Contact pending response', {
-                            contactId,
-                            messageId: smsLog.messageId,
-                            deadline: smsLog.decisionDeadline
-                        });
+                    }
 
-                        results.no.push({
-                            contactId,
-                            emailAddress,
-                            messageId: smsLog.messageId,
-                            reason: 'no_response_yet'
-                        });
+                    await smsLog.save();
+
+                    // Log to CDO if we have a decision and a response
+                    if (shouldLogToCdo && eloquaService && smsLog.responseMessage) {
+                        try {
+                            await DecisionController.updateCustomObject(
+                                eloquaService,
+                                instance,
+                                consumer,
+                                smsLog,
+                                smsLog.responseMessage
+                            );
+
+                            logger.info('CDO updated for decision', {
+                                contactId,
+                                decision: decisionResult,
+                                responseMessage: smsLog.responseMessage?.substring(0, 50)
+                            });
+                        } catch (cdoError) {
+                            logger.error('Failed to update CDO for decision', {
+                                contactId,
+                                error: cdoError.message
+                            });
+                        }
                     }
 
                 } catch (error) {
                     logger.error('Error processing contact decision', {
-                        contactId: item.ContactID,
-                        error: error.message
-                    });
-
-                    results.errors.push({
                         contactId: item.ContactID,
                         error: error.message
                     });
@@ -654,21 +781,47 @@ class DecisionController {
                 executionId,
                 yesCount: results.yes.length,
                 noCount: results.no.length,
-                errorCount: results.errors.length
+                pendingCount: results.pending.length
             });
 
-            // CRITICAL: Pass executionId to sync method
-            await DecisionController.syncBulkDecisionResults(
-                consumer,
-                instance,
-                executionId,
-                results
-            );
+            // CRITICAL: Only sync YES and NO to Eloqua
+            // PENDING contacts will be synced later when they timeout or respond
+            const syncResults = {
+                yes: results.yes,
+                no: results.no
+            };
 
-            logger.info('Decision results synced to Eloqua', {
-                instanceId,
-                executionId
-            });
+            if (syncResults.yes.length > 0 || syncResults.no.length > 0) {
+                await DecisionController.syncBulkDecisionResults(
+                    consumer,
+                    instance,
+                    executionId,
+                    syncResults
+                );
+
+                logger.info('Immediate decision results synced to Eloqua', {
+                    instanceId,
+                    executionId,
+                    yesSynced: syncResults.yes.length,
+                    noSynced: syncResults.no.length,
+                    pendingNotSynced: results.pending.length
+                });
+            } else {
+                logger.info('No immediate decisions to sync (all pending)', {
+                    instanceId,
+                    executionId,
+                    pendingCount: results.pending.length
+                });
+            }
+
+            // Log info about pending contacts
+            if (results.pending.length > 0) {
+                logger.info('Contacts waiting for evaluation period', {
+                    instanceId,
+                    pendingCount: results.pending.length,
+                    note: 'These will be evaluated by the cleanup worker when deadline passes'
+                });
+            }
 
         } catch (error) {
             logger.error('Error in decision notify async processing', {

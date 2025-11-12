@@ -89,54 +89,36 @@ class DecisionCleanupWorker {
     }
 
     /**
-     * Process expired decisions
-     * Find SMS logs with pending decisions past their deadline
+     * Process expired decision evaluations
+     * FIXED: Now logs to CDO when decisions are made
      */
     async processExpiredDecisions() {
-        if (!this.isRunning) return;
-
         try {
-            this.stats.lastPollAt = new Date();
+            logger.info('Processing expired decision evaluations');
 
-            logger.debug('Polling for expired decisions');
+            const now = new Date();
 
-            // Get overall decision statistics first
-            const decisionStats = await this.getDecisionStats();
-
-            // Find all SMS logs with expired pending decisions
+            // Find all pending decisions that have passed their deadline
             const expiredLogs = await SmsLog.find({
-                decisionInstanceId: { $ne: null },
                 decisionStatus: 'pending',
-                decisionDeadline: { $lt: new Date() }
-            }).limit(this.config.batchSize);
-
-            this.stats.currentBatchSize = expiredLogs.length;
+                decisionDeadline: { $lt: now },
+                decisionInstanceId: { $ne: null }
+            }).limit(1000); // Process max 1000 per run
 
             if (expiredLogs.length === 0) {
-                logger.debug('No expired decisions found', {
-                    totalPending: decisionStats.pending,
-                    waitingForResponse: decisionStats.waitingForResponse,
-                    waitingForCleanup: 0
-                });
-                this.stats.currentBatchSize = 0;
+                logger.debug('No expired decision evaluations found');
                 return;
             }
 
-            logger.info('Found expired decisions to process', {
-                count: expiredLogs.length,
-                totalPending: decisionStats.pending,
-                waitingForResponse: decisionStats.waitingForResponse,
-                waitingForCleanup: expiredLogs.length,
-                totalYesDecisions: decisionStats.yes,
-                totalNoDecisions: decisionStats.no
+            logger.info('Found expired decision evaluations', {
+                count: expiredLogs.length
             });
 
-            let processedCount = 0;
-            let errorCount = 0;
+            // Group by instance for bulk processing
+            const groupedByInstance = {};
 
             for (const smsLog of expiredLogs) {
                 try {
-                    // Get decision instance
                     const instance = await DecisionInstance.findOne({
                         instanceId: smsLog.decisionInstanceId,
                         isActive: true
@@ -144,61 +126,122 @@ class DecisionCleanupWorker {
 
                     if (!instance) {
                         logger.warn('Decision instance not found for expired log', {
-                            smsLogId: smsLog._id,
-                            instanceId: smsLog.decisionInstanceId
+                            instanceId: smsLog.decisionInstanceId,
+                            contactId: smsLog.contactId
                         });
                         continue;
                     }
 
-                    // Mark as no response
-                    smsLog.decisionStatus = 'no';
+                    const consumer = await Consumer.findOne({
+                        installId: instance.installId
+                    });
+
+                    if (!consumer) {
+                        logger.error('Consumer not found for decision', {
+                            installId: instance.installId
+                        });
+                        continue;
+                    }
+
+                    // Evaluate the response (if any)
+                    let decision = 'no';
+                    if (smsLog.hasResponse) {
+                        const matches = DecisionController.evaluateReply(
+                            smsLog.responseMessage,
+                            instance.text_type,
+                            instance.keyword
+                        );
+                        decision = matches ? 'yes' : 'no';
+                    }
+
+                    // Update SMS log
+                    smsLog.decisionStatus = decision;
                     smsLog.decisionProcessedAt = new Date();
                     await smsLog.save();
 
-                    // Sync to Eloqua
-                    await DecisionController.syncSingleDecisionResult(
-                        instance,
-                        smsLog,
-                        'no'
-                    );
-
-                    processedCount++;
-                    this.stats.totalProcessed++;
-                    this.stats.totalNo++;
-                    this.stats.totalExpired++;
-
-                    logger.debug('Expired decision processed', {
-                        smsLogId: smsLog._id,
+                    logger.info('Decision evaluated on expiry', {
                         contactId: smsLog.contactId,
-                        deadline: smsLog.decisionDeadline
+                        messageId: smsLog.messageId,
+                        decision,
+                        hadResponse: smsLog.hasResponse
+                    });
+
+                    // Log to CDO if there was a response
+                    if (smsLog.hasResponse && consumer.actions?.receivesms?.custom_object_id) {
+                        try {
+                            const eloquaService = new EloquaService(
+                                consumer.installId,
+                                instance.SiteId
+                            );
+                            await eloquaService.initialize();
+
+                            await DecisionController.updateCustomObject(
+                                eloquaService,
+                                instance,
+                                consumer,
+                                smsLog,
+                                smsLog.responseMessage
+                            );
+
+                            logger.info('CDO updated for expired decision', {
+                                contactId: smsLog.contactId,
+                                decision,
+                                responseMessage: smsLog.responseMessage?.substring(0, 50)
+                            });
+                        } catch (cdoError) {
+                            logger.error('Failed to update CDO for expired decision', {
+                                contactId: smsLog.contactId,
+                                error: cdoError.message
+                            });
+                        }
+                    }
+
+                    // Group for potential bulk sync (optional - may not work without executionId)
+                    const key = smsLog.decisionInstanceId;
+                    if (!groupedByInstance[key]) {
+                        groupedByInstance[key] = {
+                            instance,
+                            consumer,
+                            yes: [],
+                            no: []
+                        };
+                    }
+
+                    groupedByInstance[key][decision].push({
+                        contactId: smsLog.contactId,
+                        emailAddress: smsLog.emailAddress,
+                        messageId: smsLog.messageId,
+                        responseMessage: smsLog.responseMessage
                     });
 
                 } catch (error) {
-                    errorCount++;
-                    this.stats.totalErrors++;
-                    logger.error('Error processing expired decision', {
-                        smsLogId: smsLog._id,
+                    logger.error('Error processing expired decision for contact', {
+                        contactId: smsLog.contactId,
                         error: error.message
                     });
                 }
             }
 
-            logger.info('Expired decisions processing completed', {
-                total: expiredLogs.length,
-                processed: processedCount,
-                errors: errorCount,
-                totalProcessedLifetime: this.stats.totalProcessed,
-                totalExpiredLifetime: this.stats.totalExpired
+            logger.info('Expired decision processing completed', {
+                totalProcessed: expiredLogs.length,
+                instancesAffected: Object.keys(groupedByInstance).length
             });
 
-            this.stats.currentBatchSize = 0;
+            // Log summary by instance
+            for (const [instanceId, data] of Object.entries(groupedByInstance)) {
+                logger.info('Expired decisions processed for instance', {
+                    instanceId,
+                    yesCount: data.yes.length,
+                    noCount: data.no.length,
+                    note: 'CDO records created for contacts with responses'
+                });
+            }
 
         } catch (error) {
-            logger.error('Error in decision cleanup worker', {
+            logger.error('Error in processExpiredDecisions', {
                 error: error.message,
                 stack: error.stack
             });
-            this.stats.currentBatchSize = 0;
         }
     }
 
