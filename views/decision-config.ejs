@@ -201,6 +201,94 @@
       .btn-report:hover {
         background: #218838;
       }
+
+      /* Summary Chart Styles */
+      .report-section {
+        background: #fff;
+        border: 1px solid #dee2e6;
+        border-radius: 4px;
+        padding: 15px;
+        margin-bottom: 15px;
+      }
+
+      .report-section h5 {
+        margin: 0 0 15px 0;
+        font-size: 15px;
+        font-weight: bold;
+        color: #495057;
+        border-bottom: 2px solid #dee2e6;
+        padding-bottom: 8px;
+      }
+
+      .report-stats {
+        display: flex;
+        justify-content: space-around;
+        margin-bottom: 15px;
+        padding: 15px;
+        background: #f8f9fa;
+        border-radius: 4px;
+      }
+
+      .stat-card {
+        text-align: center;
+        flex: 1;
+      }
+
+      .stat-card .stat-number {
+        font-size: 32px;
+        font-weight: bold;
+        color: #007bff;
+        display: block;
+      }
+
+      .stat-card .stat-label {
+        font-size: 12px;
+        color: #6c757d;
+        text-transform: uppercase;
+        margin-top: 5px;
+      }
+
+      .stat-card.success .stat-number {
+        color: #28a745;
+      }
+
+      .stat-card.danger .stat-number {
+        color: #dc3545;
+      }
+
+      .stat-card.warning .stat-number {
+        color: #ffc107;
+      }
+
+      .loading-spinner {
+        text-align: center;
+        padding: 20px;
+        color: #6c757d;
+      }
+
+      .report-actions {
+        text-align: center;
+        padding-top: 10px;
+        border-top: 1px solid #dee2e6;
+      }
+
+      .info-box {
+        background: #e7f3ff;
+        border-left: 4px solid #007bff;
+        padding: 15px;
+        margin-bottom: 20px;
+        border-radius: 4px;
+      }
+      .info-box p {
+        margin: 0;
+        font-size: 13px;
+        line-height: 1.6;
+        color: #004085;
+      }
+      .info-box strong {
+        display: block;
+        margin-bottom: 5px;
+      }
     </style>
   </head>
   <body>
@@ -223,6 +311,15 @@
              class="alert fade" 
              role="alert">
           {{ status.success || status.error }}
+        </div>
+
+        <div class="info-box">
+          <p>
+            <strong>How it works:</strong>
+            This decision step checks if contacts replied to SMS messages sent earlier in the campaign.
+            Contacts who respond within the evaluation period will go down the <strong>YES</strong> path.
+            Others will go down the <strong>NO</strong> path.
+          </p>
         </div>
 
         <!-- Decision Configuration -->
@@ -314,6 +411,53 @@
           </div>
         </div>
 
+        <div class="section-divider"></div>
+
+        <!-- Decision Summary Chart -->
+        <div class="report-section">
+          <h5>📊 Decision Summary</h5>
+
+          <!-- Loading State -->
+          <div v-if="loadingReport" class="loading-spinner">
+            <div class="spinner"></div>
+            <p>Loading statistics...</p>
+          </div>
+
+          <!-- Statistics Cards -->
+          <div v-else class="report-stats">
+            <div class="stat-card success">
+              <span class="stat-number">{{ reportStats.yes }}</span>
+              <span class="stat-label">YES Path</span>
+            </div>
+            <div class="stat-card danger">
+              <span class="stat-number">{{ reportStats.no }}</span>
+              <span class="stat-label">NO Path</span>
+            </div>
+            <div class="stat-card warning">
+              <span class="stat-number">{{ reportStats.pending }}</span>
+              <span class="stat-label">Pending</span>
+            </div>
+            <div class="stat-card">
+              <span class="stat-number">{{ reportStats.total }}</span>
+              <span class="stat-label">Total</span>
+            </div>
+          </div>
+
+          <!-- Refresh and View Full Report -->
+          <div class="report-actions">
+            <button type="button" @click="loadReport" class="btn btn-default" :disabled="loadingReport" style="width: auto; padding: 8px 20px; font-size: 13px; margin-right: 10px;">
+              <span v-if="loadingReport">
+                <span class="spinner spinner-sm"></span>
+                Refreshing...
+              </span>
+              <span v-else>🔄 Refresh</span>
+            </button>
+            <button type="button" @click="openReport" class="btn-report" style="padding: 8px 20px; font-size: 13px;">
+              View Full Report
+            </button>
+          </div>
+        </div>
+
         <button 
           id="btnSave" 
           type="button" 
@@ -356,7 +500,15 @@
             response_field: null,
             title_field: null,
             vn_field: null
-          }
+          },
+          // Report summary data
+          reportStats: {
+            yes: 0,
+            no: 0,
+            pending: 0,
+            total: 0
+          },
+          loadingReport: false
         },
         computed: {
           isValid: function() {
@@ -380,7 +532,33 @@
             window.open(url, 'DecisionReport', 'width=1400,height=900,scrollbars=yes,resizable=yes');
           },
 
-          saveInstance() {
+          loadReport: function() {
+            var vm = this;
+            vm.loadingReport = true;
+
+            axios.get('/eloqua/decision/report/' + this.instance.instanceId + '/data', {
+              params: {
+                page: 1,
+                limit: 100,
+                status: 'all'
+              }
+            })
+            .then(function(response) {
+              vm.reportStats = response.data.stats || {
+                yes: 0,
+                no: 0,
+                pending: 0,
+                total: 0
+              };
+              vm.loadingReport = false;
+            })
+            .catch(function(error) {
+              console.error('Error loading report:', error);
+              vm.loadingReport = false;
+            });
+          },
+
+          saveInstance: function() {
             var vm = this;
 
             if (!this.isValid) {
@@ -436,7 +614,7 @@
               });
           },
 
-          showMessage(type, message) {
+          showMessage: function(type, message) {
             this.status = {};
             this.status[type] = message;
             this.fade = true;
@@ -449,7 +627,7 @@
             }, 3000);
           },
 
-          loadCdoDetails() {
+          loadCdoDetails: function() {
             var vm = this;
             
             if (!this.hasCdoConfig) {
@@ -495,6 +673,7 @@
           }
 
           this.loadCdoDetails();
+          this.loadReport();
         }
       });
     </script>
