@@ -7,7 +7,9 @@ const { logger } = require('../utils');
  */
 async function sessionAuth(req, res, next) {
     try {
-        const { installId, siteId } = req.params;
+
+        const installId = req.session?.installId || req.query?.installId || req.params?.installId;
+        const siteId = req.session?.siteId || req.query?.siteId || req.params?.siteId;
 
         logger.debug('Session auth check', {
             installId,
