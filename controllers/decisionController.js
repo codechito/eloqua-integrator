@@ -1103,55 +1103,6 @@ class DecisionController {
     });
 
     /**
-     * Get decision report
-     * GET /eloqua/decision/report/:instanceId
-     */
-    static getReport = asyncHandler(async (req, res) => {
-        const { instanceId } = req.params;
-
-        logger.info('Loading decision report', { instanceId });
-
-        try {
-            const logs = await SmsLog.find({ decisionInstanceId: instanceId })
-                .sort({ decisionProcessedAt: -1, sentAt: -1 })
-                .limit(100)
-                .select('contactId emailAddress mobileNumber message responseMessage decisionStatus decisionProcessedAt sentAt hasResponse');
-
-            const stats = {
-                yes: 0,
-                no: 0,
-                pending: 0,
-                total: logs.length
-            };
-
-            logs.forEach(log => {
-                if (log.decisionStatus === 'yes') stats.yes++;
-                else if (log.decisionStatus === 'no') stats.no++;
-                else if (log.decisionStatus === 'pending') stats.pending++;
-            });
-
-            res.json({
-                success: true,
-                logs,
-                stats
-            });
-
-        } catch (error) {
-            logger.error('Error loading decision report', {
-                instanceId,
-                error: error.message
-            });
-
-            res.status(500).json({
-                success: false,
-                error: error.message,
-                logs: [],
-                stats: { yes: 0, no: 0, pending: 0, total: 0 }
-            });
-        }
-    });
-
-    /**
      * Get decision report page
      * GET /eloqua/decision/report/:instanceId
      */
@@ -1174,7 +1125,7 @@ class DecisionController {
     });
 
     /**
-     * Get decision report data (JSON)
+     * Get decision report data (JSON) - WITH PAGINATION
      * GET /eloqua/decision/report/:instanceId/data
      */
     static getReport = asyncHandler(async (req, res) => {
@@ -1233,6 +1184,12 @@ class DecisionController {
                 }
             });
 
+            logger.info('Decision report data loaded', {
+                instanceId,
+                logsCount: logs.length,
+                stats: statsMap
+            });
+
             res.json({
                 success: true,
                 instance: {
@@ -1254,7 +1211,8 @@ class DecisionController {
         } catch (error) {
             logger.error('Error loading decision report', {
                 instanceId,
-                error: error.message
+                error: error.message,
+                stack: error.stack
             });
 
             res.status(500).json({
