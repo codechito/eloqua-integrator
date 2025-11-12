@@ -1511,7 +1511,7 @@ class ActionController {
 
     /**
      * Update custom object after SMS sent
-     * FIXED: Now uses consumer.actions.sendsms config
+     * FIXED: Deduplicates field IDs to prevent validation errors
      */
     static async updateCustomObjectForJob(eloquaService, consumer, job, smsLog) {
         try {
@@ -1532,70 +1532,67 @@ class ActionController {
                 jobId: job.jobId
             });
 
-            const cdoData = {
-                fieldValues: []
+            // ===== CRITICAL FIX: Use Map to prevent duplicates =====
+            const fieldMap = new Map();
+
+            // Helper function to add field safely
+            const addField = (fieldId, value) => {
+                if (!fieldId || fieldId.trim() === '') {
+                    logger.debug('Skipping empty field ID');
+                    return;
+                }
+                
+                const trimmedId = fieldId.trim();
+                
+                // Only add if not already in map
+                if (!fieldMap.has(trimmedId)) {
+                    fieldMap.set(trimmedId, value || '');
+                    logger.debug('Added CDO field', {
+                        fieldId: trimmedId,
+                        valueLength: (value || '').length
+                    });
+                } else {
+                    logger.warn('Skipping duplicate CDO field', {
+                        fieldId: trimmedId,
+                        existingValue: fieldMap.get(trimmedId)?.substring(0, 20),
+                        newValue: (value || '').substring(0, 20)
+                    });
+                }
             };
 
-            // Mobile field
-            if (cdoConfig.mobile_field) {
-                cdoData.fieldValues.push({
-                    id: cdoConfig.mobile_field,
-                    value: smsLog.mobileNumber
-                });
-            }
+            // Add each field using the helper
+            addField(cdoConfig.mobile_field, smsLog.mobileNumber);
+            addField(cdoConfig.email_field, smsLog.emailAddress);
+            addField(cdoConfig.outgoing_field, smsLog.message ? smsLog.message.substring(0, 1000) : '');
+            addField(cdoConfig.notification_field, 'sent');
+            addField(cdoConfig.vn_field, smsLog.senderId);
+            addField(cdoConfig.title_field, smsLog.campaignTitle);
 
-            // Email field
-            if (cdoConfig.email_field) {
-                cdoData.fieldValues.push({
-                    id: cdoConfig.email_field,
-                    value: smsLog.emailAddress
-                });
-            }
-
-            // Outgoing message field
-            if (cdoConfig.outgoing_field) {
-                cdoData.fieldValues.push({
-                    id: cdoConfig.outgoing_field,
-                    value: smsLog.message ? smsLog.message.substring(0, 1000) : ''
-                });
-            }
-
-            // Notification/Status field
-            if (cdoConfig.notification_field) {
-                cdoData.fieldValues.push({
-                    id: cdoConfig.notification_field,
-                    value: 'sent'
-                });
-            }
-
-            // Virtual number / Sender ID field
-            if (cdoConfig.vn_field && smsLog.senderId) {
-                cdoData.fieldValues.push({
-                    id: cdoConfig.vn_field,
-                    value: smsLog.senderId
-                });
-            }
-
-            // Campaign title field
-            if (cdoConfig.title_field) {
-                cdoData.fieldValues.push({
-                    id: cdoConfig.title_field,
-                    value: smsLog.campaignTitle || ''
-                });
-            }
-
-            if (cdoData.fieldValues.length === 0) {
-                logger.warn('No field mappings found in CDO config', {
+            if (fieldMap.size === 0) {
+                logger.warn('No field mappings configured', {
                     customObjectId: cdoConfig.custom_object_id,
-                    configKeys: Object.keys(cdoConfig)
+                    configKeys: Object.keys(cdoConfig),
+                    config: cdoConfig
                 });
                 return;
             }
 
-            logger.debug('CDO data prepared', {
+            // Convert Map to fieldValues array
+            const cdoData = {
+                fieldValues: Array.from(fieldMap.entries()).map(([id, value]) => ({
+                    id: id,
+                    value: value
+                }))
+            };
+
+            logger.info('CDO data prepared (deduplicated)', {
                 customObjectId: cdoConfig.custom_object_id,
                 fieldCount: cdoData.fieldValues.length,
-                fields: cdoData.fieldValues.map(f => ({ id: f.id, valueLength: f.value?.length }))
+                uniqueFields: cdoData.fieldValues.map(f => f.id),
+                fields: cdoData.fieldValues.map(f => ({ 
+                    id: f.id, 
+                    valuePreview: (f.value || '').substring(0, 30) 
+                }))
             });
 
             await eloquaService.createCustomObjectRecord(cdoConfig.custom_object_id, cdoData);
