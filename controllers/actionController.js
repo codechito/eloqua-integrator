@@ -1208,19 +1208,36 @@ class ActionController {
                     });
                 }
 
+                const callbackParams = new URLSearchParams({
+                    installId: instance.installId,
+                    instanceId: instance.instanceId,
+                    contactId: item.ContactID,
+                    executionId: executionId,
+                    mobile: formattedMobile
+                }).toString();
+
                 // Build SMS options
                 const smsOptions = {
                     country: country,
                     trackedLinkUrl: item.tracked_link_url || null,
                     messageExpiry: instance.message_expiry === 'YES',
-                    messageValidity: instance.message_validity ? instance.message_validity * 60 : null
+                    messageValidity: instance.message_validity ? instance.message_validity * 60 : null,
+                    // Webhook URLs with tracking parameters
+                    dlrCallback: `${baseUrl}/webhooks/dlr?${callbackParams}`,
+                    replyCallback: `${baseUrl}/webhooks/reply?${callbackParams}`,
+                    linkHitsCallback: item.tracked_link_url 
+                        ? `${baseUrl}/webhooks/linkhit?${callbackParams}` 
+                        : null
                 };
 
-                logger.debug('SMS options built', {
+                logger.debug('SMS options built with webhook parameters', {
                     contactId: item.ContactID,
-                    hasTrackedLink: !!smsOptions.trackedLinkUrl,
-                    trackedLinkUrl: smsOptions.trackedLinkUrl,
-                    messageHasPlaceholder: item.message?.includes('[tracked-link]')
+                    mobile: formattedMobile,
+                    webhooks: {
+                        dlr: !!smsOptions.dlrCallback,
+                        reply: !!smsOptions.replyCallback,
+                        linkHits: !!smsOptions.linkHitsCallback
+                    }
                 });
 
                 // Create SMS job
@@ -1397,7 +1414,12 @@ class ActionController {
                 messageLength: job.message?.length,
                 hasTrackedLink: !!smsOptions.trackedLinkUrl,
                 trackedLinkUrl: smsOptions.trackedLinkUrl,
-                messageHasPlaceholder: job.message?.includes('[tracked-link]')
+                messageHasPlaceholder: job.message?.includes('[tracked-link]'),
+                hasCallbacks: {
+                    dlr: !!smsOptions.dlrCallback,
+                    reply: !!smsOptions.replyCallback,
+                    linkHits: !!smsOptions.linkHitsCallback
+                }
             });
 
             const smsResponse = await smsService.sendSms(

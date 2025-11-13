@@ -71,32 +71,22 @@
                     </select>
                     <p style="width:320px; text-align:left; font-size:11px;"><i>Number will be formatted for delivery to this country if contact has no country defined.</i></p>
                 </div>
-                <div class="form-group">
-                    <label for="dlr_callback" style="width:320px; text-align:left;">Delivery Callback URL</label>
-                    <input type="text" 
-                           style="width:320px; text-align:left;" 
-                           class="form-control" 
-                           v-model="consumer.dlr_callback" 
-                           readonly/>
-                </div>
-                <div class="form-group">
-                    <label for="reply_callback" style="width:320px; text-align:left;">Reply Callback URL</label>
-                    <input type="text" 
-                           style="width:320px; text-align:left;" 
-                           class="form-control" 
-                           v-model="consumer.reply_callback" 
-                           readonly/>
-                </div>
-                <div class="form-group">
-                    <label for="link_hits_callback" style="width:320px; text-align:left;">Link Hits Callback URL</label>
-                    <input type="text" 
-                           style="width:320px; text-align:left;" 
-                           class="form-control" 
-                           v-model="consumer.link_hits_callback" 
-                           readonly/>
-                </div>
-                <p style="font-size: 12px;">Your Burst SMS API Key and secret can be found here: <a target="_blank" href="https://burst.transmitsms.com/profile">https://burst.transmitsms.com/profile</a></p>
+                
+                <!-- Removed webhook URL fields - they're automatically configured -->
+                
+                <p style="font-size: 12px; margin-top: 20px;">Your Burst SMS API Key and secret can be found here: <a target="_blank" href="https://burst.transmitsms.com/profile">https://burst.transmitsms.com/profile</a></p>
                 <p style="font-size: 12px;">No Account? Register here: <a target="_blank" href="https://go.burstsms.com">https://go.burstsms.com</a></p>
+                
+                <!-- Webhook Information (Read-only info) -->
+                <div style="background: #f8f9fa; padding: 15px; border-radius: 4px; margin-top: 20px; border-left: 4px solid #007bff;">
+                    <h5 style="font-size: 14px; font-weight: bold; margin-bottom: 10px;">Webhook Endpoints</h5>
+                    <p style="font-size: 11px; margin-bottom: 5px;">The following webhooks are automatically configured:</p>
+                    <ul style="font-size: 11px; text-align: left; margin: 0; padding-left: 20px;">
+                        <li>Delivery receipts (DLR)</li>
+                        <li>SMS replies</li>
+                        <li>Link click tracking</li>
+                    </ul>
+                </div>
             </div>
 
             <!-- Right Column: Custom Object Mapping -->
@@ -340,7 +330,7 @@
                 fieldsCache: {},
                 actionidx: 'sendsms',
                 currentFields: [],
-                selectedCustomObjects: {  // Store full objects for v-select
+                selectedCustomObjects: {
                     sendsms: null,
                     receivesms: null,
                     incomingsms: null,
@@ -365,8 +355,6 @@
                     if (vm.customObjectsCache[cacheKey]) {
                         vm.customObjects = vm.customObjectsCache[cacheKey];
                         if (loading) loading(false);
-                        
-                        // Try to resolve selected objects from the loaded list
                         vm.resolveSelectedObjects();
                         return;
                     }
@@ -381,10 +369,7 @@
                         vm.customObjects = response.data.elements || [];
                         vm.customObjectsCache[cacheKey] = vm.customObjects;
                         console.log('Custom objects loaded:', vm.customObjects.length);
-                        
-                        // Resolve selected objects after loading
                         vm.resolveSelectedObjects();
-                        
                         if (loading) loading(false);
                         vm.loadingCustomObjects = false;
                     })
@@ -412,7 +397,6 @@
                         var customObjectId = vm.consumer.actions[actionType]?.custom_object_id;
                         
                         if (customObjectId && !vm.selectedCustomObjects[actionType]) {
-                            // Find the custom object in the list
                             var found = vm.customObjects.find(function(co) {
                                 return co.id == customObjectId;
                             });
@@ -422,7 +406,6 @@
                                 vm.$set(vm.selectedCustomObjects, actionType, found);
                             } else {
                                 console.log('[' + actionType + '] Custom object not found in list, will fetch:', customObjectId);
-                                // Fetch this specific custom object
                                 vm.fetchSingleCustomObject(customObjectId, actionType);
                             }
                         }
@@ -440,11 +423,8 @@
                             };
                             
                             console.log('[' + actionType + '] Fetched single custom object:', customObject.id, '-', customObject.name);
-                            
-                            // Set the selected object
                             vm.$set(vm.selectedCustomObjects, actionType, customObject);
                             
-                            // Add to custom objects list if not already there
                             var exists = vm.customObjects.find(function(co) {
                                 return co.id == customObject.id;
                             });
@@ -465,15 +445,12 @@
                     console.log('Custom object ID:', vm.consumer.actions[vm.actionidx]?.custom_object_id);
                     console.log('Selected object:', vm.selectedCustomObjects[vm.actionidx]);
                     
-                    // Update tracking
                     vm.previousCustomObjectIds[vm.actionidx] = vm.consumer.actions[vm.actionidx]?.custom_object_id || null;
                     
-                    // If we have a custom object ID but no selected object, try to resolve it
                     if (vm.consumer.actions[vm.actionidx]?.custom_object_id && !vm.selectedCustomObjects[vm.actionidx]) {
                         vm.resolveSelectedObjects();
                     }
                     
-                    // Load fields
                     vm.$nextTick(function() {
                         vm.loadFieldsForCurrentAction();
                     });
@@ -489,13 +466,9 @@
                     console.log('[' + currentActionType + '] Changed from', previousId, 'to', customObjectId);
                     console.log('Selected object:', selectedObject);
                     
-                    // Update the consumer data with the ID
                     vm.$set(vm.consumer.actions[currentActionType], 'custom_object_id', customObjectId);
-                    
-                    // Update selected object
                     vm.$set(vm.selectedCustomObjects, currentActionType, selectedObject);
                     
-                    // If clearing
                     if (!customObjectId) {
                         console.log('[' + currentActionType + '] Clearing custom object and fields');
                         vm.clearFieldMappingsForActionType(currentActionType);
@@ -505,7 +478,6 @@
                         return;
                     }
                     
-                    // If changed to different custom object
                     if (customObjectId !== previousId) {
                         console.log('[' + currentActionType + '] New custom object selected - clearing field mappings');
                         vm.clearFieldMappingsForActionType(currentActionType);
@@ -513,7 +485,6 @@
                         vm.previousCustomObjectIds[currentActionType] = customObjectId;
                     }
                     
-                    // Load fields
                     vm.loadFieldsForCurrentAction();
                 },
                 
@@ -555,7 +526,6 @@
                         return;
                     }
                     
-                    // Check if we already have these fields loaded
                     if (vm.allFields[currentActionType] && 
                         vm.allFields[currentActionType].length > 0 && 
                         vm.previousCustomObjectIds[currentActionType] === customObjectId) {
@@ -564,7 +534,6 @@
                         return;
                     }
                     
-                    // Check cache by custom object ID
                     if (vm.fieldsCache[customObjectId]) {
                         console.log('[' + currentActionType + '] Using cached fields:', vm.fieldsCache[customObjectId].length);
                         vm.currentFields = vm.fieldsCache[customObjectId];
@@ -572,7 +541,6 @@
                         return;
                     }
                     
-                    // Fetch from API
                     vm.loadingFields = true;
                     console.log('[' + currentActionType + '] Fetching fields from API...');
                     
@@ -658,17 +626,14 @@
                 console.log('Consumer ID:', vm.consumer.installId);
                 console.log('Site ID:', vm.consumer.SiteId);
                 
-                // Initialize tracking for all action types
                 ['sendsms', 'receivesms', 'incomingsms', 'tracked_link'].forEach(function(actionType) {
                     var coId = vm.consumer.actions[actionType]?.custom_object_id || null;
                     vm.previousCustomObjectIds[actionType] = coId;
                     console.log('[' + actionType + '] Initialized - Custom Object ID:', coId);
                 });
                 
-                // Load custom objects first
                 vm.fetchCustomObjects('', null);
                 
-                // Load fields for initial action type
                 vm.$nextTick(function() {
                     vm.loadFieldsForCurrentAction();
                 });
