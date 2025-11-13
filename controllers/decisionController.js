@@ -1075,6 +1075,46 @@ class DecisionController {
     }
 
     /**
+     * Wait for sync to complete (poll status)
+     */
+    static async waitForSyncCompletion(eloquaService, syncUri, maxAttempts = 30) {
+        let attempts = 0;
+        const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
+
+        while (attempts < maxAttempts) {
+            const status = await eloquaService.checkSyncStatus(syncUri);
+
+            logger.debug('Sync status check', {
+                syncUri,
+                status: status.status,
+                attempt: attempts + 1
+            });
+
+            if (status.status === 'success') {
+                logger.info('Sync completed successfully', {
+                    syncUri,
+                    status: status.status
+                });
+                return status;
+            }
+
+            if (status.status === 'error' || status.status === 'warning') {
+                logger.error('Sync failed', {
+                    syncUri,
+                    status: status.status
+                });
+                throw new Error(`Sync failed with status: ${status.status}`);
+            }
+
+            // Still pending, wait and retry
+            attempts++;
+            await delay(2000); // Wait 2 seconds between checks
+        }
+
+        throw new Error('Sync timeout - max attempts reached');
+    }
+
+    /**
      * Sync a batch of decision results using Bulk API
      * CRITICAL: Must include executionId in syncActions destination
      */
@@ -1139,7 +1179,7 @@ class DecisionController {
                 count: contacts.length
             });
 
-            await ActionController.waitForSyncCompletion(eloquaService, sync.uri);
+            await DecisionController.waitForSyncCompletion(eloquaService, sync.uri);
 
             logger.info('✅ Decision batch sync completed successfully', {
                 syncUri: sync.uri,
