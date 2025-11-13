@@ -1133,6 +1133,8 @@ class ActionController {
         const recipientFieldName = parseFieldName(instance.recipient_field);
         const countryFieldName = parseFieldName(instance.country_field);
 
+        const baseUrl = process.env.APP_BASE_URL || 'https://eloqua-integrator.onrender.com';
+
         logger.debug('Parsed field names for extraction', {
             recipient_field: instance.recipient_field,
             recipientFieldName,
