@@ -5,7 +5,7 @@ const { verifyInstallation } = require('../middleware/auth');
 const sessionAuth = require('../middleware/sessionAuth');
 
 // Create instance
-router.get('/create', verifyInstallation, DecisionController.create);
+router.post('/create', verifyInstallation, DecisionController.create);
 
 // Configure instance
 router.get('/configure', verifyInstallation, DecisionController.configure);
