@@ -76,11 +76,48 @@ class DecisionController {
                 text_type: 'Anything',
                 requiresConfiguration: true
             };
+        } else {
+            logger.info('Existing instance found', { 
+                instanceId,
+                evaluation_period: instance.evaluation_period,
+                evaluation_period_type: typeof instance.evaluation_period,
+                text_type: instance.text_type,
+                keyword: instance.keyword,
+                requiresConfiguration: instance.requiresConfiguration
+            });
+            
+            // Convert Mongoose document to plain object
+            instance = instance.toObject();
+            
+            logger.info('Instance converted to object', {
+                instanceId,
+                evaluation_period: instance.evaluation_period,
+                evaluation_period_type: typeof instance.evaluation_period
+            });
         }
 
         if (CustomObjectId) {
             instance.program_coid = CustomObjectId;
         }
+
+        if (instance.evaluation_period !== undefined && instance.evaluation_period !== null) {
+            instance.evaluation_period = Number(instance.evaluation_period);
+            
+            logger.info('Evaluation period ensured as number', {
+                value: instance.evaluation_period,
+                type: typeof instance.evaluation_period
+            });
+        }
+
+
+        logger.info('Rendering decision config view', {
+            instanceId: instance.instanceId,
+            evaluation_period: instance.evaluation_period,
+            evaluation_period_human: DecisionController.formatEvaluationPeriod(instance.evaluation_period),
+            text_type: instance.text_type,
+            keyword: instance.keyword,
+            hasCdoConfig: !!(consumer.actions?.receivesms?.custom_object_id)
+        });
 
         const hasCdoConfig = !!(consumer.actions?.receivesms?.custom_object_id);
         
@@ -1087,6 +1124,24 @@ class DecisionController {
             const sync = await eloquaService.syncBulkImport(importDef.uri);
 
             logger.info('Decision batch sync started', {
+                syncUri: sync.uri,
+                decision,
+                count: contacts.length,
+                executionId
+            });
+
+            // ============================================
+            // ✅ CRITICAL: WAIT FOR SYNC TO COMPLETE
+            // ============================================
+            logger.info('⏳ Waiting for sync to complete...', {
+                syncUri: sync.uri,
+                decision,
+                count: contacts.length
+            });
+
+            await ActionController.waitForSyncCompletion(eloquaService, sync.uri);
+
+            logger.info('✅ Decision batch sync completed successfully', {
                 syncUri: sync.uri,
                 decision,
                 count: contacts.length,

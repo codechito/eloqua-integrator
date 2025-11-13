@@ -190,6 +190,7 @@ class DecisionCleanupWorker {
                     // Evaluate the response (if any)
                     let decision = 'no';
                     let hasResponse = false;
+                    let cdoResponseMessage = null;
                     
                     if (smsLog.hasResponse && smsLog.responseMessage) {
                         hasResponse = true;
@@ -199,7 +200,7 @@ class DecisionCleanupWorker {
                             instance.keyword
                         );
                         decision = matches ? 'yes' : 'no';
-                        
+                        cdoResponseMessage = smsLog.responseMessage;
                         logger.info('Decision evaluated with response', {
                             contactId: smsLog.contactId,
                             messageId: smsLog.messageId,
@@ -210,7 +211,7 @@ class DecisionCleanupWorker {
                     } else {
                         // NO RESPONSE after deadline → NO path
                         decision = 'no';
-                        
+                        cdoResponseMessage = 'NO RESPONSE';
                         const hoursOverdue = ((now - smsLog.decisionDeadline) / (1000 * 60 * 60)).toFixed(2);
                         
                         logger.info('Decision evaluated - NO RESPONSE (timeout)', {
@@ -236,7 +237,7 @@ class DecisionCleanupWorker {
                     this.stats.totalProcessed++;
 
                     // Log to CDO if there was a response (only if configured)
-                    if (hasResponse && consumer.actions?.receivesms?.custom_object_id) {
+                    if (consumer.actions?.receivesms?.custom_object_id) {
                         try {
                             const eloquaService = new EloquaService(
                                 consumer.installId,
@@ -249,7 +250,7 @@ class DecisionCleanupWorker {
                                 instance,
                                 consumer,
                                 smsLog,
-                                smsLog.responseMessage
+                                cdoResponseMessage
                             );
 
                             logger.info('CDO updated for expired decision', {
@@ -264,6 +265,12 @@ class DecisionCleanupWorker {
                             });
                             // Don't throw - decision still processed
                         }
+                    
+                    } else {
+                        logger.debug('No CDO configured for decision', {
+                            contactId: smsLog.contactId,
+                            decision
+                        });
                     }
 
                     // ============================================
