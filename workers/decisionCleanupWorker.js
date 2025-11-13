@@ -49,7 +49,7 @@ class DecisionCleanupWorker {
             pollInterval: `${this.config.pollIntervalMs / 1000 / 60} minutes`,
             statsInterval: `${this.config.statsIntervalMs / 1000 / 60} minutes`,
             batchSize: this.config.batchSize,
-            action: 'No reply after interval → NO path'
+            action: 'No reply after interval → NO path + Sync to Eloqua'
         });
         
         this.isRunning = true;
@@ -102,9 +102,9 @@ class DecisionCleanupWorker {
 
     /**
      * Process expired decision evaluations
+     * FIXED: Now syncs ALL results to Eloqua (including NO decisions)
      * - Maximum 30 recipients per batch
-     * - No reply after interval → NO path
-     * - Syncs results to Eloqua
+     * - No reply after interval → NO path + Sync to Eloqua
      */
     async processExpiredDecisions() {
         try {
@@ -132,12 +132,15 @@ class DecisionCleanupWorker {
                 return;
             }
 
+            const minutesOverdue = expiredLogs[0] ? ((now - expiredLogs[0].decisionDeadline) / (60 * 1000)).toFixed(2) : 0;
+
             logger.info('Found expired decision evaluations', {
                 count: expiredLogs.length,
                 maxBatchSize: this.config.batchSize,
                 now: now.toISOString(),
                 oldestDeadline: expiredLogs[0]?.decisionDeadline,
-                newestDeadline: expiredLogs[expiredLogs.length - 1]?.decisionDeadline
+                newestDeadline: expiredLogs[expiredLogs.length - 1]?.decisionDeadline,
+                minutesOverdue
             });
 
             this.stats.currentBatchSize = expiredLogs.length;
@@ -146,6 +149,9 @@ class DecisionCleanupWorker {
             // Group by instance for Eloqua sync
             const groupedByInstance = {};
 
+            // ============================================
+            // STEP 1: EVALUATE ALL EXPIRED DECISIONS
+            // ============================================
             for (const smsLog of expiredLogs) {
                 try {
                     const instance = await DecisionInstance.findOne({
@@ -205,16 +211,18 @@ class DecisionCleanupWorker {
                         // NO RESPONSE after deadline → NO path
                         decision = 'no';
                         
+                        const hoursOverdue = ((now - smsLog.decisionDeadline) / (1000 * 60 * 60)).toFixed(2);
+                        
                         logger.info('Decision evaluated - NO RESPONSE (timeout)', {
                             contactId: smsLog.contactId,
                             messageId: smsLog.messageId,
                             decision: 'no',
                             deadline: smsLog.decisionDeadline,
-                            hoursOverdue: ((now - smsLog.decisionDeadline) / (1000 * 60 * 60)).toFixed(2)
+                            hoursOverdue
                         });
                     }
 
-                    // Update SMS log
+                    // Update SMS log with decision
                     smsLog.decisionStatus = decision;
                     smsLog.decisionProcessedAt = now;
                     await smsLog.save();
@@ -258,21 +266,23 @@ class DecisionCleanupWorker {
                         }
                     }
 
-                    // Group for Eloqua sync
+                    // ============================================
+                    // CRITICAL: Group for Eloqua sync
+                    // ============================================
                     const key = smsLog.decisionInstanceId;
                     if (!groupedByInstance[key]) {
                         groupedByInstance[key] = {
                             instance,
                             consumer,
+                            executionId: smsLog.executionId, // Store executionId
                             yes: [],
                             no: [],
                             withResponse: 0,
-                            noResponse: 0,
-                            executionId: smsLog.executionId // Store executionId from first log
+                            noResponse: 0
                         };
                     }
                     
-                    // Add to appropriate decision array for sync
+                    // Add to appropriate decision array for Eloqua sync
                     groupedByInstance[key][decision].push({
                         contactId: smsLog.contactId,
                         emailAddress: smsLog.emailAddress,
@@ -300,10 +310,19 @@ class DecisionCleanupWorker {
             this.stats.lastBatchProcessed = expiredLogs.length;
 
             // ============================================
-            // SYNC DECISIONS TO ELOQUA
+            // STEP 2: SYNC ALL DECISIONS TO ELOQUA
             // ============================================
+            if (Object.keys(groupedByInstance).length === 0) {
+                logger.warn('No decisions to sync to Eloqua', {
+                    processedCount: expiredLogs.length
+                });
+                return;
+            }
+
             logger.info('Syncing expired decisions to Eloqua', {
-                instancesAffected: Object.keys(groupedByInstance).length
+                instancesAffected: Object.keys(groupedByInstance).length,
+                totalYes: Object.values(groupedByInstance).reduce((sum, g) => sum + g.yes.length, 0),
+                totalNo: Object.values(groupedByInstance).reduce((sum, g) => sum + g.no.length, 0)
             });
 
             for (const [instanceId, data] of Object.entries(groupedByInstance)) {
@@ -329,11 +348,11 @@ class DecisionCleanupWorker {
 
                     if (!executionId) {
                         // No executionId available - cannot sync to Eloqua
-                        logger.warn('No executionId available for cleanup sync - cannot sync to Eloqua', {
+                        logger.error('❌ CRITICAL: No executionId available - cannot sync to Eloqua', {
                             instanceId,
                             yesCount: data.yes.length,
                             noCount: data.no.length,
-                            note: 'Contacts timed out after campaign completed. Decision recorded locally but not synced to Eloqua.'
+                            note: 'Contacts will remain STUCK in decision step! This happens when campaign completed before timeout.'
                         });
                         this.stats.totalSyncErrors++;
                         continue;
@@ -351,6 +370,12 @@ class DecisionCleanupWorker {
                     // Sync YES contacts
                     if (data.yes.length > 0) {
                         try {
+                            logger.info('Syncing YES decisions to Eloqua', {
+                                instanceId,
+                                executionId,
+                                count: data.yes.length
+                            });
+
                             await DecisionController.syncDecisionBatch(
                                 eloquaService,
                                 data.instance,
@@ -360,7 +385,7 @@ class DecisionCleanupWorker {
                                 'yes'
                             );
 
-                            logger.info('Expired YES decisions synced to Eloqua', {
+                            logger.info('✅ YES decisions synced to Eloqua', {
                                 instanceId,
                                 executionId,
                                 count: data.yes.length
@@ -369,7 +394,7 @@ class DecisionCleanupWorker {
                             this.stats.totalSyncedToEloqua += data.yes.length;
 
                         } catch (syncError) {
-                            logger.error('Error syncing expired YES decisions', {
+                            logger.error('❌ Error syncing YES decisions', {
                                 instanceId,
                                 executionId,
                                 count: data.yes.length,
@@ -383,6 +408,12 @@ class DecisionCleanupWorker {
                     // Sync NO contacts
                     if (data.no.length > 0) {
                         try {
+                            logger.info('Syncing NO decisions to Eloqua', {
+                                instanceId,
+                                executionId,
+                                count: data.no.length
+                            });
+
                             await DecisionController.syncDecisionBatch(
                                 eloquaService,
                                 data.instance,
@@ -392,7 +423,7 @@ class DecisionCleanupWorker {
                                 'no'
                             );
 
-                            logger.info('Expired NO decisions synced to Eloqua', {
+                            logger.info('✅ NO decisions synced to Eloqua', {
                                 instanceId,
                                 executionId,
                                 count: data.no.length
@@ -401,7 +432,7 @@ class DecisionCleanupWorker {
                             this.stats.totalSyncedToEloqua += data.no.length;
 
                         } catch (syncError) {
-                            logger.error('Error syncing expired NO decisions', {
+                            logger.error('❌ Error syncing NO decisions', {
                                 instanceId,
                                 executionId,
                                 count: data.no.length,
@@ -413,7 +444,7 @@ class DecisionCleanupWorker {
                     }
 
                     // Log summary for this instance
-                    logger.info('Expired decisions processed and synced for instance', {
+                    logger.info('✅ Expired decisions processed and synced for instance', {
                         instanceId,
                         executionId,
                         yesCount: data.yes.length,
@@ -425,7 +456,7 @@ class DecisionCleanupWorker {
                     });
 
                 } catch (error) {
-                    logger.error('Error syncing expired decisions for instance', {
+                    logger.error('❌ Error syncing expired decisions for instance', {
                         instanceId,
                         error: error.message,
                         stack: error.stack
@@ -434,7 +465,7 @@ class DecisionCleanupWorker {
                 }
             }
 
-            logger.info('Expired decision batch completed', {
+            logger.info('✅ Expired decision batch completed', {
                 totalInBatch: expiredLogs.length,
                 processed: this.stats.lastBatchProcessed,
                 errors: this.stats.totalErrors,
