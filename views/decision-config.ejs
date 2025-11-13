@@ -321,21 +321,21 @@
             <label for="evaluation_period" style="width:100%; text-align:left;">
                 <strong>Evaluation Period</strong>
             </label>
-            <select v-model="instance.evaluation_period" 
+            <select v-model.number="instance.evaluation_period" 
                     style="width:100%; text-align:left;" 
                     class="form-control" 
                     required>
-                <option value="-1">Anytime (check all previous SMS)</option>
-                <option value="0.0833">5 minutes</option>
-                <option value="0.25">15 minutes</option>
-                <option value="0.5">30 minutes</option>
-                <option value="1">1 hour</option>
-                <option value="2">2 hours</option>
-                <option value="6">6 hours</option>
-                <option value="8">6 hours</option>
-                <option value="12">6 hours</option>
-                <option value="24">24 hours (1 day)</option>
-                <option value="168">168 hours (7 days)</option>
+                <option :value="-1">Anytime (check all previous SMS)</option>
+                <option :value="0.0833">5 minutes</option>
+                <option :value="0.25">15 minutes</option>
+                <option :value="0.5">30 minutes</option>
+                <option :value="1">1 hour</option>
+                <option :value="2">2 hours</option>
+                <option :value="6">6 hours</option>
+                <option :value="8">8 hours</option>
+                <option :value="12">12 hours</option>
+                <option :value="24">24 hours (1 day)</option>
+                <option :value="168">168 hours (7 days)</option>
             </select>
             <p class="help-text">
                 <strong>How long to wait for a reply after sending SMS.</strong><br>
@@ -498,6 +498,21 @@
       var instance = <%-JSON.stringify(instance)%>;
       var consumer = <%-JSON.stringify(consumer)%>;
 
+      console.log('🔧 Raw instance data from server:', instance);
+      console.log('📊 Evaluation period:', {
+          value: instance.evaluation_period,
+          type: typeof instance.evaluation_period
+      });
+      
+      // Ensure evaluation_period is a number
+      if (instance.evaluation_period !== undefined && instance.evaluation_period !== null) {
+          instance.evaluation_period = Number(instance.evaluation_period);
+          console.log('✅ Converted to number:', {
+              value: instance.evaluation_period,
+              type: typeof instance.evaluation_period
+          });
+      }
+
       var app = new Vue({
         el: '#receivesmsaction',
         data: {
@@ -582,9 +597,16 @@
               return;
             }
 
+            const evaluationPeriod = Number(this.instance.evaluation_period);
+
+            if (isNaN(evaluationPeriod)) {
+                    this.showMessage('error', 'Evaluation period must be a valid number');
+                    return;
+                }
+
             const data = {
               instance: {
-                evaluation_period: parseInt(vm.instance.evaluation_period),
+                evaluation_period: evaluationPeriod,
                 text_type: String(vm.instance.text_type),
                 keyword: vm.instance.text_type === 'Keyword' ? vm.instance.keyword : null,
                 SiteId: vm.consumer.SiteId,
@@ -594,6 +616,12 @@
 
             console.log('Saving decision config:', data);
 
+            console.log('📊 Evaluation period details:', {
+                    original: this.instance.evaluation_period,
+                    converted: evaluationPeriod,
+                    type: typeof evaluationPeriod
+                });
+                
             const btnSave = document.getElementById('btnSave');
             const originalText = btnSave.textContent;
             btnSave.textContent = 'SAVING...';
