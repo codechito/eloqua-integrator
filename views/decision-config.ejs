@@ -318,13 +318,33 @@
 
         <!-- Decision Configuration -->
         <div class="form-group">
-          <label for="evaluation_period">Evaluation Period (hours)</label>
-          <select v-model="instance.evaluation_period" class="form-control" id="evaluation_period" required>
-            <option v-for="hour in evaluation" v-bind:value="hour" :key="hour">{{ hour }} hour{{ hour > 1 ? 's' : '' }}</option>
-          </select>
-          <div class="help-text">
-            How long to wait for a response after SMS is sent (1-168 hours)
-          </div>
+            <label for="evaluation_period" style="width:100%; text-align:left;">
+                <strong>Evaluation Period</strong>
+            </label>
+            <select v-model="instance.evaluation_period" 
+                    style="width:100%; text-align:left;" 
+                    class="form-control" 
+                    required>
+                <option value="-1">Anytime (check all previous SMS)</option>
+                <option value="0.0833">5 minutes</option>
+                <option value="0.25">15 minutes</option>
+                <option value="0.5">30 minutes</option>
+                <option value="1">1 hour</option>
+                <option value="2">2 hours</option>
+                <option value="6">6 hours</option>
+                <option value="8">6 hours</option>
+                <option value="12">6 hours</option>
+                <option value="24">24 hours (1 day)</option>
+                <option value="168">168 hours (7 days)</option>
+            </select>
+            <p class="help-text">
+                <strong>How long to wait for a reply after sending SMS.</strong><br>
+                • <strong>5 minutes:</strong> Quick response scenarios (OTP verification, urgent confirmations, event check-ins)<br>
+                • <strong>1 hour:</strong> Standard response window (appointment confirmations, delivery updates)<br>
+                • <strong>24 hours:</strong> Long evaluation period (RSVP requests, surveys)<br>
+                • <strong>7 days:</strong> Extended campaign (long-term engagement tracking)<br>
+                • <strong>Anytime:</strong> Check if contact EVER replied to any SMS from this campaign
+            </p>
         </div>
 
         <div class="form-group">

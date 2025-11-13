@@ -463,7 +463,10 @@ class DecisionController {
 
     /**
      * Process notify asynchronously
-     * FIXED: Now logs to CDO for all decision results
+     * COMPLETE: 
+     * - Supports evaluation periods from 5 minutes to 7 days (or anytime)
+     * - Logs to CDO for all decision results with responses
+     * - Handles fractional hours for minute-based periods
      */
     static async processNotifyAsync(instanceId, installId, siteId, assetId, executionId, executionData) {
         try {
@@ -534,10 +537,24 @@ class DecisionController {
                 }
             }
 
+            // ============================================
+            // EVALUATION PERIOD CALCULATION
+            // Supports fractional hours for minute-based periods
+            // ============================================
+            const evaluationHours = instance.evaluation_period === -1 
+                ? 24 * 365  // Anytime = 1 year
+                : instance.evaluation_period; // Can be 0.0833 (5 min), 0.25 (15 min), 1 (1 hour), etc.
+
+            const evaluationMinutes = (evaluationHours * 60).toFixed(2);
+            const evaluationHuman = DecisionController.formatEvaluationPeriod(instance.evaluation_period);
+
             logger.info('Processing decision for SMS responses', {
                 instanceId,
                 executionId,
                 evaluationPeriod: instance.evaluation_period,
+                evaluationHours,
+                evaluationMinutes: `${evaluationMinutes} minutes`,
+                evaluationHuman,
                 textType: instance.text_type,
                 keyword: instance.keyword,
                 itemsToProcess: executionData.items.length,
@@ -567,11 +584,16 @@ class DecisionController {
                         emailAddress
                     });
 
-                    const evaluationHours = instance.evaluation_period === -1 
-                        ? 24 * 365
-                        : instance.evaluation_period;
-
+                    // Calculate cutoff date using fractional hours (works for minutes too)
                     const cutoffDate = new Date(Date.now() - evaluationHours * 60 * 60 * 1000);
+
+                    logger.debug('Evaluation period calculated', {
+                        contactId,
+                        evaluationHours,
+                        evaluationMinutes,
+                        cutoffDate: cutoffDate.toISOString(),
+                        now: new Date().toISOString()
+                    });
 
                     // Find the most recent SMS sent to this contact
                     const smsLog = await SmsLog.findOne({
@@ -585,7 +607,8 @@ class DecisionController {
                     if (!smsLog) {
                         logger.debug('No recent SMS found for contact', {
                             contactId,
-                            cutoffDate
+                            cutoffDate,
+                            evaluationPeriod: instance.evaluation_period
                         });
                         
                         // No SMS sent = immediate NO
@@ -601,16 +624,29 @@ class DecisionController {
                         contactId,
                         messageId: smsLog.messageId,
                         sentAt: smsLog.sentAt,
-                        hasResponse: smsLog.hasResponse,
-                        decisionDeadline: smsLog.decisionDeadline
+                        hasResponse: smsLog.hasResponse
                     });
 
-                    // Calculate evaluation deadline
+                    // Calculate evaluation deadline using fractional hours
                     const evaluationDeadline = new Date(
                         smsLog.sentAt.getTime() + (evaluationHours * 60 * 60 * 1000)
                     );
 
                     const now = new Date();
+                    const remainingMs = evaluationDeadline - now;
+                    const remainingMinutes = Math.max(0, remainingMs / (60 * 1000));
+                    const remainingHours = Math.max(0, remainingMs / (60 * 60 * 1000));
+
+                    logger.debug('Evaluation deadline calculated', {
+                        contactId,
+                        sentAt: smsLog.sentAt.toISOString(),
+                        deadline: evaluationDeadline.toISOString(),
+                        now: now.toISOString(),
+                        hasExpired: now > evaluationDeadline,
+                        remainingMinutes: remainingMinutes.toFixed(2),
+                        remainingHours: remainingHours.toFixed(2),
+                        evaluationPeriodMinutes: evaluationMinutes
+                    });
 
                     // Link SMS to this decision instance
                     smsLog.decisionInstanceId = instanceId;
@@ -619,9 +655,16 @@ class DecisionController {
                     let shouldLogToCdo = false;
                     let decisionResult = null;
 
+                    // ============================================
+                    // EVALUATION LOGIC
+                    // ============================================
+                    
                     // Check if evaluation period has PASSED
                     if (now > evaluationDeadline) {
                         // Evaluation period is over
+                        const hoursOverdue = ((now - evaluationDeadline) / (60 * 60 * 1000)).toFixed(2);
+                        const minutesOverdue = ((now - evaluationDeadline) / (60 * 1000)).toFixed(2);
+                        
                         if (smsLog.hasResponse) {
                             const matches = DecisionController.evaluateReply(
                                 smsLog.responseMessage,
@@ -641,7 +684,8 @@ class DecisionController {
 
                                 logger.info('Contact responded and matched - YES', {
                                     contactId,
-                                    messageId: smsLog.messageId
+                                    messageId: smsLog.messageId,
+                                    minutesOverdue
                                 });
                             } else {
                                 smsLog.decisionStatus = 'no';
@@ -655,7 +699,8 @@ class DecisionController {
 
                                 logger.info('Contact responded but no match - NO', {
                                     contactId,
-                                    messageId: smsLog.messageId
+                                    messageId: smsLog.messageId,
+                                    minutesOverdue
                                 });
                             }
                             shouldLogToCdo = true; // Has response, log it
@@ -673,7 +718,9 @@ class DecisionController {
                             logger.info('Evaluation period expired, no response - NO', {
                                 contactId,
                                 messageId: smsLog.messageId,
-                                deadline: evaluationDeadline
+                                deadline: evaluationDeadline,
+                                hoursOverdue,
+                                minutesOverdue
                             });
                             // Don't log to CDO if no response
                         }
@@ -701,7 +748,8 @@ class DecisionController {
 
                                 logger.info('Contact already responded (matches) - YES', {
                                     contactId,
-                                    messageId: smsLog.messageId
+                                    messageId: smsLog.messageId,
+                                    remainingMinutes: remainingMinutes.toFixed(2)
                                 });
                             } else {
                                 smsLog.decisionStatus = 'no';
@@ -715,7 +763,8 @@ class DecisionController {
 
                                 logger.info('Contact already responded (no match) - NO', {
                                     contactId,
-                                    messageId: smsLog.messageId
+                                    messageId: smsLog.messageId,
+                                    remainingMinutes: remainingMinutes.toFixed(2)
                                 });
                             }
 
@@ -737,7 +786,9 @@ class DecisionController {
                                 contactId,
                                 messageId: smsLog.messageId,
                                 deadline: evaluationDeadline,
-                                remainingHours: ((evaluationDeadline - now) / (60 * 60 * 1000)).toFixed(2)
+                                remainingMinutes: remainingMinutes.toFixed(2),
+                                remainingHours: remainingHours.toFixed(2),
+                                evaluationPeriod: evaluationHuman
                             });
                         }
                     }
@@ -779,6 +830,7 @@ class DecisionController {
             logger.info('Decision evaluation completed', {
                 instanceId,
                 executionId,
+                evaluationPeriod: evaluationHuman,
                 yesCount: results.yes.length,
                 noCount: results.no.length,
                 pendingCount: results.pending.length
@@ -802,6 +854,7 @@ class DecisionController {
                 logger.info('Immediate decision results synced to Eloqua', {
                     instanceId,
                     executionId,
+                    evaluationPeriod: evaluationHuman,
                     yesSynced: syncResults.yes.length,
                     noSynced: syncResults.no.length,
                     pendingNotSynced: results.pending.length
@@ -810,6 +863,7 @@ class DecisionController {
                 logger.info('No immediate decisions to sync (all pending)', {
                     instanceId,
                     executionId,
+                    evaluationPeriod: evaluationHuman,
                     pendingCount: results.pending.length
                 });
             }
@@ -818,6 +872,7 @@ class DecisionController {
             if (results.pending.length > 0) {
                 logger.info('Contacts waiting for evaluation period', {
                     instanceId,
+                    evaluationPeriod: evaluationHuman,
                     pendingCount: results.pending.length,
                     note: 'These will be evaluated by the cleanup worker when deadline passes'
                 });
@@ -831,6 +886,28 @@ class DecisionController {
                 stack: error.stack
             });
         }
+    }
+
+    /**
+     * Helper: Format evaluation period for human-readable display
+     * NEW METHOD - Add this to DecisionController
+     */
+    static formatEvaluationPeriod(hours) {
+        if (hours === -1) return 'Anytime';
+        
+        if (hours < 1) {
+            const minutes = Math.round(hours * 60);
+            return `${minutes} minute${minutes !== 1 ? 's' : ''}`;
+        }
+        
+        if (hours < 24) {
+            // Show decimal for fractional hours (e.g., 1.5 hours)
+            const hoursRounded = hours % 1 === 0 ? hours : hours.toFixed(1);
+            return `${hoursRounded} hour${hours !== 1 ? 's' : ''}`;
+        }
+        
+        const days = Math.round(hours / 24);
+        return `${days} day${days !== 1 ? 's' : ''}`;
     }
 
     /**

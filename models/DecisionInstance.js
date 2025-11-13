@@ -20,12 +20,21 @@ const DecisionInstanceSchema = new mongoose.Schema({
     },
     assetId: String,
     
-    // Decision Configuration (only decision-specific settings)
+    // Decision Configuration
     evaluation_period: {
         type: Number,
-        default: 1,
-        min: 1,
-        max: 168 // 7 days
+        required: true,
+        default: 1
+        // Supported values:
+        // -1 = Anytime (check all historical SMS)
+        // 0.0833 = 5 minutes (5/60 hours)
+        // 0.25 = 15 minutes
+        // 0.5 = 30 minutes
+        // 1 = 1 hour
+        // 2 = 2 hours
+        // 6 = 6 hours
+        // 24 = 24 hours (1 day)
+        // 168 = 7 days
     },
     text_type: {
         type: String,
