@@ -1130,15 +1130,18 @@ class DecisionController {
 
             // CRITICAL: Format must be exactly as per Eloqua docs
             // {{DecisionInstance(9347bfe19c72409ca5cd402ff74f0caa).Execution[12345]}}
-            const destination = `{{DecisionInstance(${instanceIdNoDashes}).Execution[${executionId}]}}`;
+           // const destination = `{{DecisionInstance(${instanceIdNoDashes}).Execution[${executionId}]}}`;
+            const destination = `{{DecisionInstance(${instanceIdNoDashes})}}`;
 
             const importDefinition = {
                 name: `SMS_Decision_${instanceIdNoDashes}_${decision}_${Date.now()}`,
                 updateRule: 'always', // ← ADD THIS (from docs)
                 fields: {
-                    emailAddress: '{{Contact.Field(C_EmailAddress)}}'
+                    EmailAddress: '{{Contact.Field(C_EmailAddress)}}',
+                    MobilePhone: '{{Contact.Field(C_MobilePhone)}}',
+                    ContactID: '{{Contact.Id}}'
                 },
-                identifierFieldName: 'emailAddress', // ← Use lowercase (from docs)
+                identifierFieldName: 'ContactID', 
                 syncActions: [
                     {
                         destination: destination,
@@ -1167,7 +1170,9 @@ class DecisionController {
 
             // Upload contact data
             const contactData = contacts.map(contact => ({
-                emailAddress: contact.emailAddress // ← Use lowercase
+                EmailAddress: contact.emailAddress,
+                MobilePhone: contact.mobileNumber || '', // Add if available
+                ContactID: contact.contactId
             }));
 
             logger.info('Uploading contact data', {
