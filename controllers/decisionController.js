@@ -104,15 +104,18 @@ class DecisionController {
         const { instanceId, installId, siteId } = req.query;
         const { instance: instanceData } = req.body;
 
-        logger.info('Saving decision configuration', { 
+        logger.info('Saving decision configuration - RAW DATA', { 
             instanceId,
             installId,
             siteId,
+            rawBody: JSON.stringify(req.body),
+            instanceDataKeys: Object.keys(instanceData || {}),
             receivedData: {
-                evaluation_period: instanceData.evaluation_period,
-                evaluation_period_type: typeof instanceData.evaluation_period,
-                text_type: instanceData.text_type,
-                keyword: instanceData.keyword
+                evaluation_period_raw: instanceData?.evaluation_period,
+                evaluation_period_type: typeof instanceData?.evaluation_period,
+                evaluation_period_stringified: JSON.stringify(instanceData?.evaluation_period),
+                text_type: instanceData?.text_type,
+                keyword: instanceData?.keyword
             }
         });
 
@@ -132,6 +135,14 @@ class DecisionController {
 
         // Convert to number and validate
         const evaluationPeriod = Number(instanceData.evaluation_period);
+
+            logger.info('Evaluation period conversion', {
+                original: instanceData.evaluation_period,
+                originalType: typeof instanceData.evaluation_period,
+                converted: evaluationPeriod,
+                convertedType: typeof evaluationPeriod,
+                isNaN: isNaN(evaluationPeriod)
+            });
         
         if (isNaN(evaluationPeriod)) {
             return res.status(400).json({
