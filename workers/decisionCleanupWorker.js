@@ -31,7 +31,7 @@ class DecisionCleanupWorker {
         this.config = {
             pollIntervalMs: 2 * 60 * 1000, // 2 minutes
             statsIntervalMs: 5 * 60 * 1000, // Log stats every 5 minutes
-            batchSize: 30 // Maximum 30 recipients per batch
+            batchSize: 100 // Maximum 30 recipients per batch
         };
     }
 
