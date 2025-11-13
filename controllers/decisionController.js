@@ -108,16 +108,39 @@ class DecisionController {
             instanceId,
             installId,
             siteId,
-            receivedData: instanceData
+            receivedData: {
+                evaluation_period: instanceData.evaluation_period,
+                evaluation_period_type: typeof instanceData.evaluation_period,
+                text_type: instanceData.text_type,
+                keyword: instanceData.keyword
+            }
         });
 
-        if (!instanceData.evaluation_period) {
+        // ============================================
+        // VALIDATION
+        // ============================================
+        
+        // Validate evaluation_period (can be string or number)
+        if (instanceData.evaluation_period === undefined || 
+            instanceData.evaluation_period === null || 
+            instanceData.evaluation_period === '') {
             return res.status(400).json({
                 success: false,
                 message: 'Evaluation period is required'
             });
         }
 
+        // Convert to number and validate
+        const evaluationPeriod = Number(instanceData.evaluation_period);
+        
+        if (isNaN(evaluationPeriod)) {
+            return res.status(400).json({
+                success: false,
+                message: 'Evaluation period must be a valid number'
+            });
+        }
+
+        // Validate text_type
         if (!instanceData.text_type) {
             return res.status(400).json({
                 success: false,
@@ -153,7 +176,8 @@ class DecisionController {
             logger.info('Updating existing decision instance', { instanceId });
         }
 
-        instance.evaluation_period = parseInt(instanceData.evaluation_period);
+        //instance.evaluation_period = parseInt(instanceData.evaluation_period);
+        instance.evaluation_period = evaluationPeriod;
         instance.text_type = String(instanceData.text_type);
         instance.keyword = instanceData.keyword ? String(instanceData.keyword).trim() : null;
         
@@ -165,6 +189,7 @@ class DecisionController {
         logger.info('Decision configuration saved', { 
             instanceId,
             evaluation_period: instance.evaluation_period,
+            evaluation_period_human: DecisionController.formatEvaluationPeriod(instance.evaluation_period),
             text_type: instance.text_type,
             keyword: instance.keyword,
             requiresConfiguration: false
