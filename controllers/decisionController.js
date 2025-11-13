@@ -1116,58 +1116,81 @@ class DecisionController {
 
     /**
      * Sync a batch of decision results using Bulk API
-     * CRITICAL: Must include executionId in syncActions destination
+     * FIXED: Uses exact Eloqua documentation format
      */
     static async syncDecisionBatch(eloquaService, instance, instanceIdNoDashes, executionId, contacts, decision) {
         try {
             logger.info('Syncing decision batch', {
                 instanceId: instance.instanceId,
+                instanceIdNoDashes,
                 executionId,
                 decision,
                 count: contacts.length
             });
 
+            // CRITICAL: Format must be exactly as per Eloqua docs
+            // {{DecisionInstance(9347bfe19c72409ca5cd402ff74f0caa).Execution[12345]}}
+            const destination = `{{DecisionInstance(${instanceIdNoDashes}).Execution[${executionId}]}}`;
+
             const importDefinition = {
                 name: `SMS_Decision_${instanceIdNoDashes}_${decision}_${Date.now()}`,
+                updateRule: 'always', // ← ADD THIS (from docs)
                 fields: {
-                    ContactID: '{{Contact.Id}}',
-                    EmailAddress: '{{Contact.Field(C_EmailAddress)}}'
+                    emailAddress: '{{Contact.Field(C_EmailAddress)}}'
                 },
-                identifierFieldName: 'EmailAddress',
-                isSyncTriggeredOnImport: false,
-                dataRetentionDuration: 'P7D',
+                identifierFieldName: 'emailAddress', // ← Use lowercase (from docs)
                 syncActions: [
                     {
-                        // CRITICAL FIX: Include execution ID in the destination
-                        destination: `{{DecisionInstance(${instanceIdNoDashes}).Execution[${executionId}]}}`,
-                        action: "setStatus",
-                        status: decision
+                        destination: destination,
+                        action: 'setStatus',
+                        status: decision // 'yes' or 'no'
                     }
-                ]
+                ],
+                isSyncTriggeredOnImport: false
             };
 
-            logger.debug('Creating bulk import with syncActions', {
+            logger.info('Creating bulk import with syncActions', {
                 instanceId: instance.instanceId,
+                instanceIdNoDashes,
                 executionId,
-                destination: importDefinition.syncActions[0].destination,
-                decision
+                destination,
+                decision,
+                importName: importDefinition.name
             });
 
             const importDef = await eloquaService.createBulkImport('contacts', importDefinition);
 
+            logger.info('Bulk import definition created', {
+                uri: importDef.uri,
+                destination
+            });
+
+            // Upload contact data
             const contactData = contacts.map(contact => ({
-                ContactID: contact.contactId,
-                EmailAddress: contact.emailAddress
+                emailAddress: contact.emailAddress // ← Use lowercase
             }));
 
+            logger.info('Uploading contact data', {
+                uri: importDef.uri,
+                count: contactData.length,
+                sampleData: contactData[0]
+            });
+
             await eloquaService.uploadBulkImportData(importDef.uri, contactData);
+
+            logger.info('Contact data uploaded', {
+                uri: importDef.uri,
+                count: contactData.length
+            });
+
+            // Start sync
             const sync = await eloquaService.syncBulkImport(importDef.uri);
 
-            logger.info('Decision batch sync started', {
+            logger.info('Bulk import sync started', {
                 syncUri: sync.uri,
+                status: sync.status,
                 decision,
-                count: contacts.length,
-                executionId
+                count: contacts.length
             });
 
             // ============================================
@@ -1179,21 +1202,31 @@ class DecisionController {
                 count: contacts.length
             });
 
-            await DecisionController.waitForSyncCompletion(eloquaService, sync.uri);
+            const syncResult = await DecisionController.waitForSyncCompletion(eloquaService, sync.uri);
 
-            logger.info('✅ Decision batch sync completed successfully', {
+            logger.info('✅ Decision batch sync completed', {
                 syncUri: sync.uri,
-                decision,
-                count: contacts.length,
-                executionId
-            });
-
-        } catch (error) {
-            logger.error('Error syncing decision batch', {
+                status: syncResult.status,
                 decision,
                 count: contacts.length,
                 executionId,
+                destination
+            });
+
+            return {
+                success: true,
+                syncUri: sync.uri,
+                status: syncResult.status
+            };
+
+        } catch (error) {
+            logger.error('❌ Error syncing decision batch', {
+                instanceIdNoDashes,
+                executionId,
+                decision,
+                count: contacts.length,
                 error: error.message,
+                stack: error.stack,
                 responseData: error.response?.data
             });
             throw error;
