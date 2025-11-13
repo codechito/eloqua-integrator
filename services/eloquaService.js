@@ -927,6 +927,42 @@ class EloquaService {
         }
     }
 
+    // services/eloquaService.js - Add this method
+
+    /**
+     * Get campaign by ID
+     * @param {string} campaignId - Campaign ID
+     * @returns {Promise<Object>} Campaign details
+     */
+    async getCampaign(campaignId) {
+        await this.ensureInitialized();
+        
+        try {
+            logger.debug('Getting campaign by ID', { campaignId });
+
+            const response = await this.client.get(
+                `/api/REST/2.0/assets/campaign/${campaignId}`,
+                {
+                    params: { depth: 'complete' }
+                }
+            );
+
+            logger.debug('Campaign fetched', {
+                campaignId,
+                name: response.data.name,
+                currentStatus: response.data.currentStatus
+            });
+
+            return response.data;
+        } catch (error) {
+            logger.error('Failed to fetch campaign', {
+                campaignId,
+                error: error.message
+            });
+            throw error;
+        }
+    }
+
     // services/eloquaService.js - ADD this method
 
     /**

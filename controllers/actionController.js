@@ -1006,6 +1006,49 @@ class ActionController {
                 return;
             }
 
+            // ============================================
+            // FETCH CAMPAIGN NAME FROM ELOQUA
+            // ============================================
+            let campaignTitle = instance.assetName || 'Unknown Campaign';
+            
+            if (assetId) {
+                try {
+                    const eloquaService = new EloquaService(installId, siteId);
+                    await eloquaService.initialize();
+                    
+                    const campaign = await eloquaService.getCampaign(assetId);
+                    
+                    if (campaign && campaign.name) {
+                        campaignTitle = campaign.name;
+                        
+                        // Update instance with campaign name if not set
+                        if (!instance.assetName || instance.assetName !== campaign.name) {
+                            instance.assetName = campaign.name;
+                            instance.campaignStatus = campaign.currentStatus;
+                            await instance.save();
+                            
+                            logger.info('Instance updated with campaign details', {
+                                instanceId,
+                                campaignName: campaign.name,
+                                campaignStatus: campaign.currentStatus
+                            });
+                        }
+                    }
+                } catch (campaignError) {
+                    logger.warn('Could not fetch campaign name from Eloqua', {
+                        assetId,
+                        error: campaignError.message
+                    });
+                    // Continue with default name
+                }
+            }
+
+            logger.info('Processing with campaign name', {
+                instanceId,
+                assetId,
+                campaignTitle
+            });
+
             // Enrich items with processed message and tracked links
             const enrichedItems = ActionController.enrichItems(
                 executionData.items || [],
@@ -1079,11 +1122,12 @@ class ActionController {
     /**
      * Queue SMS jobs from enriched items
      */
-    static async queueSmsJobs(instance, consumer, enrichedItems, executionId) {
+    static async queueSmsJobs(instance, consumer, enrichedItems, executionId, campaignTitle = null) {
         logger.info('Queueing SMS jobs', {
-            instanceId: instance.instanceId,
-            itemCount: enrichedItems.length
-        });
+        instanceId: instance.instanceId,
+        itemCount: enrichedItems.length,
+        campaignTitle: campaignTitle || instance.assetName
+    });
 
         // DEBUG: Log instance field configuration
         logger.debug('Instance field configuration', {
@@ -1143,6 +1187,9 @@ class ActionController {
             firstItemHasRecipientField: enrichedItems[0]?.[recipientFieldName] !== undefined,
             firstItemRecipientValue: enrichedItems[0]?.[recipientFieldName]
         });
+
+        // Use campaign title or fallback to instance name
+        const finalCampaignTitle = campaignTitle || instance.assetName || 'Unknown Campaign';
 
         for (let i = 0; i < enrichedItems.length; i++) {
             const item = enrichedItems[i];
@@ -1260,7 +1307,7 @@ class ActionController {
                     
                     // Campaign details
                     campaignId: instance.assetId,
-                    campaignTitle: instance.assetName || 'Unknown Campaign',
+                    campaignTitle: finalCampaignTitle, // ← Use the fetched campaign title
                     assetName: instance.assetName,
                     
                     // SMS options
@@ -1314,7 +1361,8 @@ class ActionController {
             instanceId: instance.instanceId,
             total: enrichedItems.length,
             success: results.success,
-            failed: results.failed
+            failed: results.failed,
+            campaignTitle: finalCampaignTitle
         });
 
         return results;

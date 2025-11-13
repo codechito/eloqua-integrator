@@ -88,6 +88,12 @@ const ActionInstanceSchema = new mongoose.Schema({
     isActive: {
         type: Boolean,
         default: true
+    },
+    campaignTitle: String,
+    campaignStatus: {
+        type: String,
+        enum: ['Draft', 'Active', 'Completed', 'Closed'],
+        index: true
     }
 }, {
     timestamps: true
