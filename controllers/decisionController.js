@@ -463,10 +463,10 @@ class DecisionController {
 
     /**
      * Process notify asynchronously
-     * COMPLETE: 
-     * - Supports evaluation periods from 5 minutes to 7 days (or anytime)
-     * - Logs to CDO for all decision results with responses
-     * - Handles fractional hours for minute-based periods
+     * FIXED: 
+     * - Logs to CDO even when NO RESPONSE (timeout)
+     * - All timeouts = NO decision (synced to Eloqua)
+     * - Supports 5-minute to 7-day evaluation periods
      */
     static async processNotifyAsync(instanceId, installId, siteId, assetId, executionId, executionData) {
         try {
@@ -537,13 +537,10 @@ class DecisionController {
                 }
             }
 
-            // ============================================
-            // EVALUATION PERIOD CALCULATION
-            // Supports fractional hours for minute-based periods
-            // ============================================
+            // Evaluation period calculation
             const evaluationHours = instance.evaluation_period === -1 
-                ? 24 * 365  // Anytime = 1 year
-                : instance.evaluation_period; // Can be 0.0833 (5 min), 0.25 (15 min), 1 (1 hour), etc.
+                ? 24 * 365
+                : instance.evaluation_period;
 
             const evaluationMinutes = (evaluationHours * 60).toFixed(2);
             const evaluationHuman = DecisionController.formatEvaluationPeriod(instance.evaluation_period);
@@ -584,7 +581,6 @@ class DecisionController {
                         emailAddress
                     });
 
-                    // Calculate cutoff date using fractional hours (works for minutes too)
                     const cutoffDate = new Date(Date.now() - evaluationHours * 60 * 60 * 1000);
 
                     logger.debug('Evaluation period calculated', {
@@ -611,7 +607,6 @@ class DecisionController {
                             evaluationPeriod: instance.evaluation_period
                         });
                         
-                        // No SMS sent = immediate NO
                         results.no.push({
                             contactId,
                             emailAddress,
@@ -627,7 +622,7 @@ class DecisionController {
                         hasResponse: smsLog.hasResponse
                     });
 
-                    // Calculate evaluation deadline using fractional hours
+                    // Calculate evaluation deadline
                     const evaluationDeadline = new Date(
                         smsLog.sentAt.getTime() + (evaluationHours * 60 * 60 * 1000)
                     );
@@ -644,8 +639,7 @@ class DecisionController {
                         now: now.toISOString(),
                         hasExpired: now > evaluationDeadline,
                         remainingMinutes: remainingMinutes.toFixed(2),
-                        remainingHours: remainingHours.toFixed(2),
-                        evaluationPeriodMinutes: evaluationMinutes
+                        remainingHours: remainingHours.toFixed(2)
                     });
 
                     // Link SMS to this decision instance
@@ -654,18 +648,21 @@ class DecisionController {
 
                     let shouldLogToCdo = false;
                     let decisionResult = null;
+                    let cdoResponseMessage = null;
 
                     // ============================================
-                    // EVALUATION LOGIC
+                    // EVALUATION LOGIC - ONLY 2 OUTCOMES: YES or NO
                     // ============================================
                     
-                    // Check if evaluation period has PASSED
                     if (now > evaluationDeadline) {
-                        // Evaluation period is over
+                        // ============================================
+                        // PERIOD EXPIRED
+                        // ============================================
                         const hoursOverdue = ((now - evaluationDeadline) / (60 * 60 * 1000)).toFixed(2);
                         const minutesOverdue = ((now - evaluationDeadline) / (60 * 1000)).toFixed(2);
                         
                         if (smsLog.hasResponse) {
+                            // Has response - check if it matches
                             const matches = DecisionController.evaluateReply(
                                 smsLog.responseMessage,
                                 instance.text_type,
@@ -673,8 +670,11 @@ class DecisionController {
                             );
 
                             if (matches) {
+                                // ✅ YES - Responded + Matched
                                 smsLog.decisionStatus = 'yes';
                                 decisionResult = 'yes';
+                                cdoResponseMessage = smsLog.responseMessage;
+                                
                                 results.yes.push({
                                     contactId,
                                     emailAddress,
@@ -682,32 +682,42 @@ class DecisionController {
                                     responseMessage: smsLog.responseMessage
                                 });
 
-                                logger.info('Contact responded and matched - YES', {
+                                logger.info('✅ YES - Contact responded and matched', {
                                     contactId,
                                     messageId: smsLog.messageId,
+                                    responseMessage: smsLog.responseMessage?.substring(0, 50),
                                     minutesOverdue
                                 });
                             } else {
+                                // ❌ NO - Responded but didn't match
                                 smsLog.decisionStatus = 'no';
                                 decisionResult = 'no';
+                                cdoResponseMessage = smsLog.responseMessage;
+                                
                                 results.no.push({
                                     contactId,
                                     emailAddress,
                                     messageId: smsLog.messageId,
-                                    reason: 'response_no_match'
+                                    reason: 'response_no_match',
+                                    responseMessage: smsLog.responseMessage
                                 });
 
-                                logger.info('Contact responded but no match - NO', {
+                                logger.info('❌ NO - Contact responded but no match', {
                                     contactId,
                                     messageId: smsLog.messageId,
+                                    responseMessage: smsLog.responseMessage?.substring(0, 50),
                                     minutesOverdue
                                 });
                             }
+                            
                             shouldLogToCdo = true; // Has response, log it
+                            
                         } else {
-                            // Period expired, no response
+                            // ❌ NO - Timeout with no response
                             smsLog.decisionStatus = 'no';
                             decisionResult = 'no';
+                            cdoResponseMessage = 'NO RESPONSE'; // ← Log this to CDO
+                            
                             results.no.push({
                                 contactId,
                                 emailAddress,
@@ -715,21 +725,27 @@ class DecisionController {
                                 reason: 'no_response_timeout'
                             });
 
-                            logger.info('Evaluation period expired, no response - NO', {
+                            logger.info('❌ NO - Evaluation period expired, no response (TIMEOUT)', {
                                 contactId,
                                 messageId: smsLog.messageId,
                                 deadline: evaluationDeadline,
                                 hoursOverdue,
-                                minutesOverdue
+                                minutesOverdue,
+                                evaluationPeriod: evaluationHuman
                             });
-                            // Don't log to CDO if no response
+                            
+                            // ✅ CRITICAL: Log timeout to CDO too!
+                            shouldLogToCdo = true;
                         }
 
                         smsLog.decisionProcessedAt = new Date();
+                        
                     } else {
-                        // Evaluation period is STILL ACTIVE
+                        // ============================================
+                        // PERIOD STILL ACTIVE
+                        // ============================================
                         if (smsLog.hasResponse) {
-                            // Already has response - evaluate now
+                            // Already has response - evaluate immediately
                             const matches = DecisionController.evaluateReply(
                                 smsLog.responseMessage,
                                 instance.text_type,
@@ -737,8 +753,11 @@ class DecisionController {
                             );
 
                             if (matches) {
+                                // ✅ YES - Responded + Matched
                                 smsLog.decisionStatus = 'yes';
                                 decisionResult = 'yes';
+                                cdoResponseMessage = smsLog.responseMessage;
+                                
                                 results.yes.push({
                                     contactId,
                                     emailAddress,
@@ -746,35 +765,41 @@ class DecisionController {
                                     responseMessage: smsLog.responseMessage
                                 });
 
-                                logger.info('Contact already responded (matches) - YES', {
+                                logger.info('✅ YES - Contact already responded (matches)', {
                                     contactId,
                                     messageId: smsLog.messageId,
+                                    responseMessage: smsLog.responseMessage?.substring(0, 50),
                                     remainingMinutes: remainingMinutes.toFixed(2)
                                 });
                             } else {
+                                // ❌ NO - Responded but didn't match
                                 smsLog.decisionStatus = 'no';
                                 decisionResult = 'no';
+                                cdoResponseMessage = smsLog.responseMessage;
+                                
                                 results.no.push({
                                     contactId,
                                     emailAddress,
                                     messageId: smsLog.messageId,
-                                    reason: 'response_no_match'
+                                    reason: 'response_no_match',
+                                    responseMessage: smsLog.responseMessage
                                 });
 
-                                logger.info('Contact already responded (no match) - NO', {
+                                logger.info('❌ NO - Contact already responded (no match)', {
                                     contactId,
                                     messageId: smsLog.messageId,
+                                    responseMessage: smsLog.responseMessage?.substring(0, 50),
                                     remainingMinutes: remainingMinutes.toFixed(2)
                                 });
                             }
 
                             smsLog.decisionProcessedAt = new Date();
-                            shouldLogToCdo = true; // Has response, log it
+                            shouldLogToCdo = true;
+                            
                         } else {
-                            // NO response yet, still within period - mark as PENDING
+                            // ⏳ PENDING - No response yet, still within period
                             smsLog.decisionStatus = 'pending';
                             
-                            // Don't add to results yet - will be evaluated later by cleanup worker
                             results.pending.push({
                                 contactId,
                                 emailAddress,
@@ -782,7 +807,7 @@ class DecisionController {
                                 deadline: evaluationDeadline
                             });
 
-                            logger.info('Contact marked as PENDING - waiting for response', {
+                            logger.info('⏳ PENDING - Waiting for response', {
                                 contactId,
                                 messageId: smsLog.messageId,
                                 deadline: evaluationDeadline,
@@ -790,30 +815,36 @@ class DecisionController {
                                 remainingHours: remainingHours.toFixed(2),
                                 evaluationPeriod: evaluationHuman
                             });
+                            
+                            // Don't log to CDO yet - waiting for response or timeout
                         }
                     }
 
                     await smsLog.save();
 
-                    // Log to CDO if we have a decision and a response
-                    if (shouldLogToCdo && eloquaService && smsLog.responseMessage) {
+                    // ============================================
+                    // LOG TO CDO FOR ALL DECISIONS (YES and NO)
+                    // ============================================
+                    if (shouldLogToCdo && eloquaService) {
                         try {
                             await DecisionController.updateCustomObject(
                                 eloquaService,
                                 instance,
                                 consumer,
                                 smsLog,
-                                smsLog.responseMessage
+                                cdoResponseMessage // ← Can be actual response or "NO RESPONSE"
                             );
 
-                            logger.info('CDO updated for decision', {
+                            logger.info('✅ CDO updated for decision', {
                                 contactId,
                                 decision: decisionResult,
-                                responseMessage: smsLog.responseMessage?.substring(0, 50)
+                                responseMessage: cdoResponseMessage?.substring(0, 50),
+                                isTimeout: cdoResponseMessage === 'NO RESPONSE'
                             });
                         } catch (cdoError) {
-                            logger.error('Failed to update CDO for decision', {
+                            logger.error('❌ Failed to update CDO for decision', {
                                 contactId,
+                                decision: decisionResult,
                                 error: cdoError.message
                             });
                         }
@@ -822,22 +853,26 @@ class DecisionController {
                 } catch (error) {
                     logger.error('Error processing contact decision', {
                         contactId: item.ContactID,
-                        error: error.message
+                        error: error.message,
+                        stack: error.stack
                     });
                 }
             }
 
-            logger.info('Decision evaluation completed', {
+            logger.info('✅ Decision evaluation completed', {
                 instanceId,
                 executionId,
                 evaluationPeriod: evaluationHuman,
                 yesCount: results.yes.length,
                 noCount: results.no.length,
-                pendingCount: results.pending.length
+                pendingCount: results.pending.length,
+                note: 'Timeout = NO decision'
             });
 
-            // CRITICAL: Only sync YES and NO to Eloqua
-            // PENDING contacts will be synced later when they timeout or respond
+            // ============================================
+            // SYNC TO ELOQUA - Only YES and NO (not PENDING)
+            // PENDING will be synced later by cleanup worker
+            // ============================================
             const syncResults = {
                 yes: results.yes,
                 no: results.no
@@ -851,16 +886,17 @@ class DecisionController {
                     syncResults
                 );
 
-                logger.info('Immediate decision results synced to Eloqua', {
+                logger.info('✅ Decision results synced to Eloqua', {
                     instanceId,
                     executionId,
                     evaluationPeriod: evaluationHuman,
                     yesSynced: syncResults.yes.length,
                     noSynced: syncResults.no.length,
-                    pendingNotSynced: results.pending.length
+                    pendingNotSynced: results.pending.length,
+                    note: 'Including timeouts as NO'
                 });
             } else {
-                logger.info('No immediate decisions to sync (all pending)', {
+                logger.info('⏳ No immediate decisions to sync (all pending)', {
                     instanceId,
                     executionId,
                     evaluationPeriod: evaluationHuman,
@@ -870,16 +906,16 @@ class DecisionController {
 
             // Log info about pending contacts
             if (results.pending.length > 0) {
-                logger.info('Contacts waiting for evaluation period', {
+                logger.info('⏳ Contacts waiting for evaluation period', {
                     instanceId,
                     evaluationPeriod: evaluationHuman,
                     pendingCount: results.pending.length,
-                    note: 'These will be evaluated by the cleanup worker when deadline passes'
+                    note: 'Will be evaluated by cleanup worker when deadline passes → NO if no response'
                 });
             }
 
         } catch (error) {
-            logger.error('Error in decision notify async processing', {
+            logger.error('❌ Error in decision notify async processing', {
                 instanceId,
                 executionId,
                 error: error.message,
@@ -890,7 +926,6 @@ class DecisionController {
 
     /**
      * Helper: Format evaluation period for human-readable display
-     * NEW METHOD - Add this to DecisionController
      */
     static formatEvaluationPeriod(hours) {
         if (hours === -1) return 'Anytime';
@@ -901,7 +936,6 @@ class DecisionController {
         }
         
         if (hours < 24) {
-            // Show decimal for fractional hours (e.g., 1.5 hours)
             const hoursRounded = hours % 1 === 0 ? hours : hours.toFixed(1);
             return `${hoursRounded} hour${hours !== 1 ? 's' : ''}`;
         }
