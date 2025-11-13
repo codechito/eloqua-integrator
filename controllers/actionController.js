@@ -1371,7 +1371,12 @@ class ActionController {
 
     /**
      * Process a single SMS job (called by worker)
-     * FIXED: Now logs to CDO after successful send
+     * FIXED: 
+     * - Validates before sending
+     * - Marks validation errors as failed (no retry)
+     * - Logs to CDO after successful send
+     * - Creates SMS log for all outcomes
+     * - Returns shouldSyncAsErrored flag for worker
      */
     static async processSmsJob(job) {
         try {
@@ -1424,6 +1429,63 @@ class ActionController {
                 }
             });
 
+            // ============================================
+            // VALIDATION: Check for tracked link issues
+            // ============================================
+            if (job.message?.includes('[tracked-link]') && !smsOptions.trackedLinkUrl) {
+                const errorMessage = 'Message contains [tracked-link] but no tracked link URL configured';
+                
+                logger.warn('Validation error - marking as failed', {
+                    jobId: job.jobId,
+                    contactId: job.contactId,
+                    error: errorMessage
+                });
+
+                // Mark job as failed (no retry for validation errors)
+                await job.markAsFailed(errorMessage, 'VALIDATION_ERROR');
+
+                // Create SMS log with failed status
+                const smsLog = new SmsLog({
+                    installId: job.installId,
+                    instanceId: job.instanceId,
+                    contactId: job.contactId,
+                    emailAddress: job.emailAddress,
+                    mobileNumber: job.mobileNumber,
+                    message: job.message,
+                    messageId: null, // No message ID since it wasn't sent
+                    senderId: job.senderId,
+                    campaignTitle: job.campaignTitle,
+                    status: 'failed',
+                    errorMessage: errorMessage,
+                    errorCode: 'VALIDATION_ERROR',
+                    sentAt: new Date(),
+                    executionId: job.executionId
+                });
+
+                await smsLog.save();
+
+                job.smsLogId = smsLog._id;
+                await job.save();
+
+                logger.info('SMS marked as failed due to validation error', {
+                    jobId: job.jobId,
+                    contactId: job.contactId,
+                    smsLogId: smsLog._id,
+                    error: errorMessage
+                });
+
+                return {
+                    success: false,
+                    jobId: job.jobId,
+                    error: errorMessage,
+                    smsLogId: smsLog._id,
+                    shouldSyncAsErrored: true // Flag for worker to sync as errored
+                };
+            }
+
+            // ============================================
+            // SEND SMS
+            // ============================================
             const smsResponse = await smsService.sendSms(
                 job.mobileNumber,
                 job.message,
@@ -1461,10 +1523,13 @@ class ActionController {
                 jobId: job.jobId,
                 messageId: smsResponse.message_id,
                 to: job.mobileNumber,
-                hasTrackedLink: smsResponse.tracked_link_requested
+                hasTrackedLink: smsResponse.tracked_link_requested,
+                smsLogId: smsLog._id
             });
 
+            // ============================================
             // UPDATE CUSTOM OBJECT IF CONFIGURED
+            // ============================================
             const hasCdoConfig = !!(consumer.actions?.sendsms?.custom_object_id);
             
             if (hasCdoConfig) {
@@ -1507,7 +1572,8 @@ class ActionController {
             return {
                 success: true,
                 jobId: job.jobId,
-                messageId: smsResponse.message_id
+                messageId: smsResponse.message_id,
+                smsLogId: smsLog._id
             };
 
         } catch (error) {
@@ -1517,16 +1583,70 @@ class ActionController {
                 stack: error.stack
             });
 
+            // Mark as failed
             await job.markAsFailed(error.message, error.code);
 
-            if (job.canRetry()) {
+            // ============================================
+            // CREATE SMS LOG FOR FAILED SMS
+            // ============================================
+            try {
+                const smsLog = new SmsLog({
+                    installId: job.installId,
+                    instanceId: job.instanceId,
+                    contactId: job.contactId,
+                    emailAddress: job.emailAddress,
+                    mobileNumber: job.mobileNumber,
+                    message: job.message,
+                    messageId: null,
+                    senderId: job.senderId,
+                    campaignTitle: job.campaignTitle,
+                    status: 'failed',
+                    errorMessage: error.message,
+                    errorCode: error.code || 'UNKNOWN_ERROR',
+                    sentAt: new Date(),
+                    executionId: job.executionId
+                });
+
+                await smsLog.save();
+
+                job.smsLogId = smsLog._id;
+                await job.save();
+
+                logger.info('Failed SMS logged', {
+                    jobId: job.jobId,
+                    contactId: job.contactId,
+                    smsLogId: smsLog._id,
+                    error: error.message
+                });
+            } catch (logError) {
+                logger.error('Error creating failed SMS log', {
+                    jobId: job.jobId,
+                    error: logError.message
+                });
+            }
+
+            // Check if can retry (for network errors, etc.)
+            const canRetry = job.canRetry();
+            
+            if (canRetry) {
                 await job.resetForRetry();
+                logger.info('Job will be retried', {
+                    jobId: job.jobId,
+                    attempt: job.attempts
+                });
+            } else {
+                logger.warn('Job cannot be retried - marking as permanently failed', {
+                    jobId: job.jobId,
+                    attempts: job.attempts,
+                    maxRetries: job.maxRetries
+                });
             }
 
             return {
                 success: false,
                 jobId: job.jobId,
-                error: error.message
+                error: error.message,
+                shouldSyncAsErrored: !canRetry // Only sync as errored if no more retries
             };
         }
     }
