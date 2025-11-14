@@ -1138,7 +1138,6 @@ class DecisionController {
                 updateRule: 'always', // ← ADD THIS (from docs)
                 fields: {
                     EmailAddress: '{{Contact.Field(C_EmailAddress)}}',
-                    MobilePhone: '{{Contact.Field(C_MobilePhone)}}',
                     ContactID: '{{Contact.Id}}'
                 },
                 identifierFieldName: 'ContactID', 
@@ -1171,7 +1170,6 @@ class DecisionController {
             // Upload contact data
             const contactData = contacts.map(contact => ({
                 EmailAddress: contact.emailAddress,
-                MobilePhone: contact.mobileNumber || '', // Add if available
                 ContactID: contact.contactId
             }));
 
