@@ -1141,6 +1141,7 @@ class DecisionController {
                     ContactID: '{{Contact.Id}}'
                 },
                 identifierFieldName: 'ContactID', 
+                updateRule: 'ifBlank',
                 syncActions: [
                     {
                         destination: destination,
