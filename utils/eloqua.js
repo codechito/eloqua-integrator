@@ -76,7 +76,7 @@ async function getConsumerBySiteId(installId, siteId) {
             error: error.message,
             stack: error.stack
         });
-        throw 'chito';
+        throw error;
     }
 }
 
