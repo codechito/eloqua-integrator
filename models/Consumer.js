@@ -5,13 +5,14 @@ const ConsumerSchema = new mongoose.Schema({
     installId: {
         type: String,
         required: true,
-        unique: true,
-        index: true,
+        index: true, // ← Keep indexed but not unique
         trim: true
     },
     SiteId: {
         type: String,
         required: true,
+        unique: true, // ← MAKE THIS UNIQUE (one per Eloqua site)
+        index: true,
         trim: true
     },
     siteName: {
@@ -149,7 +150,7 @@ const ConsumerSchema = new mongoose.Schema({
 
 // Indexes
 ConsumerSchema.index({ installId: 1, isActive: 1 });
-ConsumerSchema.index({ SiteId: 1 });
+ConsumerSchema.index({ SiteId: 1, isActive: 1 });
 
 // Virtual for checking if OAuth is valid
 ConsumerSchema.virtual('isOAuthValid').get(function() {
