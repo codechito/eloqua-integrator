@@ -1,11 +1,10 @@
-// utils/eloquaHelper.js - COMPLETE FIXED VERSION
+// utils/eloqua.js - COMPLETE SAFE VERSION
 
 const { Consumer } = require('../models');
 const { logger } = require('./logger');
 
 /**
  * Get consumer by SiteId and update installId if it changed
- * This handles Eloqua's changing installId behavior
  */
 async function getConsumerBySiteId(installId, siteId) {
     try {
@@ -14,14 +13,12 @@ async function getConsumerBySiteId(installId, siteId) {
             siteId
         });
 
-        // Try to find by SiteId (stable identifier)
         let consumer = await Consumer.findOne({ 
             SiteId: siteId,
             isActive: true 
         });
 
         if (consumer) {
-            // Check if installId changed
             if (consumer.installId !== installId) {
                 logger.warn('Eloqua changed installId - updating', {
                     siteId,
@@ -29,7 +26,6 @@ async function getConsumerBySiteId(installId, siteId) {
                     newInstallId: installId
                 });
 
-                // Update installId
                 consumer.installId = installId;
                 await consumer.save();
 
@@ -47,7 +43,6 @@ async function getConsumerBySiteId(installId, siteId) {
             return consumer;
         }
 
-        // If not found by SiteId, try by installId (new installation)
         consumer = await Consumer.findOne({ 
             installId,
             isActive: true 
@@ -61,7 +56,6 @@ async function getConsumerBySiteId(installId, siteId) {
             return consumer;
         }
 
-        // Not found
         logger.warn('Consumer not found', {
             installId,
             siteId
@@ -70,13 +64,18 @@ async function getConsumerBySiteId(installId, siteId) {
         return null;
 
     } catch (error) {
+        // ✅ SAFE ERROR LOGGING
+        const errorMessage = error?.message || String(error);
+        const errorStack = error?.stack || 'No stack trace';
+
         logger.error('Error getting consumer', {
             installId,
             siteId,
-            error: error.message,
-            stack: error.stack
+            error: errorMessage,
+            stack: errorStack
         });
-        throw error;
+
+        throw error instanceof Error ? error : new Error(errorMessage);
     }
 }
 
@@ -91,17 +90,15 @@ async function getOrCreateConsumer(installId, siteId, siteName = null) {
             siteName
         });
 
-        // First try to get existing consumer
         let consumer = await getConsumerBySiteId(installId, siteId);
 
         if (consumer) {
             logger.info('Existing consumer found', {
                 installId: consumer.installId,
                 siteId: consumer.SiteId,
-                oldInstallId: consumer.installId !== installId ? consumer.installId : null
+                wasUpdated: consumer.installId !== installId
             });
 
-            // Update siteName if provided
             if (siteName && consumer.siteName !== siteName) {
                 consumer.siteName = siteName;
                 await consumer.save();
@@ -114,7 +111,6 @@ async function getOrCreateConsumer(installId, siteId, siteName = null) {
             return consumer;
         }
 
-        // No existing consumer found - create new one
         logger.info('Creating new consumer', {
             installId,
             siteId,
@@ -135,26 +131,29 @@ async function getOrCreateConsumer(installId, siteId, siteName = null) {
             installId,
             siteId,
             siteName: consumer.siteName,
-            id: consumer._id
+            _id: consumer._id
         });
 
         return consumer;
 
     } catch (error) {
+        // ✅ SAFE ERROR LOGGING - FIX FOR LINE 145
+        const errorMessage = error?.message || String(error);
+        const errorStack = error?.stack || 'No stack trace';
 
         logger.error('Error in getOrCreateConsumer', {
             installId,
             siteId,
             siteName,
-            error: error.message,
-            stack: error.stack
+            error: errorMessage,
+            stack: errorStack,
+            errorType: typeof error
         });
         
-        // ✅ FIX: Throw the error properly (don't access error.error)
-        throw error;
+        // ✅ Throw proper Error object
+        throw error instanceof Error ? error : new Error(errorMessage);
     }
 }
-
 
 module.exports = {
     getConsumerBySiteId,
