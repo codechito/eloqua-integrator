@@ -162,6 +162,21 @@ async function getConsumerBySiteId(installId, siteId, includeToken = false) {
 
 async function getOrCreateConsumer(installId, siteId, siteName = null) {
     try {
+
+        // ✅ First: Check for INACTIVE consumer
+        let consumer = await Consumer.findOne({
+            SiteId: siteId,
+            isActive: false
+        });
+
+        if (consumer) {
+            logger.info('Found inactive consumer - reactivating');
+            consumer.isActive = true;
+            consumer.installId = installId;
+            await consumer.save();
+            return consumer;
+        }
+
         logger.info('Getting or creating consumer', {
             installId,
             siteId,
@@ -169,7 +184,7 @@ async function getOrCreateConsumer(installId, siteId, siteName = null) {
         });
 
         // ✅ First: Try to find ACTIVE consumer
-        let consumer = await getConsumerBySiteId(installId, siteId);
+        consumer = await getConsumerBySiteId(installId, siteId);
 
         if (consumer) {
             logger.info('Existing active consumer found', {
