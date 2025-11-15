@@ -31,7 +31,6 @@ router.post('/refresh-token', verifyInstallation, AppController.refreshToken);
 // Debug endpoints
 router.get('/debug/token/:installId', AppController.debugToken);
 router.get('/test-connection/:installId', AppController.testConnection);
-router.get('/fix-siteid/:installId/:siteId', AppController.fixSiteId);
 
 // AJAX endpoints
 router.get('/ajax/customobjects/:installId/:siteId/customObject',
