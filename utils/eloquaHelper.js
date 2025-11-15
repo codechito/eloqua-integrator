@@ -1,4 +1,4 @@
-// utils/eloquaHelper.js - NEW FILE
+// utils/eloquaHelper.js - COMPLETE FIXED VERSION
 
 const { Consumer } = require('../models');
 const { logger } = require('./logger');
@@ -73,7 +73,8 @@ async function getConsumerBySiteId(installId, siteId) {
         logger.error('Error getting consumer', {
             installId,
             siteId,
-            error: error.message
+            error: error.message,
+            stack: error.stack
         });
         throw error;
     }
@@ -84,39 +85,71 @@ async function getConsumerBySiteId(installId, siteId) {
  */
 async function getOrCreateConsumer(installId, siteId, siteName = null) {
     try {
+        logger.info('Getting or creating consumer', {
+            installId,
+            siteId,
+            siteName
+        });
+
+        // First try to get existing consumer
         let consumer = await getConsumerBySiteId(installId, siteId);
 
-        if (!consumer) {
-            logger.info('Creating new consumer', {
-                installId,
-                siteId,
-                siteName
+        if (consumer) {
+            logger.info('Existing consumer found', {
+                installId: consumer.installId,
+                siteId: consumer.SiteId,
+                oldInstallId: consumer.installId !== installId ? consumer.installId : null
             });
 
-            consumer = new Consumer({
-                installId,
-                SiteId: siteId,
-                siteName: siteName || 'Unknown Site',
-                isActive: true,
-                Status: 'active'
-            });
+            // Update siteName if provided
+            if (siteName && consumer.siteName !== siteName) {
+                consumer.siteName = siteName;
+                await consumer.save();
+                logger.info('Updated consumer siteName', {
+                    installId: consumer.installId,
+                    siteName
+                });
+            }
 
-            await consumer.save();
-
-            logger.info('Consumer created', {
-                installId,
-                siteId
-            });
+            return consumer;
         }
+
+        // No existing consumer found - create new one
+        logger.info('Creating new consumer', {
+            installId,
+            siteId,
+            siteName
+        });
+
+        consumer = new Consumer({
+            installId,
+            SiteId: siteId,
+            siteName: siteName || 'Unknown Site',
+            isActive: true,
+            Status: 'active'
+        });
+
+        await consumer.save();
+
+        logger.info('Consumer created successfully', {
+            installId,
+            siteId,
+            siteName: consumer.siteName,
+            id: consumer._id
+        });
 
         return consumer;
 
     } catch (error) {
-        logger.error('Error getting or creating consumer', {
+        logger.error('Error in getOrCreateConsumer', {
             installId,
             siteId,
-            error: error.message
+            siteName,
+            error: error.message,
+            stack: error.stack
         });
+        
+        // ✅ FIX: Throw the error properly (don't access error.error)
         throw error;
     }
 }
