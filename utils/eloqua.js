@@ -82,6 +82,8 @@ async function getConsumerBySiteId(installId, siteId) {
 /**
  * Get or create consumer by SiteId
  */
+// utils/eloqua.js - FIXED getOrCreateConsumer
+
 async function getOrCreateConsumer(installId, siteId, siteName = null) {
     try {
         logger.info('Getting or creating consumer', {
@@ -90,10 +92,11 @@ async function getOrCreateConsumer(installId, siteId, siteName = null) {
             siteName
         });
 
+        // ✅ First: Try to find ACTIVE consumer
         let consumer = await getConsumerBySiteId(installId, siteId);
 
         if (consumer) {
-            logger.info('Existing consumer found', {
+            logger.info('Existing active consumer found', {
                 installId: consumer.installId,
                 siteId: consumer.SiteId,
                 wasUpdated: consumer.installId !== installId
@@ -102,16 +105,46 @@ async function getOrCreateConsumer(installId, siteId, siteName = null) {
             if (siteName && consumer.siteName !== siteName) {
                 consumer.siteName = siteName;
                 await consumer.save();
-                logger.info('Updated consumer siteName', {
-                    installId: consumer.installId,
-                    siteName
-                });
             }
 
             return consumer;
         }
 
-        logger.info('Creating new consumer', {
+        // ✅ Second: Check for INACTIVE consumer (from previous uninstall)
+        consumer = await Consumer.findOne({
+            SiteId: siteId,
+            isActive: false
+        });
+
+        if (consumer) {
+            logger.info('Found inactive consumer - reactivating', {
+                oldInstallId: consumer.installId,
+                newInstallId: installId,
+                siteId
+            });
+
+            // Reactivate and update
+            consumer.isActive = true;
+            consumer.installId = installId;
+            if (siteName) consumer.siteName = siteName;
+            
+            // Clear old pending callbacks
+            consumer.pending_oauth_callback = null;
+            consumer.pending_oauth_expires = null;
+            
+            await consumer.save();
+
+            logger.info('Consumer reactivated', {
+                installId: consumer.installId,
+                siteId: consumer.SiteId,
+                hadToken: !!consumer.oauth_token
+            });
+
+            return consumer;
+        }
+
+        // ✅ Third: No consumer exists at all - create new one
+        logger.info('Creating brand new consumer', {
             installId,
             siteId,
             siteName
@@ -137,7 +170,6 @@ async function getOrCreateConsumer(installId, siteId, siteName = null) {
         return consumer;
 
     } catch (error) {
-        // ✅ SAFE ERROR LOGGING - FIX FOR LINE 145
         const errorMessage = error?.message || String(error);
         const errorStack = error?.stack || 'No stack trace';
 
@@ -150,7 +182,6 @@ async function getOrCreateConsumer(installId, siteId, siteName = null) {
             errorType: typeof error
         });
         
-        // ✅ Throw proper Error object
         throw error instanceof Error ? error : new Error(errorMessage);
     }
 }

@@ -1,18 +1,24 @@
+// middleware/auth.js - COMPLETE FIXED WITH SITEID SUPPORT
+
 const { Consumer } = require('../models');
 const { logger } = require('../utils');
 const OAuthService = require('../services/oauthService');
+const { getConsumerBySiteId } = require('../utils/eloqua');
 
 /**
  * Verify Eloqua installation
+ * FIXED: Uses SiteId as primary identifier
  */
 async function verifyInstallation(req, res, next) {
     try {
-        const { installId } = req.query || req.params;
+        const installId = req.query.installId || req.params.installId;
+        const siteId = req.query.siteId || req.query.SiteId || req.params.siteId;
 
         if (!installId) {
             logger.warn('Missing installId in request', {
                 path: req.path,
-                method: req.method
+                method: req.method,
+                hasSiteId: !!siteId
             });
             return res.status(401).json({ 
                 error: 'Unauthorized',
@@ -20,14 +26,29 @@ async function verifyInstallation(req, res, next) {
             });
         }
 
-        const consumer = await Consumer.findOne({ 
-            installId, 
-            isActive: true 
-        });
+        // ✅ Use SiteId-based lookup if available
+        let consumer;
+        if (siteId) {
+            logger.debug('Looking up consumer by SiteId', {
+                installId,
+                siteId
+            });
+            consumer = await getConsumerBySiteId(installId, siteId);
+        } else {
+            // Fallback to installId-only lookup
+            logger.debug('Looking up consumer by installId only', {
+                installId
+            });
+            consumer = await Consumer.findOne({ 
+                installId, 
+                isActive: true 
+            });
+        }
 
         if (!consumer) {
             logger.warn('Invalid or inactive installation', { 
                 installId,
+                siteId,
                 path: req.path
             });
             return res.status(401).json({ 
@@ -37,10 +58,12 @@ async function verifyInstallation(req, res, next) {
         }
 
         req.consumer = consumer;
-        req.installId = installId;
+        req.installId = consumer.installId; // Use updated installId
+        req.siteId = consumer.SiteId;
 
         logger.debug('Installation verified', {
-            installId,
+            installId: consumer.installId,
+            siteId: consumer.SiteId,
             siteName: consumer.siteName
         });
 
@@ -59,6 +82,7 @@ async function verifyInstallation(req, res, next) {
 
 /**
  * Verify OAuth token and auto-refresh if expired
+ * FIXED: Properly handles token selection
  */
 async function verifyOAuthToken(req, res, next) {
     try {
@@ -71,7 +95,7 @@ async function verifyOAuthToken(req, res, next) {
             });
         }
 
-        // Fetch consumer with OAuth fields
+        // ✅ Fetch consumer with OAuth fields (they're select: false by default)
         const consumerWithToken = await Consumer.findById(consumer._id)
             .select('+oauth_token +oauth_expires_at +oauth_refresh_token');
 
@@ -88,12 +112,13 @@ async function verifyOAuthToken(req, res, next) {
         // Check if OAuth token exists
         if (!consumerWithToken.oauth_token) {
             logger.warn('Missing OAuth token', { 
-                installId: consumer.installId 
+                installId: consumer.installId,
+                siteId: consumer.SiteId
             });
             
             const reAuthError = new Error('OAuth authentication required');
             reAuthError.code = 'REAUTH_REQUIRED';
-            reAuthError.reAuthUrl = `/eloqua/app/authorize?installId=${consumer.installId}`;
+            reAuthError.reAuthUrl = `/eloqua/app/authorize?installId=${consumer.installId}&SiteId=${consumer.SiteId}`;
             return next(reAuthError);
         }
 
@@ -104,7 +129,8 @@ async function verifyOAuthToken(req, res, next) {
         
         if (!expiresAt) {
             logger.warn('No token expiry date set', {
-                installId: consumer.installId
+                installId: consumer.installId,
+                siteId: consumer.SiteId
             });
             // Token exists but no expiry - assume it's valid for now
             req.consumer = consumerWithToken;
@@ -116,6 +142,7 @@ async function verifyOAuthToken(req, res, next) {
 
         logger.debug('Token expiry check', {
             installId: consumer.installId,
+            siteId: consumer.SiteId,
             now: now.toISOString(),
             expiresAt: expiresAt?.toISOString(),
             isExpiredOrExpiringSoon,
@@ -125,24 +152,27 @@ async function verifyOAuthToken(req, res, next) {
         if (isExpiredOrExpiringSoon) {
             logger.info('OAuth token expired or expiring soon, attempting refresh', {
                 installId: consumer.installId,
+                siteId: consumer.SiteId,
                 expiresAt: expiresAt?.toISOString(),
                 minutesUntilExpiry
             });
 
             if (!consumerWithToken.oauth_refresh_token) {
                 logger.error('No refresh token available', { 
-                    installId: consumer.installId 
+                    installId: consumer.installId,
+                    siteId: consumer.SiteId
                 });
                 
                 const reAuthError = new Error('OAuth token expired and no refresh token available');
                 reAuthError.code = 'REAUTH_REQUIRED';
-                reAuthError.reAuthUrl = `/eloqua/app/authorize?installId=${consumer.installId}`;
+                reAuthError.reAuthUrl = `/eloqua/app/authorize?installId=${consumer.installId}&SiteId=${consumer.SiteId}`;
                 return next(reAuthError);
             }
 
             try {
                 logger.info('Calling OAuth refresh token endpoint', {
-                    installId: consumer.installId
+                    installId: consumer.installId,
+                    siteId: consumer.SiteId
                 });
 
                 const tokenData = await OAuthService.refreshAccessToken(
@@ -151,6 +181,7 @@ async function verifyOAuthToken(req, res, next) {
 
                 logger.info('Token refresh successful', {
                     installId: consumer.installId,
+                    siteId: consumer.SiteId,
                     hasAccessToken: !!tokenData.access_token,
                     hasRefreshToken: !!tokenData.refresh_token,
                     expiresIn: tokenData.expires_in
@@ -170,6 +201,7 @@ async function verifyOAuthToken(req, res, next) {
 
                 logger.info('OAuth token refreshed and saved', {
                     installId: consumer.installId,
+                    siteId: consumer.SiteId,
                     newExpiresAt: consumerWithToken.oauth_expires_at.toISOString()
                 });
 
@@ -178,6 +210,7 @@ async function verifyOAuthToken(req, res, next) {
             } catch (refreshError) {
                 logger.error('Failed to refresh OAuth token', {
                     installId: consumer.installId,
+                    siteId: consumer.SiteId,
                     error: refreshError.message,
                     response: refreshError.response?.data,
                     status: refreshError.response?.status,
@@ -186,7 +219,7 @@ async function verifyOAuthToken(req, res, next) {
                 
                 const reAuthError = new Error('OAuth token refresh failed. Please re-authorize.');
                 reAuthError.code = 'REAUTH_REQUIRED';
-                reAuthError.reAuthUrl = `/eloqua/app/authorize?installId=${consumer.installId}`;
+                reAuthError.reAuthUrl = `/eloqua/app/authorize?installId=${consumer.installId}&SiteId=${consumer.SiteId}`;
                 reAuthError.originalError = refreshError;
                 return next(reAuthError);
             }
@@ -196,6 +229,7 @@ async function verifyOAuthToken(req, res, next) {
             
             logger.debug('OAuth token is valid', {
                 installId: consumer.installId,
+                siteId: consumer.SiteId,
                 expiresAt: expiresAt?.toISOString(),
                 minutesUntilExpiry
             });
@@ -210,7 +244,7 @@ async function verifyOAuthToken(req, res, next) {
         
         const reAuthError = new Error('Failed to verify OAuth token');
         reAuthError.code = 'REAUTH_REQUIRED';
-        reAuthError.reAuthUrl = `/eloqua/app/authorize?installId=${req.consumer?.installId}`;
+        reAuthError.reAuthUrl = `/eloqua/app/authorize?installId=${req.consumer?.installId}&SiteId=${req.consumer?.SiteId}`;
         reAuthError.originalError = error;
         next(reAuthError);
     }
@@ -230,13 +264,14 @@ async function verifyTransmitSmsCredentials(req, res, next) {
             });
         }
 
-        // Get credentials
+        // Get credentials (they're select: false by default)
         const consumerWithCreds = await Consumer.findById(consumer._id)
             .select('+transmitsms_api_key +transmitsms_api_secret');
 
         if (!consumerWithCreds.transmitsms_api_key || !consumerWithCreds.transmitsms_api_secret) {
             logger.warn('Missing TransmitSMS credentials', { 
-                installId: consumer.installId 
+                installId: consumer.installId,
+                siteId: consumer.SiteId
             });
             return res.status(400).json({ 
                 error: 'Configuration Required',
