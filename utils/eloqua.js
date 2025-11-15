@@ -1,7 +1,7 @@
 // utils/eloqua.js - COMPLETE SAFE VERSION
 
 const { Consumer } = require('../models');
-const { logger } = require('./logger');
+const logger  = require('./logger');
 
 /**
  * Get consumer by SiteId and update installId if it changed
@@ -141,14 +141,14 @@ async function getOrCreateConsumer(installId, siteId, siteName = null) {
         const errorMessage = error?.message || String(error);
         const errorStack = error?.stack || 'No stack trace';
 
-        // logger.error('Error in getOrCreateConsumer', {
-        //     installId,
-        //     siteId,
-        //     siteName,
-        //     error: errorMessage,
-        //     stack: errorStack,
-        //     errorType: typeof error
-        // });
+        logger.error('Error in getOrCreateConsumer', {
+            installId,
+            siteId,
+            siteName,
+            error: errorMessage,
+            stack: errorStack,
+            errorType: typeof error
+        });
         
         // ✅ Throw proper Error object
         throw error instanceof Error ? error : new Error(errorMessage);
