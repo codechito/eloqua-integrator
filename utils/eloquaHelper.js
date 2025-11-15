@@ -154,6 +154,7 @@ async function getOrCreateConsumer(installId, siteId, siteName = null) {
     }
 }
 
+
 module.exports = {
     getConsumerBySiteId,
     getOrCreateConsumer
