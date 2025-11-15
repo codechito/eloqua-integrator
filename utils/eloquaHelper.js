@@ -76,7 +76,7 @@ async function getConsumerBySiteId(installId, siteId) {
             error: error.message,
             stack: error.stack
         });
-        throw error;
+        throw 'chito';
     }
 }
 
@@ -141,7 +141,7 @@ async function getOrCreateConsumer(installId, siteId, siteName = null) {
         return consumer;
 
     } catch (error) {
-        
+
         logger.error('Error in getOrCreateConsumer', {
             installId,
             siteId,
