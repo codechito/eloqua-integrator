@@ -248,7 +248,7 @@ class AppController {
         }
 
         // ✅ Use SiteId-based lookup
-        const consumer = await getConsumerBySiteId(installId, SiteId);
+        const consumer = await getConsumerBySiteId(installId, SiteId, true);
 
         if (!consumer) {
             return res.status(404).send('Installation not found. Please reinstall the app.');
