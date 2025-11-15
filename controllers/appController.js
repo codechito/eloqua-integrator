@@ -4,7 +4,7 @@ const { Consumer } = require('../models');
 const { EloquaService, OAuthService } = require('../services');
 const { logger, generateId } = require('../utils');
 const { asyncHandler } = require('../middleware');
-const { getConsumerBySiteId, getOrCreateConsumer } = require('../utils/eloquaHelper');
+const { getConsumerBySiteId, getOrCreateConsumer } = require('../utils/eloqua');
 
 class AppController {
 
