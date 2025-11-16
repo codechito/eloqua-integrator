@@ -1622,52 +1622,77 @@ class ActionController {
     }
 
     /**
-     * Get country calling code from country name
-     */
-    static getCountryCode(country) {
-        const countryCodes = {
-            'Australia': '+61',
-            'United States': '+1',
-            'United Kingdom': '+44',
-            'New Zealand': '+64',
-            'Singapore': '+65',
-            'Philippines': '+63',
-            'India': '+91',
-            'Malaysia': '+60',
-            // Add more as needed
-        };
-
-        return countryCodes[country] || '+61'; // Default to Australia
-    }
-
-    /**
-     * Format mobile number with country code
+     * Format mobile number
+     * SIMPLE: Just clean up formatting (remove spaces, hyphens, parentheses)
+     * Remove leading 0 if present and add country code
+     * No + prefix added
      */
     static formatMobileNumber(mobileNumber, country) {
         if (!mobileNumber) return null;
 
-        // Remove all spaces and special characters
+        // Remove all spaces, hyphens, and parentheses
         let cleaned = mobileNumber.replace(/[\s\-\(\)]/g, '');
 
-        // If it already starts with +, return as is
+        // Remove + if present
         if (cleaned.startsWith('+')) {
-            return cleaned;
-        }
-
-        // Get country code from country name
-        const countryCode = ActionController.getCountryCode(country);
-
-        // If number starts with 0, remove it and add country code
-        if (cleaned.startsWith('0')) {
             cleaned = cleaned.substring(1);
         }
 
-        // If number doesn't start with country code digits, add it
-        if (!cleaned.startsWith(countryCode.replace('+', ''))) {
-            return `${countryCode}${cleaned}`;
+        // If starts with 0, remove it and add country code
+        if (cleaned.startsWith('0')) {
+            const countryCode = ActionController.getCountryCode(country);
+            // Get just the digits from country code (remove +)
+            const countryDigits = countryCode.replace('+', '');
+            cleaned = countryDigits + cleaned.substring(1);
         }
 
-        return `+${cleaned}`;
+        return cleaned;
+    }
+
+    /**
+     * Get country calling code from country name
+     */
+    static getCountryCode(country) {
+        const normalized = country.toUpperCase().trim();
+        
+        const countryCodes = {
+            'AUSTRALIA': '+61',
+            'AU': '+61',
+            'PHILIPPINES': '+63',
+            'PH': '+63',
+            'UNITED STATES': '+1',
+            'USA': '+1',
+            'US': '+1',
+            'UNITED KINGDOM': '+44',
+            'UK': '+44',
+            'GB': '+44',
+            'NEW ZEALAND': '+64',
+            'NZ': '+64',
+            'SINGAPORE': '+65',
+            'SG': '+65',
+            'INDIA': '+91',
+            'IN': '+91',
+            'MALAYSIA': '+60',
+            'MY': '+60',
+            'THAILAND': '+66',
+            'TH': '+66',
+            'INDONESIA': '+62',
+            'ID': '+62',
+            'VIETNAM': '+84',
+            'VN': '+84',
+            'CHINA': '+86',
+            'CN': '+86',
+            'JAPAN': '+81',
+            'JP': '+81',
+            'SOUTH KOREA': '+82',
+            'KR': '+82',
+            'HONG KONG': '+852',
+            'HK': '+852',
+            'CANADA': '+1',
+            'CA': '+1'
+        };
+
+        return countryCodes[normalized] || '+61'; // Default Australia
     }
 
     /**
