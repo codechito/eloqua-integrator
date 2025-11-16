@@ -1076,72 +1076,98 @@ class DecisionController {
 
     /**
      * Wait for sync to complete (poll status)
+     * ENHANCED: Returns full sync details
      */
     static async waitForSyncCompletion(eloquaService, syncUri, maxAttempts = 30) {
         let attempts = 0;
         const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
 
+        logger.info('Polling sync status', {
+            syncUri,
+            maxAttempts,
+            checkInterval: '2 seconds'
+        });
+
         while (attempts < maxAttempts) {
+            attempts++;
+            
             const status = await eloquaService.checkSyncStatus(syncUri);
 
             logger.debug('Sync status check', {
                 syncUri,
                 status: status.status,
-                attempt: attempts + 1
+                attempt: attempts,
+                maxAttempts,
+                // ✅ Log counts if available
+                totalResults: status.totalResults,
+                successCount: status.successCount,
+                errorCount: status.errorCount
             });
 
             if (status.status === 'success') {
-                logger.info('Sync completed successfully', {
+                logger.info('✅ Sync completed', {
                     syncUri,
-                    status: status.status
+                    status: status.status,
+                    attempts,
+                    totalResults: status.totalResults,
+                    successCount: status.successCount,
+                    errorCount: status.errorCount
                 });
+                
+                // ✅ CRITICAL: Return full status object
                 return status;
             }
 
             if (status.status === 'error' || status.status === 'warning') {
-                logger.error('Sync failed', {
+                logger.error('❌ Sync failed', {
                     syncUri,
-                    status: status.status
+                    status: status.status,
+                    attempts,
+                    fullResponse: status
                 });
                 throw new Error(`Sync failed with status: ${status.status}`);
             }
 
             // Still pending, wait and retry
-            attempts++;
-            await delay(2000); // Wait 2 seconds between checks
+            if (attempts < maxAttempts) {
+                await delay(2000); // Wait 2 seconds between checks
+            }
         }
 
-        throw new Error('Sync timeout - max attempts reached');
+        logger.error('❌ Sync timeout', {
+            syncUri,
+            attempts: maxAttempts
+        });
+        
+        throw new Error(`Sync timeout - max attempts reached after ${maxAttempts} attempts`);
     }
 
     /**
      * Sync a batch of decision results using Bulk API
-     * FIXED: Uses exact Eloqua documentation format
+     * ENHANCED: Detailed logging to debug Eloqua sync issues
      */
     static async syncDecisionBatch(eloquaService, instance, instanceIdNoDashes, executionId, contacts, decision) {
         try {
-            logger.info('Syncing decision batch', {
+            logger.info('📤 Syncing decision batch', {
                 instanceId: instance.instanceId,
                 instanceIdNoDashes,
                 executionId,
                 decision,
-                count: contacts.length
+                count: contacts.length,
+                contactIds: contacts.map(c => c.contactId)
             });
 
-            // CRITICAL: Format must be exactly as per Eloqua docs
-            // {{DecisionInstance(9347bfe19c72409ca5cd402ff74f0caa).Execution[12345]}}
-           // const destination = `{{DecisionInstance(${instanceIdNoDashes}).Execution[${executionId}]}}`;
+            // ✅ Use format WITHOUT .Execution[id] (matches old working code)
             const destination = `{{DecisionInstance(${instanceIdNoDashes})}}`;
 
             const importDefinition = {
                 name: `SMS_Decision_${instanceIdNoDashes}_${decision}_${Date.now()}`,
-                updateRule: 'always', // ← ADD THIS (from docs)
+                updateRule: 'always',
                 fields: {
                     EmailAddress: '{{Contact.Field(C_EmailAddress)}}',
                     ContactID: '{{Contact.Id}}'
                 },
-                identifierFieldName: 'ContactID', 
-                updateRule: 'ifBlank',
+                identifierFieldName: 'ContactID',
                 syncActions: [
                     {
                         destination: destination,
@@ -1152,20 +1178,22 @@ class DecisionController {
                 isSyncTriggeredOnImport: false
             };
 
-            logger.info('Creating bulk import with syncActions', {
-                instanceId: instance.instanceId,
-                instanceIdNoDashes,
-                executionId,
+            logger.info('📋 Creating bulk import with syncActions', {
+                importName: importDefinition.name,
                 destination,
                 decision,
-                importName: importDefinition.name
+                updateRule: importDefinition.updateRule,
+                identifierField: importDefinition.identifierFieldName,
+                contactCount: contacts.length
             });
 
             const importDef = await eloquaService.createBulkImport('contacts', importDefinition);
 
-            logger.info('Bulk import definition created', {
+            logger.info('✅ Bulk import definition created', {
                 uri: importDef.uri,
-                destination
+                name: importDef.name,
+                createdAt: importDef.createdAt,
+                createdBy: importDef.createdBy
             });
 
             // Upload contact data
@@ -1174,15 +1202,16 @@ class DecisionController {
                 ContactID: contact.contactId
             }));
 
-            logger.info('Uploading contact data', {
+            logger.info('📤 Uploading contact data', {
                 uri: importDef.uri,
                 count: contactData.length,
+                allContactIds: contactData.map(c => c.ContactID),
                 sampleData: contactData[0]
             });
 
             await eloquaService.uploadBulkImportData(importDef.uri, contactData);
 
-            logger.info('Contact data uploaded', {
+            logger.info('✅ Contact data uploaded successfully', {
                 uri: importDef.uri,
                 count: contactData.length
             });
@@ -1190,9 +1219,10 @@ class DecisionController {
             // Start sync
             const sync = await eloquaService.syncBulkImport(importDef.uri);
 
-            logger.info('Bulk import sync started', {
+            logger.info('🔄 Bulk import sync started', {
                 syncUri: sync.uri,
                 status: sync.status,
+                syncedInstanceURI: importDef.uri,
                 decision,
                 count: contacts.length
             });
@@ -1200,7 +1230,7 @@ class DecisionController {
             // ============================================
             // ✅ CRITICAL: WAIT FOR SYNC TO COMPLETE
             // ============================================
-            logger.info('⏳ Waiting for sync to complete...', {
+            logger.info('⏳ Waiting for sync to complete (max 60 seconds)...', {
                 syncUri: sync.uri,
                 decision,
                 count: contacts.length
@@ -1208,19 +1238,71 @@ class DecisionController {
 
             const syncResult = await DecisionController.waitForSyncCompletion(eloquaService, sync.uri);
 
-            logger.info('✅ Decision batch sync completed', {
+            // ✅ CRITICAL: Log detailed sync result
+            logger.info('📊 Sync Result Details', {
                 syncUri: sync.uri,
                 status: syncResult.status,
                 decision,
                 count: contacts.length,
-                executionId,
-                destination
+                // ✅ CRITICAL: These fields tell us what happened
+                totalResults: syncResult.totalResults,
+                successCount: syncResult.successCount,
+                errorCount: syncResult.errorCount,
+                warnings: syncResult.warnings,
+                logs: syncResult.logs,
+                syncStartedAt: syncResult.syncStartedAt,
+                syncEndedAt: syncResult.syncEndedAt,
+                duration: syncResult.syncEndedAt && syncResult.syncStartedAt 
+                    ? `${(new Date(syncResult.syncEndedAt) - new Date(syncResult.syncStartedAt)) / 1000}s`
+                    : 'unknown'
             });
+
+            // ✅ CRITICAL: Check if sync actually worked
+            if (syncResult.status === 'success') {
+                if (syncResult.successCount === 0 && contacts.length > 0) {
+                    logger.error('❌ SYNC PROBLEM: Status=success but successCount=0!', {
+                        syncUri: sync.uri,
+                        attemptedCount: contacts.length,
+                        successCount: syncResult.successCount || 0,
+                        errorCount: syncResult.errorCount || 0,
+                        destination,
+                        decision,
+                        note: 'Eloqua accepted sync but did not process any contacts - check destination format or campaign status'
+                    });
+                } else {
+                    logger.info('✅ Decision batch synced successfully', {
+                        syncUri: sync.uri,
+                        decision,
+                        successCount: syncResult.successCount || contacts.length,
+                        errorCount: syncResult.errorCount || 0
+                    });
+                }
+            }
+
+            // ✅ Check for errors or warnings
+            if (syncResult.errorCount > 0) {
+                logger.error('⚠️ Sync had errors', {
+                    syncUri: sync.uri,
+                    errorCount: syncResult.errorCount,
+                    logs: syncResult.logs,
+                    warnings: syncResult.warnings
+                });
+            }
+
+            if (syncResult.warnings && syncResult.warnings.length > 0) {
+                logger.warn('⚠️ Sync had warnings', {
+                    syncUri: sync.uri,
+                    warnings: syncResult.warnings
+                });
+            }
 
             return {
                 success: true,
                 syncUri: sync.uri,
-                status: syncResult.status
+                status: syncResult.status,
+                successCount: syncResult.successCount || 0,
+                errorCount: syncResult.errorCount || 0,
+                warnings: syncResult.warnings || []
             };
 
         } catch (error) {
