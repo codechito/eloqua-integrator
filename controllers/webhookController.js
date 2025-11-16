@@ -1,6 +1,6 @@
-// controllers/webhookController.js - COMPLETE MERGED VERSION
+// controllers/webhookController.js - COMPLETE MERGED WITH SMART SEARCH & DECISION SUPPORT
 
-const { Consumer, SmsLog, SmsReply, LinkHit, ActionInstance } = require('../models');
+const { Consumer, SmsLog, SmsReply, LinkHit, ActionInstance, DecisionInstance } = require('../models');
 const { EloquaService } = require('../services');
 const DecisionController = require('./decisionController');
 const { logger } = require('../utils');
@@ -30,18 +30,20 @@ class WebhookController {
 
         try {
             let smsLog = null;
+            let installId = queryParams.installId;
 
             // STRATEGY 1: Try to find by messageId (most reliable)
             if (dlrData.message_id) {
                 smsLog = await SmsLog.findOne({
-                    messageId: dlrData.message_id,
-                    installId: queryParams.installId
+                    messageId: dlrData.message_id.toString()
                 });
 
                 if (smsLog) {
+                    installId = smsLog.installId;
                     logger.debug('SMS log found by messageId', {
                         messageId: dlrData.message_id,
-                        smsLogId: smsLog._id
+                        smsLogId: smsLog._id,
+                        installId: smsLog.installId
                     });
                 }
             }
@@ -139,6 +141,7 @@ class WebhookController {
     /**
      * Handle SMS Replies
      * POST /webhooks/reply?installId=xxx&instanceId=xxx&contactId=xxx&executionId=xxx&mobile=xxx
+     * ENHANCED: Smart search by messageId and phone, supports decision evaluation
      */
     static handleSmsReply = asyncHandler(async (req, res) => {
         const queryParams = req.query;
@@ -169,37 +172,52 @@ class WebhookController {
                 : new Date();
             const isOptOut = (replyData.is_optout || bodyData.is_optout) === 'yes';
 
-            // Find the original SMS
+            // Find the original SMS - SMART SEARCH
             let smsLog = null;
             let installId = queryParams.installId;
             let contactId = queryParams.contactId;
+            let instanceId = queryParams.instanceId;
+            let executionId = queryParams.executionId;
+            let foundBySearch = false;
 
             // STRATEGY 1: Try to find by message ID first
             if (messageId) {
                 smsLog = await SmsLog.findOne({ 
-                    messageId,
-                    installId: installId
+                    messageId: messageId.toString()
                 });
                 
                 if (smsLog) {
+                    foundBySearch = true;
                     installId = smsLog.installId;
                     contactId = smsLog.contactId;
+                    instanceId = smsLog.instanceId;
+                    executionId = smsLog.executionId;
                     
-                    logger.info('Found SMS log by message ID', {
+                    logger.info('✅ Found SMS log by messageId', {
                         messageId,
                         smsLogId: smsLog._id,
+                        installId: smsLog.installId,
+                        instanceId: smsLog.instanceId,
+                        contactId: smsLog.contactId,
+                        executionId: smsLog.executionId,
                         hasDecision: !!smsLog.decisionInstanceId,
                         decisionStatus: smsLog.decisionStatus
                     });
                 }
             }
 
-            // STRATEGY 2: If not found by messageId, try by mobile number (most recent)
+            // STRATEGY 2: If not found by messageId, try by mobile number (prefer pending decisions)
             if (!smsLog && fromNumber) {
+                const normalizedPhone = fromNumber.replace(/[^\d+]/g, '');
+                
                 const recentSms = await SmsLog.find({
-                    mobileNumber: fromNumber,
-                    installId: installId
-                }).sort({ createdAt: -1 }).limit(10);
+                    $or: [
+                        { mobileNumber: fromNumber },
+                        { mobileNumber: normalizedPhone },
+                        { mobileNumber: { $regex: new RegExp(normalizedPhone.replace('+', '\\+'), 'i') } }
+                    ],
+                    sentAt: { $gte: new Date(Date.now() - 7 * 24 * 60 * 60 * 1000) } // Last 7 days
+                }).sort({ sentAt: -1 }).limit(10);
 
                 if (recentSms.length > 0) {
                     // Prefer SMS with pending decision
@@ -208,21 +226,27 @@ class WebhookController {
                         log.decisionStatus === 'pending'
                     ) || recentSms[0];
                     
+                    foundBySearch = true;
                     installId = smsLog.installId;
                     contactId = smsLog.contactId;
+                    instanceId = smsLog.instanceId;
+                    executionId = smsLog.executionId;
                     
-                    logger.info('Found SMS log by mobile number', {
+                    logger.info('✅ Found SMS log by mobile number', {
                         mobile: fromNumber,
+                        normalized: normalizedPhone,
                         smsLogId: smsLog._id,
+                        installId: smsLog.installId,
                         hasDecision: !!smsLog.decisionInstanceId,
                         decisionStatus: smsLog.decisionStatus,
-                        candidateCount: recentSms.length
+                        candidateCount: recentSms.length,
+                        preferredForDecision: !!(smsLog.decisionInstanceId && smsLog.decisionStatus === 'pending')
                     });
                 }
             }
 
             // STRATEGY 3: Try by contactId + mobile from query params
-            if (!smsLog && contactId && fromNumber) {
+            if (!smsLog && contactId && fromNumber && installId) {
                 smsLog = await SmsLog.findOne({
                     installId: installId,
                     contactId: contactId,
@@ -231,7 +255,8 @@ class WebhookController {
                 }).sort({ sentAt: -1 });
 
                 if (smsLog) {
-                    logger.info('Found SMS log by contactId + mobile', {
+                    foundBySearch = true;
+                    logger.info('✅ Found SMS log by contactId + mobile', {
                         contactId,
                         mobile: fromNumber,
                         smsLogId: smsLog._id,
@@ -245,6 +270,8 @@ class WebhookController {
                 smsLogId: smsLog ? smsLog._id : null,
                 installId,
                 contactId,
+                instanceId,
+                executionId,
                 fromNumber,
                 toNumber,
                 message,
@@ -264,6 +291,7 @@ class WebhookController {
                 message: message?.substring(0, 50),
                 isOptOut,
                 linkedToSms: !!smsLog,
+                foundBySearch,
                 hasDecision: !!(smsLog && smsLog.decisionInstanceId)
             });
 
@@ -281,35 +309,125 @@ class WebhookController {
                     smsLogId: smsLog._id,
                     messageId: smsLog.messageId,
                     hasResponse: true,
-                    decisionInstanceId: smsLog.decisionInstanceId
+                    decisionInstanceId: smsLog.decisionInstanceId,
+                    decisionStatus: smsLog.decisionStatus
                 });
             }
 
-            // Process for decision evaluation
+            // ✅ PROCESS DECISION EVALUATION (if applicable)
             let decisionResult = null;
+            let decisionEvaluated = false;
             
             if (smsLog && smsLog.decisionInstanceId) {
                 try {
-                    logger.info('Processing reply for decision evaluation', {
+                    logger.info('🎯 Processing reply for decision evaluation', {
                         replyId: smsReply._id,
                         smsLogId: smsLog._id,
                         decisionInstanceId: smsLog.decisionInstanceId,
-                        decisionStatus: smsLog.decisionStatus
+                        decisionStatus: smsLog.decisionStatus,
+                        replyMessage: message
                     });
 
-                    decisionResult = await DecisionController.processReply(smsReply, smsLog);
+                    // Get decision instance
+                    const decisionInstance = await DecisionInstance.findOne({
+                        instanceId: smsLog.decisionInstanceId
+                    });
 
-                    if (decisionResult) {
+                    if (decisionInstance && smsLog.decisionStatus === 'pending') {
+                        // ✅ Evaluate the response
+                        const matches = DecisionController.evaluateReply(
+                            message,
+                            decisionInstance.text_type,
+                            decisionInstance.keyword
+                        );
+
+                        const decision = matches ? 'yes' : 'no';
+
+                        // Update SMS log decision status
+                        smsLog.decisionStatus = decision;
+                        smsLog.decisionProcessedAt = new Date();
+                        await smsLog.save();
+
+                        decisionEvaluated = true;
+                        decisionResult = { decision, matches };
+
+                        logger.info('✅ Decision evaluated', {
+                            messageId: smsLog.messageId,
+                            contactId: smsLog.contactId,
+                            decision,
+                            matches,
+                            replyMessage: message,
+                            textType: decisionInstance.text_type,
+                            keyword: decisionInstance.keyword
+                        });
+
+                        // ✅ Update custom object if configured
+                        if (decisionInstance.custom_object_id) {
+                            try {
+                                const consumer = await Consumer.findOne({ 
+                                    installId: smsLog.installId 
+                                });
+
+                                if (consumer) {
+                                    const eloquaService = new EloquaService(
+                                        consumer.installId,
+                                        consumer.SiteId
+                                    );
+                                    await eloquaService.initialize();
+
+                                    await WebhookController.updateDecisionCustomObject(
+                                        eloquaService,
+                                        decisionInstance,
+                                        smsLog,
+                                        message,
+                                        decision
+                                    );
+
+                                    logger.info('✅ Decision custom object updated', {
+                                        contactId: smsLog.contactId,
+                                        decision
+                                    });
+                                }
+                            } catch (cdoError) {
+                                logger.error('Failed to update decision custom object', {
+                                    error: cdoError.message
+                                });
+                            }
+                        }
+
+                        // ✅ Sync decision to Eloqua immediately
+                        try {
+                            await WebhookController.syncDecisionToEloqua(
+                                decisionInstance,
+                                smsLog,
+                                decision
+                            );
+
+                            logger.info('✅ Decision synced to Eloqua immediately', {
+                                contactId: smsLog.contactId,
+                                decision,
+                                executionId: smsLog.executionId
+                            });
+                        } catch (syncError) {
+                            logger.error('Failed to sync decision to Eloqua', {
+                                error: syncError.message,
+                                stack: syncError.stack
+                            });
+                        }
+
+                        // Mark reply as processed
                         smsReply.processed = true;
                         smsReply.processedAt = new Date();
                         await smsReply.save();
 
-                        logger.info('Decision processed from reply', {
-                            replyId: smsReply._id,
-                            decision: decisionResult.decision,
-                            matches: decisionResult.matches
+                    } else {
+                        logger.warn('Decision already processed or instance not found', {
+                            messageId: smsLog.messageId,
+                            decisionStatus: smsLog.decisionStatus,
+                            hasInstance: !!decisionInstance
                         });
                     }
+
                 } catch (decisionError) {
                     logger.error('Error processing decision from reply', {
                         replyId: smsReply._id,
@@ -320,8 +438,8 @@ class WebhookController {
                 }
             }
 
-            // Update custom object if configured
-            if (smsLog && message && !isOptOut) {
+            // Update custom object for action reply (if not a decision)
+            if (smsLog && message && !isOptOut && !smsLog.decisionInstanceId) {
                 try {
                     const consumer = await Consumer.findOne({ installId });
                     if (consumer?.actions?.receivesms?.custom_object_id) {
@@ -336,6 +454,10 @@ class WebhookController {
                                 smsLog,
                                 message
                             );
+
+                            logger.info('Action reply custom object updated', {
+                                contactId: smsLog.contactId
+                            });
                         }
                     }
                 } catch (cdoError) {
@@ -351,6 +473,9 @@ class WebhookController {
                 message: 'Reply processed',
                 replyId: smsReply._id,
                 linkedToSms: !!smsLog,
+                foundBySearch,
+                isDecisionResponse: !!(smsLog && smsLog.decisionInstanceId),
+                decisionEvaluated,
                 decision: decisionResult?.decision || null
             });
 
@@ -400,7 +525,7 @@ class WebhookController {
             const shortUrl = hitData.short_url || bodyData.short_url;
             const originalUrl = hitData.original_url || bodyData.original_url || bodyData.destination_url;
 
-            // Find the SMS that contained this link
+            // Find the SMS that contained this link - SMART SEARCH
             let smsLog = null;
             let installId = queryParams.installId;
             let contactId = queryParams.contactId;
@@ -408,8 +533,7 @@ class WebhookController {
             // STRATEGY 1: Try by messageId
             if (messageId) {
                 smsLog = await SmsLog.findOne({ 
-                    messageId,
-                    installId: installId
+                    messageId: messageId.toString()
                 });
                 
                 if (smsLog) {
@@ -444,8 +568,10 @@ class WebhookController {
 
             // STRATEGY 3: Fallback by mobile number only
             if (!smsLog && mobileNumber) {
+                const normalizedPhone = mobileNumber.replace(/[^\d+]/g, '');
+                
                 smsLog = await SmsLog.findOne({
-                    mobileNumber,
+                    mobileNumber: { $regex: new RegExp(normalizedPhone.replace('+', '\\+'), 'i') },
                     trackedLinkRequested: true,
                     sentAt: { $gte: new Date(Date.now() - 30 * 24 * 60 * 60 * 1000) }
                 }).sort({ sentAt: -1 });
@@ -455,7 +581,7 @@ class WebhookController {
                     contactId = smsLog.contactId;
                     
                     logger.debug('SMS log found by mobile number for link hit', {
-                        mobile: mobileNumber,
+                        mobile: normalizedPhone,
                         smsLogId: smsLog._id
                     });
                 }
@@ -576,7 +702,141 @@ class WebhookController {
     });
 
     /**
-     * Update custom object for SMS replies
+     * Update custom object for decision responses
+     */
+    static async updateDecisionCustomObject(eloquaService, decisionInstance, smsLog, replyMessage, decision) {
+        try {
+            const customObjectId = decisionInstance.custom_object_id;
+
+            logger.info('Updating decision custom object', {
+                customObjectId,
+                contactId: smsLog.contactId
+            });
+
+            // Get custom object field mapping
+            const customObject = await eloquaService.getCustomObject(customObjectId);
+            const fieldMap = {};
+            customObject.fields.forEach(field => {
+                fieldMap[field.internalName] = field.id;
+            });
+
+            logger.debug('Custom object field map built for decision', {
+                customObjectId,
+                fieldCount: Object.keys(fieldMap).length,
+                fields: Object.keys(fieldMap)
+            });
+
+            // Build CDO data
+            const cdoData = {
+                fieldValues: []
+            };
+
+            // Add fields based on decision configuration
+            const addField = (configField, value) => {
+                if (configField && fieldMap[configField]) {
+                    cdoData.fieldValues.push({
+                        id: fieldMap[configField],
+                        value: value || ''
+                    });
+                    logger.debug('Added CDO field for decision', {
+                        fieldName: configField,
+                        fieldId: fieldMap[configField],
+                        valueLength: String(value || '').length
+                    });
+                }
+            };
+
+            addField(decisionInstance.mobile_field, smsLog.mobileNumber);
+            addField(decisionInstance.email_field, smsLog.emailAddress);
+            addField(decisionInstance.response_field, replyMessage);
+            addField(decisionInstance.vn_field, smsLog.senderId);
+            addField(decisionInstance.title_field, smsLog.campaignTitle);
+
+            logger.info('CDO data prepared for decision', {
+                customObjectId,
+                fieldCount: cdoData.fieldValues.length,
+                fields: cdoData.fieldValues.map(f => ({ id: f.id, valuePreview: String(f.value).substring(0, 30) }))
+            });
+
+            // Create CDO record
+            const result = await eloquaService.createCustomObjectRecord(customObjectId, cdoData);
+
+            logger.info('Decision custom object updated successfully', {
+                customObjectId,
+                contactId: smsLog.contactId,
+                recordId: result.id,
+                fieldCount: cdoData.fieldValues.length
+            });
+
+            return result;
+
+        } catch (error) {
+            logger.error('Error updating decision custom object', {
+                customObjectId: decisionInstance.custom_object_id,
+                contactId: smsLog.contactId,
+                error: error.message,
+                stack: error.stack
+            });
+            throw error;
+        }
+    }
+
+    /**
+     * Sync decision result to Eloqua immediately
+     */
+    static async syncDecisionToEloqua(decisionInstance, smsLog, decision) {
+        try {
+            const consumer = await Consumer.findOne({ 
+                installId: smsLog.installId 
+            });
+
+            if (!consumer) {
+                throw new Error('Consumer not found');
+            }
+
+            const eloquaService = new EloquaService(
+                consumer.installId,
+                consumer.SiteId
+            );
+            await eloquaService.initialize();
+
+            const instanceIdNoDashes = decisionInstance.instanceId.replace(/-/g, '');
+
+            // Create bulk import for this single decision
+            const contacts = [{
+                contactId: smsLog.contactId,
+                emailAddress: smsLog.emailAddress
+            }];
+
+            await DecisionController.syncDecisionBatch(
+                eloquaService,
+                decisionInstance,
+                instanceIdNoDashes,
+                smsLog.executionId,
+                contacts,
+                decision
+            );
+
+            logger.info('Decision synced to Eloqua successfully', {
+                instanceId: decisionInstance.instanceId,
+                contactId: smsLog.contactId,
+                decision,
+                executionId: smsLog.executionId
+            });
+
+        } catch (error) {
+            logger.error('Error syncing decision to Eloqua', {
+                instanceId: decisionInstance.instanceId,
+                contactId: smsLog.contactId,
+                error: error.message,
+                stack: error.stack
+            });
+            throw error;
+        }
+    }
+
+    /**
+     * Update custom object for SMS replies (actions)
      */
     static async updateReplyCustomObject(eloquaService, consumer, smsLog, replyMessage) {
         try {
@@ -592,7 +852,11 @@ class WebhookController {
             });
 
             // Fetch CDO field map
-            const cdoFieldMap = await eloquaService.getCustomObjectFieldMap(cdoConfig.custom_object_id);
+            const customObject = await eloquaService.getCustomObject(cdoConfig.custom_object_id);
+            const cdoFieldMap = {};
+            customObject.fields.forEach(field => {
+                cdoFieldMap[field.internalName] = field;
+            });
 
             const fieldMap = new Map();
 
@@ -662,7 +926,11 @@ class WebhookController {
             });
 
             // Fetch CDO field map
-            const cdoFieldMap = await eloquaService.getCustomObjectFieldMap(cdoConfig.custom_object_id);
+            const customObject = await eloquaService.getCustomObject(cdoConfig.custom_object_id);
+            const cdoFieldMap = {};
+            customObject.fields.forEach(field => {
+                cdoFieldMap[field.internalName] = field;
+            });
 
             const fieldMap = new Map();
 
