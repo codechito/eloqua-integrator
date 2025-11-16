@@ -71,6 +71,22 @@
                     </select>
                     <p style="width:320px; text-align:left; font-size:11px;"><i>Number will be formatted for delivery to this country if contact has no country defined.</i></p>
                 </div>
+                <div class="form-group">
+                    <label for="tps_limit">SMS Rate Limit (Per Second)</label>
+                    <input 
+                        type="number" 
+                        class="form-control" 
+                        id="tps_limit" 
+                        name="tps_limit" 
+                        value="<%= consumer.tps_limit || 10 %>"
+                        min="1"
+                        max="100"
+                        required
+                    >
+                    <small class="form-text text-muted">
+                        Maximum SMS messages to send per second (1-100). Default: 10
+                    </small>
+                </div>
                 
                 <!-- Removed webhook URL fields - they're automatically configured -->
                 
