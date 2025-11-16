@@ -1,14 +1,17 @@
 const { logger } = require('../utils');
 const SmsJob = require('../models/SmsJob');
 const ActionController = require('../controllers/actionController');
+const Consumer = require('../models/Consumer');
 
 class SmsWorker {
     constructor() {
         this.isRunning = false;
         this.pollInterval = 5000; // 5 seconds
         this.batchSize = 10; // Process 10 at a time
-        this.rateLimitDelay = 100; // 100ms between sends
         this.executionBatches = new Map(); // Track executions
+        
+        // ✅ NEW: TPS rate limiting per consumer
+        this.consumerRateLimits = new Map(); // Track last send time per consumer
         
         // Stats tracking
         this.stats = {
@@ -17,7 +20,8 @@ class SmsWorker {
             totalSuccess: 0,
             totalFailed: 0,
             lastPollAt: null,
-            currentBatchSize: 0
+            currentBatchSize: 0,
+            rateLimitDelays: 0  // ✅ NEW: Track rate limit delays
         };
     }
 
@@ -41,9 +45,9 @@ class SmsWorker {
             lastPollAt: this.stats.lastPollAt,
             currentBatchSize: this.stats.currentBatchSize,
             activeExecutions: this.executionBatches.size,
+            rateLimitDelays: this.stats.rateLimitDelays,  // ✅ NEW
             pollInterval: this.pollInterval,
-            batchSize: this.batchSize,
-            rateLimitDelay: this.rateLimitDelay
+            batchSize: this.batchSize
         };
     }
 
@@ -79,9 +83,10 @@ class SmsWorker {
         this.isRunning = true;
         this.stats.startedAt = new Date();
         
-        logger.info('SMS Worker started', {
+        logger.info('SMS Worker started with TPS rate limiting', {
             pollInterval: this.pollInterval,
-            batchSize: this.batchSize
+            batchSize: this.batchSize,
+            defaultTPS: 10
         });
 
         this.poll();
@@ -175,9 +180,10 @@ class SmsWorker {
 
     /**
      * Process a batch of jobs from same execution
+     * ENHANCED: TPS rate limiting per consumer
      */
     async processExecutionBatch(executionKey, jobs) {
-        logger.info('Processing execution batch', {
+        logger.info('Processing execution batch with TPS rate limiting', {
             executionKey,
             jobCount: jobs.length
         });
@@ -187,9 +193,34 @@ class SmsWorker {
             errored: []
         };
 
-        // Process jobs with rate limiting
+        // ✅ Get consumer for TPS limit
+        const firstJob = jobs[0];
+        let tpsLimit = 10; // Default
+        
+        try {
+            const consumer = await Consumer.findOne({ installId: firstJob.installId })
+                .select('tps_limit');
+            
+            tpsLimit = consumer?.tps_limit || 10;
+            
+            logger.debug('TPS configuration loaded', {
+                installId: firstJob.installId,
+                tpsLimit,
+                delayBetweenSends: `${(1000 / tpsLimit).toFixed(2)}ms`
+            });
+        } catch (error) {
+            logger.warn('Could not load TPS config, using default', {
+                installId: firstJob.installId,
+                error: error.message
+            });
+        }
+
+        // ✅ Process jobs with TPS rate limiting
         for (const job of jobs) {
             try {
+                // ✅ Apply TPS rate limiting BEFORE processing
+                await this.applyTpsRateLimit(job.installId, tpsLimit);
+
                 const result = await this.processJob(job);
                 
                 // Update stats
@@ -205,7 +236,9 @@ class SmsWorker {
                         message_id: result.messageId,
                         caller_id: job.senderId,
                         assetId: job.campaignId,
-                        Id: job.customObjectData?.recordId
+                        Id: job.customObjectData?.recordId,
+                        sync_status: 'sent',
+                        delivery: 'sent'
                     });
                 } else {
                     this.stats.totalFailed++;
@@ -214,12 +247,19 @@ class SmsWorker {
                         emailAddress: job.emailAddress,
                         phone: job.mobileNumber,
                         message: job.message,
-                        error: result.error
+                        error: result.error,
+                        errorCode: result.errorCode || 'SEND_FAILED',
+                        sync_status: 'errored',
+                        delivery: 'errored'
+                    });
+                    
+                    logger.debug('Added failed job to errored results', {
+                        jobId: job.jobId,
+                        contactId: job.contactId,
+                        error: result.error,
+                        errorCode: result.errorCode
                     });
                 }
-
-                // Rate limiting delay
-                await this.sleep(this.rateLimitDelay);
 
             } catch (error) {
                 logger.error('Error processing job', {
@@ -235,7 +275,10 @@ class SmsWorker {
                     contactId: job.contactId,
                     emailAddress: job.emailAddress,
                     phone: job.mobileNumber,
-                    error: error.message
+                    error: error.message,
+                    errorCode: 'PROCESSING_ERROR',
+                    sync_status: 'errored',
+                    delivery: 'errored'
                 });
             }
         }
@@ -245,6 +288,37 @@ class SmsWorker {
 
         // Check if execution is complete and sync to Eloqua
         await this.checkAndCompleteExecution(executionKey, jobs[0]);
+    }
+
+    /**
+     * ✅ NEW: Apply TPS rate limiting per consumer
+     * Ensures we don't exceed the configured SMS per second limit
+     */
+    async applyTpsRateLimit(installId, tpsLimit) {
+        const now = Date.now();
+        const minDelayMs = 1000 / tpsLimit; // Minimum milliseconds between sends
+
+        // Get last send time for this consumer
+        const lastSendTime = this.consumerRateLimits.get(installId) || 0;
+        const timeSinceLastSend = now - lastSendTime;
+
+        // If not enough time has passed, wait
+        if (timeSinceLastSend < minDelayMs) {
+            const waitTime = minDelayMs - timeSinceLastSend;
+            
+            logger.debug('TPS rate limit - delaying send', {
+                installId,
+                tpsLimit,
+                waitTimeMs: waitTime.toFixed(2),
+                timeSinceLastSend: timeSinceLastSend.toFixed(2)
+            });
+
+            this.stats.rateLimitDelays++;
+            await this.sleep(waitTime);
+        }
+
+        // Update last send time for this consumer
+        this.consumerRateLimits.set(installId, Date.now());
     }
 
     /**
@@ -325,8 +399,6 @@ class SmsWorker {
                             error: syncError.message,
                             stack: syncError.stack
                         });
-                        // Don't throw - we'll keep the execution tracked
-                        // and might retry later
                         return;
                     }
 
@@ -367,14 +439,24 @@ class SmsWorker {
                     jobId: job.jobId,
                     messageId: result.messageId
                 });
+                
+                return {
+                    success: true,
+                    messageId: result.messageId
+                };
             } else {
                 logger.warn('SMS job failed', {
                     jobId: job.jobId,
-                    error: result.error
+                    error: result.error,
+                    errorCode: result.errorCode
                 });
+                
+                return {
+                    success: false,
+                    error: result.error,
+                    errorCode: result.errorCode || 'SEND_FAILED'
+                };
             }
-
-            return result;
 
         } catch (error) {
             logger.error('Error in processJob', {
@@ -382,9 +464,11 @@ class SmsWorker {
                 error: error.message,
                 stack: error.stack
             });
+            
             return {
                 success: false,
-                error: error.message
+                error: error.message,
+                errorCode: 'PROCESSING_ERROR'
             };
         }
     }

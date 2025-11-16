@@ -790,6 +790,62 @@ class AppController {
             });
         }
     });
+
+    // controllers/appController.js - Add to saveSettings
+
+    static saveSettings = asyncHandler(async (req, res) => {
+        const { installId, siteId } = req.query;
+        const { 
+            transmitsms_api_key, 
+            transmitsms_api_secret, 
+            default_country,
+            tps_limit  // ✅ NEW
+        } = req.body;
+
+        logger.info('Saving app settings', { 
+            installId, 
+            siteId,
+            hasApiKey: !!transmitsms_api_key,
+            tps_limit
+        });
+
+        const consumer = await Consumer.findOne({ installId });
+        if (!consumer) {
+            return res.status(404).json({ error: 'Consumer not found' });
+        }
+
+        // Update credentials
+        if (transmitsms_api_key) {
+            consumer.transmitsms_api_key = transmitsms_api_key;
+        }
+        if (transmitsms_api_secret) {
+            consumer.transmitsms_api_secret = transmitsms_api_secret;
+        }
+        if (default_country) {
+            consumer.default_country = default_country;
+        }
+        
+        // ✅ Update TPS limit
+        if (tps_limit) {
+            const tps = parseInt(tps_limit);
+            if (tps >= 1 && tps <= 100) {
+                consumer.tps_limit = tps;
+            }
+        }
+
+        await consumer.save();
+
+        logger.info('App settings saved', { 
+            installId,
+            tps_limit: consumer.tps_limit
+        });
+
+        res.json({
+            success: true,
+            message: 'Settings saved successfully'
+        });
+    });
+
 }
 
 module.exports = AppController;

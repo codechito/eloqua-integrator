@@ -54,6 +54,14 @@ const ConsumerSchema = new mongoose.Schema({
         type: String,
         trim: true
     },
+
+    // ✅ NEW: TPS (Transactions Per Second) limit
+    tps_limit: {
+        type: Number,
+        default: 10,  // 10 SMS per second default
+        min: 1,
+        max: 100
+    },
     
     // Configuration
     default_country: {
