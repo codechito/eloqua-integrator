@@ -11,52 +11,6 @@ const { asyncHandler } = require('../middleware');
 
 class ActionController {
 
-    /**
-     * Mark action as complete and sync to Eloqua
-     * Called by worker after processing batch
-     */
-    static async completeActionExecution(installId, instanceId, executionId, results) {
-        try {
-            logger.info('Completing action execution', {
-                installId,
-                instanceId,
-                executionId,
-                successCount: results.complete.length,
-                errorCount: results.errored.length
-            });
-
-            const instance = await ActionInstance.findOne({ instanceId });
-            if (!instance) {
-                throw new Error('Instance not found');
-            }
-
-            const consumer = await Consumer.findOne({ installId });
-            if (!consumer) {
-                throw new Error('Consumer not found');
-            }
-
-            // Sync results to Eloqua to complete the action
-            await ActionController.syncResultsToEloqua(
-                consumer,
-                instance,
-                results
-            );
-
-            logger.info('Action execution completed', {
-                instanceId,
-                executionId
-            });
-
-        } catch (error) {
-            logger.error('Error completing action execution', {
-                installId,
-                instanceId,
-                executionId,
-                error: error.message
-            });
-            throw error;
-        }
-    }
 
     /**
      * Sync SMS results back to Eloqua using Bulk API
@@ -1121,13 +1075,14 @@ class ActionController {
 
     /**
      * Queue SMS jobs from enriched items
+     * FIXED: Adds failed contacts to errors array for Eloqua sync
      */
     static async queueSmsJobs(instance, consumer, enrichedItems, executionId, campaignTitle = null) {
         logger.info('Queueing SMS jobs', {
-        instanceId: instance.instanceId,
-        itemCount: enrichedItems.length,
-        campaignTitle: campaignTitle || instance.assetName
-    });
+            instanceId: instance.instanceId,
+            itemCount: enrichedItems.length,
+            campaignTitle: campaignTitle || instance.assetName
+        });
 
         // DEBUG: Log instance field configuration
         logger.debug('Instance field configuration', {
@@ -1153,7 +1108,7 @@ class ActionController {
         const results = {
             success: 0,
             failed: 0,
-            errors: []
+            errors: []  // Will contain failed items with contactId and emailAddress for Eloqua sync
         };
 
         // Check if we have items to process
@@ -1208,18 +1163,27 @@ class ActionController {
                 // Extract mobile number using parsed field name
                 const mobileNumber = item[recipientFieldName];
                 
-                if (!mobileNumber) {
+                // ✅ CRITICAL FIX: Check if mobile number is missing or empty
+                if (!mobileNumber || (typeof mobileNumber === 'string' && mobileNumber.trim() === '')) {
                     logger.warn('Item has no mobile number', {
                         contactId: item.ContactID,
+                        emailAddress: item.EmailAddress,
                         recipientFieldName,
                         recipientValue: item[recipientFieldName],
                         availableFields: Object.keys(item)
                     });
+                    
                     results.failed++;
+                    // ✅ CRITICAL: Add to errors with contactId, emailAddress for Eloqua sync
                     results.errors.push({
                         contactId: item.ContactID,
+                        emailAddress: item.EmailAddress,
                         error: 'No mobile number',
-                        field: recipientFieldName
+                        field: recipientFieldName,
+                        errorCode: 'MISSING_MOBILE',
+                        // ✅ These fields are used by syncResultsToEloqua
+                        sync_status: 'errored',
+                        delivery: 'errored'
                     });
                     continue;
                 }
@@ -1236,13 +1200,35 @@ class ActionController {
                 });
 
                 // Format mobile number (remove spaces, ensure + prefix)
-                const formattedMobile = ActionController.formatMobileNumber(mobileNumber, country);
+                let formattedMobile;
+                try {
+                    formattedMobile = ActionController.formatMobileNumber(mobileNumber, country);
 
-                logger.debug('Formatted mobile number', {
-                    original: mobileNumber,
-                    formatted: formattedMobile,
-                    country
-                });
+                    logger.debug('Formatted mobile number', {
+                        original: mobileNumber,
+                        formatted: formattedMobile,
+                        country
+                    });
+                } catch (formatError) {
+                    logger.error('Error formatting mobile number', {
+                        contactId: item.ContactID,
+                        mobileNumber,
+                        error: formatError.message
+                    });
+                    
+                    // ✅ Add to errors array for Eloqua sync
+                    results.failed++;
+                    results.errors.push({
+                        contactId: item.ContactID,
+                        emailAddress: item.EmailAddress,
+                        error: `Invalid mobile number format: ${formatError.message}`,
+                        field: recipientFieldName,
+                        errorCode: 'INVALID_FORMAT',
+                        sync_status: 'errored',
+                        delivery: 'errored'
+                    });
+                    continue;
+                }
 
                 // Determine sender ID (might be dynamic from contact field)
                 let senderId = instance.caller_id || 'BurstSMS';
@@ -1294,7 +1280,7 @@ class ActionController {
                     jobId: `${instance.instanceId}_${item.ContactID}_${Date.now()}_${i}`,
                     installId: instance.installId,
                     instanceId: instance.instanceId,
-                    executionId: executionId,  // ← CRITICAL: ADD THIS LINE!
+                    executionId: executionId,
                     
                     // Contact details
                     contactId: item.ContactID,
@@ -1307,7 +1293,7 @@ class ActionController {
                     
                     // Campaign details
                     campaignId: instance.assetId,
-                    campaignTitle: finalCampaignTitle, // ← Use the fetched campaign title
+                    campaignTitle: finalCampaignTitle,
                     assetName: instance.assetName,
                     
                     // SMS options
@@ -1349,10 +1335,15 @@ class ActionController {
                     stack: error.stack
                 });
                 
+                // ✅ Add to errors array for Eloqua sync
                 results.failed++;
                 results.errors.push({
                     contactId: item.ContactID,
-                    error: error.message
+                    emailAddress: item.EmailAddress,
+                    error: error.message,
+                    errorCode: 'JOB_CREATION_FAILED',
+                    sync_status: 'errored',
+                    delivery: 'errored'
                 });
             }
         }
@@ -1362,10 +1353,81 @@ class ActionController {
             total: enrichedItems.length,
             success: results.success,
             failed: results.failed,
+            errors: results.errors.length,
             campaignTitle: finalCampaignTitle
         });
 
         return results;
+    }
+
+    /**
+     * Mark action as complete and sync to Eloqua
+     * Called by worker after processing batch
+     * FIXED: Ensures errored contacts are properly formatted for Eloqua sync
+     */
+    static async completeActionExecution(installId, instanceId, executionId, results) {
+        try {
+            logger.info('Completing action execution', {
+                installId,
+                instanceId,
+                executionId,
+                successCount: results.complete.length,
+                errorCount: results.errored.length
+            });
+
+            const instance = await ActionInstance.findOne({ instanceId });
+            if (!instance) {
+                throw new Error('Instance not found');
+            }
+
+            const consumer = await Consumer.findOne({ installId });
+            if (!consumer) {
+                throw new Error('Consumer not found');
+            }
+
+            // ✅ DEBUG: Log what we're about to sync
+            logger.debug('Preparing to sync results to Eloqua', {
+                instanceId,
+                executionId,
+                completeCount: results.complete.length,
+                erroredCount: results.errored.length,
+                sampleComplete: results.complete[0] ? {
+                    contactId: results.complete[0].contactId,
+                    emailAddress: results.complete[0].emailAddress,
+                    sync_status: results.complete[0].sync_status
+                } : null,
+                sampleErrored: results.errored[0] ? {
+                    contactId: results.errored[0].contactId,
+                    emailAddress: results.errored[0].emailAddress,
+                    sync_status: results.errored[0].sync_status,
+                    error: results.errored[0].error
+                } : null
+            });
+
+            // Sync results to Eloqua to complete the action
+            await ActionController.syncResultsToEloqua(
+                consumer,
+                instance,
+                results
+            );
+
+            logger.info('Action execution completed', {
+                instanceId,
+                executionId,
+                completeCount: results.complete.length,
+                erroredCount: results.errored.length
+            });
+
+        } catch (error) {
+            logger.error('Error completing action execution', {
+                installId,
+                instanceId,
+                executionId,
+                error: error.message,
+                stack: error.stack
+            });
+            throw error;
+        }
     }
 
     /**
