@@ -1422,8 +1422,7 @@ static async queueSmsJobs(instance, consumer, enrichedItems, executionId, campai
                 installId: instance.installId,
                 instanceId: instance.instanceId,
                 contactId: item.ContactID,
-                executionId: executionId,
-                mobile: formattedMobile
+                executionId: executionId
             }).toString();
 
             // Build SMS options
