@@ -60,13 +60,14 @@ const SmsLogSchema = new mongoose.Schema({
     transmitSmsResponse: {
         type: mongoose.Schema.Types.Mixed
     },
+    transmitSmsError: mongoose.Schema.Types.Mixed, 
     errorMessage: {
         type: String
     },
     errorCode: {
         type: String
     },
-    
+    errorDetails: mongoose.Schema.Types.Mixed,
     // Timestamps
     sentAt: {
         type: Date,

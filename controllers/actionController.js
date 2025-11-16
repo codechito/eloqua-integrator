@@ -1672,12 +1672,11 @@ class ActionController {
 
     /**
      * Process a single SMS job (called by worker)
-     * FIXED: 
-     * - Validates before sending
-     * - Marks validation errors as failed (no retry)
-     * - Logs to CDO after successful send
-     * - Creates SMS log for all outcomes
-     * - Returns shouldSyncAsErrored flag for worker
+     * COMPLETE VERSION with:
+     * - All API error codes captured
+     * - Full API response stored (success and error)
+     * - Comprehensive error logging
+     * - Smart retry logic based on error type
      */
     static async processSmsJob(job) {
         try {
@@ -1742,10 +1741,8 @@ class ActionController {
                     error: errorMessage
                 });
 
-                // Mark job as failed (no retry for validation errors)
                 await job.markAsFailed(errorMessage, 'VALIDATION_ERROR');
 
-                // Create SMS log with failed status
                 const smsLog = new SmsLog({
                     installId: job.installId,
                     instanceId: job.instanceId,
@@ -1753,34 +1750,39 @@ class ActionController {
                     emailAddress: job.emailAddress,
                     mobileNumber: job.mobileNumber,
                     message: job.message,
-                    messageId: null, // No message ID since it wasn't sent
+                    messageId: null,
                     senderId: job.senderId,
                     campaignTitle: job.campaignTitle,
                     status: 'failed',
                     errorMessage: errorMessage,
                     errorCode: 'VALIDATION_ERROR',
+                    errorDetails: {
+                        message: errorMessage,
+                        code: 'VALIDATION_ERROR',
+                        timestamp: new Date(),
+                        attempts: job.retryCount || 0
+                    },
                     sentAt: new Date(),
                     executionId: job.executionId
                 });
 
                 await smsLog.save();
-
                 job.smsLogId = smsLog._id;
                 await job.save();
 
                 logger.info('SMS marked as failed due to validation error', {
                     jobId: job.jobId,
                     contactId: job.contactId,
-                    smsLogId: smsLog._id,
-                    error: errorMessage
+                    smsLogId: smsLog._id
                 });
 
                 return {
                     success: false,
                     jobId: job.jobId,
                     error: errorMessage,
+                    errorCode: 'VALIDATION_ERROR',
                     smsLogId: smsLog._id,
-                    shouldSyncAsErrored: true // Flag for worker to sync as errored
+                    shouldSyncAsErrored: true
                 };
             }
 
@@ -1795,7 +1797,7 @@ class ActionController {
 
             await job.markAsSent(smsResponse.message_id, smsResponse);
 
-            // Create SMS log entry
+            // ✅ Create comprehensive SMS log entry with full API response
             const smsLog = new SmsLog({
                 installId: job.installId,
                 instanceId: job.instanceId,
@@ -1807,16 +1809,15 @@ class ActionController {
                 senderId: job.senderId,
                 campaignTitle: job.campaignTitle,
                 status: 'sent',
-                transmitSmsResponse: smsResponse,
+                transmitSmsResponse: smsResponse,          // ✅ Full success API response
                 sentAt: new Date(),
                 executionId: job.executionId,
-                // Store tracked link info if it was requested
                 trackedLinkRequested: smsResponse.tracked_link_requested || false,
-                trackedLinkOriginalUrl: smsResponse.tracked_link_original_url || null
+                trackedLinkOriginalUrl: smsResponse.tracked_link_original_url || null,
+                cost: smsResponse.cost || 0
             });
 
             await smsLog.save();
-
             job.smsLogId = smsLog._id;
             await job.save();
 
@@ -1825,6 +1826,7 @@ class ActionController {
                 messageId: smsResponse.message_id,
                 to: job.mobileNumber,
                 hasTrackedLink: smsResponse.tracked_link_requested,
+                cost: smsResponse.cost,
                 smsLogId: smsLog._id
             });
 
@@ -1836,11 +1838,7 @@ class ActionController {
             if (hasCdoConfig) {
                 try {
                     const instance = await ActionInstance.findOne({ instanceId: job.instanceId });
-                    if (!instance) {
-                        logger.warn('Instance not found for CDO update', {
-                            instanceId: job.instanceId
-                        });
-                    } else {
+                    if (instance) {
                         const eloquaService = new EloquaService(job.installId, instance.SiteId);
                         await eloquaService.initialize();
                         
@@ -1864,10 +1862,6 @@ class ActionController {
                     });
                     // Don't fail the job if CDO update fails
                 }
-            } else {
-                logger.debug('No CDO configured for send SMS action', {
-                    jobId: job.jobId
-                });
             }
 
             return {
@@ -1881,14 +1875,98 @@ class ActionController {
             logger.error('Error processing SMS job', {
                 jobId: job.jobId,
                 error: error.message,
-                stack: error.stack
+                stack: error.stack,
+                responseStatus: error.response?.status,
+                responseData: error.response?.data
             });
 
-            // Mark as failed
-            await job.markAsFailed(error.message, error.code);
+            // ============================================
+            // ✅ COMPREHENSIVE ERROR CODE EXTRACTION
+            // ============================================
+            let errorCode = 'SEND_FAILED';
+            const errorMsg = error.message.toLowerCase();
+            const responseData = error.response?.data;
+            const responseError = responseData?.error;
+            
+            // Check response data first (most reliable)
+            if (responseError) {
+                if (responseError.code) {
+                    errorCode = responseError.code;
+                }
+                
+                // Check description for specific errors
+                if (responseError.description) {
+                    const desc = typeof responseError.description === 'object' 
+                        ? JSON.stringify(responseError.description).toLowerCase() 
+                        : responseError.description.toLowerCase();
+                    
+                    if (desc.includes('opted-out') || desc.includes('optout') || desc.includes('opt-out')) {
+                        errorCode = 'OPTED_OUT';
+                    } else if (desc.includes('invalid number') || desc.includes('invalid format')) {
+                        errorCode = 'INVALID_NUMBER';
+                    } else if (desc.includes('insufficient credit') || desc.includes('no credit')) {
+                        errorCode = 'INSUFFICIENT_CREDIT';
+                    } else if (desc.includes('blocked') || desc.includes('spam')) {
+                        errorCode = 'BLOCKED_SPAM';
+                    } else if (desc.includes('rate limit')) {
+                        errorCode = 'RATE_LIMIT';
+                    } else if (desc.includes('invalid api key') || desc.includes('unauthorized')) {
+                        errorCode = 'INVALID_CREDENTIALS';
+                    } else if (desc.includes('timeout')) {
+                        errorCode = 'API_TIMEOUT';
+                    }
+                }
+            }
+            
+            // Fallback to error message analysis
+            if (errorCode === 'SEND_FAILED') {
+                if (errorMsg.includes('opted-out') || errorMsg.includes('optout') || errorMsg.includes('opt-out')) {
+                    errorCode = 'OPTED_OUT';
+                } else if (errorMsg.includes('invalid number') || errorMsg.includes('invalid format')) {
+                    errorCode = 'INVALID_NUMBER';
+                } else if (errorMsg.includes('recipients_error')) {
+                    errorCode = 'RECIPIENTS_ERROR';
+                } else if (errorMsg.includes('insufficient credit') || errorMsg.includes('no credit')) {
+                    errorCode = 'INSUFFICIENT_CREDIT';
+                } else if (errorMsg.includes('blocked') || errorMsg.includes('spam')) {
+                    errorCode = 'BLOCKED_SPAM';
+                } else if (errorMsg.includes('rate limit') || errorMsg.includes('too many requests')) {
+                    errorCode = 'RATE_LIMIT';
+                } else if (errorMsg.includes('invalid api key') || errorMsg.includes('unauthorized') || errorMsg.includes('401')) {
+                    errorCode = 'INVALID_CREDENTIALS';
+                } else if (errorMsg.includes('timeout') || errorMsg.includes('timed out')) {
+                    errorCode = 'API_TIMEOUT';
+                } else if (errorMsg.includes('network') || errorMsg.includes('econnrefused') || errorMsg.includes('enotfound')) {
+                    errorCode = 'NETWORK_ERROR';
+                } else if (errorMsg.includes('400')) {
+                    errorCode = 'BAD_REQUEST';
+                } else if (errorMsg.includes('500') || errorMsg.includes('502') || errorMsg.includes('503') || errorMsg.includes('504')) {
+                    errorCode = 'SERVER_ERROR';
+                }
+            }
+
+            // ✅ Build detailed error object
+            const errorDetails = {
+                message: error.message,
+                code: errorCode,
+                httpStatus: error.response?.status,
+                httpStatusText: error.response?.statusText,
+                apiError: responseError,
+                apiResponse: responseData,
+                timestamp: new Date(),
+                attempts: job.retryCount || 0,
+                requestData: {
+                    to: job.mobileNumber,
+                    from: job.senderId,
+                    messageLength: job.message?.length
+                }
+            };
+
+            // Mark job as failed with error code
+            await job.markAsFailed(error.message, errorCode);
 
             // ============================================
-            // CREATE SMS LOG FOR FAILED SMS
+            // ✅ CREATE COMPREHENSIVE SMS LOG FOR FAILED SMS
             // ============================================
             try {
                 const smsLog = new SmsLog({
@@ -1903,21 +1981,25 @@ class ActionController {
                     campaignTitle: job.campaignTitle,
                     status: 'failed',
                     errorMessage: error.message,
-                    errorCode: error.code || 'UNKNOWN_ERROR',
+                    errorCode: errorCode,
+                    errorDetails: errorDetails,           // ✅ Full error details object
+                    transmitSmsError: responseData,       // ✅ Raw API error response
                     sentAt: new Date(),
                     executionId: job.executionId
                 });
 
                 await smsLog.save();
-
                 job.smsLogId = smsLog._id;
                 await job.save();
 
-                logger.info('Failed SMS logged', {
+                logger.info('Failed SMS logged with full error details', {
                     jobId: job.jobId,
                     contactId: job.contactId,
                     smsLogId: smsLog._id,
-                    error: error.message
+                    error: error.message,
+                    errorCode: errorCode,
+                    httpStatus: error.response?.status,
+                    hasApiResponse: !!responseData
                 });
             } catch (logError) {
                 logger.error('Error creating failed SMS log', {
@@ -1926,20 +2008,39 @@ class ActionController {
                 });
             }
 
-            // Check if can retry (for network errors, etc.)
-            const canRetry = job.canRetry();
+            // ============================================
+            // ✅ SMART RETRY LOGIC BASED ON ERROR TYPE
+            // ============================================
+            const nonRetryableErrors = [
+                'OPTED_OUT',           // User opted out - permanent
+                'INVALID_NUMBER',      // Invalid format - permanent
+                'BLOCKED_SPAM',        // Blocked for spam - permanent
+                'INVALID_CREDENTIALS', // API creds wrong - permanent
+                'BAD_REQUEST',         // Bad data - permanent
+                'RECIPIENTS_ERROR',    // Recipient issue - permanent
+                'VALIDATION_ERROR'     // Validation failed - permanent
+            ];
+            
+            const canRetry = job.canRetry() && !nonRetryableErrors.includes(errorCode);
             
             if (canRetry) {
                 await job.resetForRetry();
                 logger.info('Job will be retried', {
                     jobId: job.jobId,
-                    attempt: job.attempts
+                    attempt: job.retryCount + 1,
+                    errorCode,
+                    reason: 'Retryable error type'
                 });
             } else {
-                logger.warn('Job cannot be retried - marking as permanently failed', {
+                const reason = nonRetryableErrors.includes(errorCode) 
+                    ? `Error type ${errorCode} is not retryable` 
+                    : 'Max retries reached';
+                    
+                logger.warn('Job cannot be retried', {
                     jobId: job.jobId,
-                    attempts: job.attempts,
-                    maxRetries: job.maxRetries
+                    errorCode,
+                    reason,
+                    attempts: job.retryCount
                 });
             }
 
@@ -1947,7 +2048,9 @@ class ActionController {
                 success: false,
                 jobId: job.jobId,
                 error: error.message,
-                shouldSyncAsErrored: !canRetry // Only sync as errored if no more retries
+                errorCode: errorCode,
+                errorDetails: errorDetails,
+                shouldSyncAsErrored: !canRetry
             };
         }
     }
@@ -2086,42 +2189,116 @@ class ActionController {
     }
 
     // controllers/actionController.js - ADD this method
-
     /**
-     * Get SMS report for action instance
-     * GET /eloqua/action/report/:instanceId
+     * Get action report data (JSON)
+     * ENHANCED: Include error code breakdown and full error details
+     * GET /eloqua/action/report/:instanceId/data
      */
     static getReport = asyncHandler(async (req, res) => {
         const { instanceId } = req.params;
+        const { page = 1, limit = 100, status = 'all', errorCode = 'all' } = req.query;
 
-        logger.info('Loading action report', { instanceId });
+        logger.info('Loading action report data', { instanceId, page, limit, status, errorCode });
 
         try {
-            // Get SMS logs for this instance
-            const logs = await SmsLog.find({ instanceId })
-                .sort({ sentAt: -1 })
-                .limit(100)
-                .select('contactId emailAddress mobileNumber message status sentAt deliveredAt messageId');
+            const instance = await ActionInstance.findOne({ instanceId });
+            if (!instance) {
+                return res.status(404).json({
+                    success: false,
+                    error: 'Instance not found'
+                });
+            }
 
-            // Calculate statistics
-            const stats = {
-                sent: 0,
-                delivered: 0,
-                failed: 0,
-                pending: 0
+            // Build query
+            const query = { instanceId };
+            if (status !== 'all') {
+                query.status = status;
+            }
+            if (errorCode !== 'all' && status === 'failed') {
+                query.errorCode = errorCode;
+            }
+
+            // Get total count
+            const total = await SmsLog.countDocuments(query);
+
+            // Get paginated logs with error details
+            const logs = await SmsLog.find(query)
+                .sort({ createdAt: -1 })
+                .limit(parseInt(limit))
+                .skip((parseInt(page) - 1) * parseInt(limit))
+                .select('contactId emailAddress mobileNumber message messageId status sentAt deliveredAt errorMessage errorCode errorDetails cost campaignTitle transmitSmsError');
+
+            // Get overall statistics
+            const stats = await SmsLog.aggregate([
+                { $match: { instanceId } },
+                {
+                    $group: {
+                        _id: '$status',
+                        count: { $sum: 1 },
+                        totalCost: { $sum: '$cost' }
+                    }
+                }
+            ]);
+
+            const statsMap = {
+                pending: { count: 0, cost: 0 },
+                sent: { count: 0, cost: 0 },
+                delivered: { count: 0, cost: 0 },
+                failed: { count: 0, cost: 0 }
             };
 
-            logs.forEach(log => {
-                if (log.status === 'sent') stats.sent++;
-                else if (log.status === 'delivered') stats.delivered++;
-                else if (log.status === 'failed') stats.failed++;
-                else if (log.status === 'pending') stats.pending++;
+            stats.forEach(stat => {
+                if (statsMap[stat._id]) {
+                    statsMap[stat._id] = {
+                        count: stat.count,
+                        cost: stat.totalCost || 0
+                    };
+                }
             });
+
+            // ✅ Get error code breakdown
+            const errorStats = await SmsLog.aggregate([
+                { $match: { instanceId, status: 'failed' } },
+                {
+                    $group: {
+                        _id: '$errorCode',
+                        count: { $sum: 1 }
+                    }
+                },
+                { $sort: { count: -1 } }
+            ]);
+
+            const errorBreakdown = {};
+            errorStats.forEach(stat => {
+                errorBreakdown[stat._id || 'UNKNOWN'] = stat.count;
+            });
+
+            // ✅ Get top errors with details
+            const topErrors = await SmsLog.find({ 
+                instanceId, 
+                status: 'failed' 
+            })
+                .sort({ createdAt: -1 })
+                .limit(5)
+                .select('errorCode errorMessage contactId emailAddress createdAt errorDetails');
 
             res.json({
                 success: true,
+                instance: {
+                    instanceId: instance.instanceId,
+                    assetName: instance.assetName,
+                    message: instance.message
+                },
                 logs,
-                stats
+                stats: statsMap,
+                errorBreakdown,      // ✅ NEW: Error types count
+                topErrors,           // ✅ NEW: Recent errors with details
+                pagination: {
+                    page: parseInt(page),
+                    limit: parseInt(limit),
+                    total,
+                    pages: Math.ceil(total / parseInt(limit))
+                }
             });
 
         } catch (error) {
@@ -2134,7 +2311,14 @@ class ActionController {
                 success: false,
                 error: error.message,
                 logs: [],
-                stats: { sent: 0, delivered: 0, failed: 0, pending: 0 }
+                stats: {
+                    pending: { count: 0, cost: 0 },
+                    sent: { count: 0, cost: 0 },
+                    delivered: { count: 0, cost: 0 },
+                    failed: { count: 0, cost: 0 }
+                },
+                errorBreakdown: {},
+                topErrors: []
             });
         }
     });
@@ -2694,6 +2878,7 @@ class ActionController {
 
     /**
      * Download action report as CSV
+     * ENHANCED: Include error code, error details, and API response
      * GET /eloqua/action/report/:instanceId/csv
      */
     static downloadReportCSV = asyncHandler(async (req, res) => {
@@ -2714,16 +2899,16 @@ class ActionController {
                 query.status = status;
             }
 
-            // Get all logs (no pagination for CSV)
+            // Get all logs with full error details
             const logs = await SmsLog.find(query)
                 .sort({ createdAt: -1 })
                 .limit(10000) // Max 10k records for performance
-                .select('contactId emailAddress mobileNumber message messageId status sentAt deliveredAt errorMessage cost campaignTitle createdAt');
+                .select('contactId emailAddress mobileNumber message messageId status sentAt deliveredAt errorMessage errorCode errorDetails cost campaignTitle createdAt transmitSmsError');
 
             // Build CSV content
             const csvRows = [];
             
-            // Header
+            // ✅ Enhanced header with error details
             csvRows.push([
                 'Contact ID',
                 'Email Address',
@@ -2731,28 +2916,37 @@ class ActionController {
                 'Message',
                 'Message ID',
                 'Status',
+                'Error Code',          // ✅ NEW
+                'Error Message',
+                'HTTP Status',         // ✅ NEW
+                'Retry Attempts',      // ✅ NEW
                 'Sent At',
                 'Delivered At',
                 'Cost',
                 'Campaign Title',
-                'Error Message',
                 'Created At'
             ].join(','));
 
-            // Data rows
+            // Data rows with error details
             logs.forEach(log => {
+                const httpStatus = log.errorDetails?.httpStatus || '';
+                const attempts = log.errorDetails?.attempts || 0;
+                
                 csvRows.push([
                     log.contactId || '',
                     log.emailAddress || '',
                     log.mobileNumber || '',
-                    `"${(log.message || '').replace(/"/g, '""')}"`, // Escape quotes
+                    `"${(log.message || '').replace(/"/g, '""')}"`,
                     log.messageId || '',
                     log.status || '',
+                    log.errorCode || '',                               // ✅ NEW
+                    `"${(log.errorMessage || '').replace(/"/g, '""')}"`,
+                    httpStatus,                                         // ✅ NEW
+                    attempts,                                           // ✅ NEW
                     log.sentAt ? log.sentAt.toISOString() : '',
                     log.deliveredAt ? log.deliveredAt.toISOString() : '',
                     log.cost || 0,
                     `"${(log.campaignTitle || '').replace(/"/g, '""')}"`,
-                    `"${(log.errorMessage || '').replace(/"/g, '""')}"`,
                     log.createdAt ? log.createdAt.toISOString() : ''
                 ].join(','));
             });
@@ -2777,6 +2971,241 @@ class ActionController {
             });
 
             res.status(500).send('Error generating CSV report');
+        }
+    });
+
+    /**
+     * Get detailed error report
+     * GET /eloqua/action/report/:instanceId/errors
+     */
+    static getErrorReport = asyncHandler(async (req, res) => {
+        const { instanceId } = req.params;
+        const { errorCode = 'all', page = 1, limit = 50 } = req.query;
+
+        logger.info('Loading error report', { instanceId, errorCode, page, limit });
+
+        try {
+            const instance = await ActionInstance.findOne({ instanceId });
+            if (!instance) {
+                return res.status(404).json({
+                    success: false,
+                    error: 'Instance not found'
+                });
+            }
+
+            // Build query
+            const query = { 
+                instanceId, 
+                status: 'failed' 
+            };
+            
+            if (errorCode !== 'all') {
+                query.errorCode = errorCode;
+            }
+
+            // Get total count
+            const total = await SmsLog.countDocuments(query);
+
+            // Get detailed error logs
+            const errorLogs = await SmsLog.find(query)
+                .sort({ createdAt: -1 })
+                .limit(parseInt(limit))
+                .skip((parseInt(page) - 1) * parseInt(limit))
+                .select('contactId emailAddress mobileNumber message errorCode errorMessage errorDetails transmitSmsError createdAt');
+
+            // Get error code statistics
+            const errorStats = await SmsLog.aggregate([
+                { $match: { instanceId, status: 'failed' } },
+                {
+                    $group: {
+                        _id: '$errorCode',
+                        count: { $sum: 1 },
+                        firstOccurrence: { $min: '$createdAt' },
+                        lastOccurrence: { $max: '$createdAt' }
+                    }
+                },
+                { $sort: { count: -1 } }
+            ]);
+
+            // Format error statistics
+            const errorBreakdown = errorStats.map(stat => ({
+                errorCode: stat._id || 'UNKNOWN',
+                count: stat.count,
+                percentage: ((stat.count / total) * 100).toFixed(2) + '%',
+                firstOccurrence: stat.firstOccurrence,
+                lastOccurrence: stat.lastOccurrence,
+                description: getErrorCodeDescription(stat._id)
+            }));
+
+            res.json({
+                success: true,
+                instance: {
+                    instanceId: instance.instanceId,
+                    assetName: instance.assetName
+                },
+                errorLogs,
+                errorBreakdown,
+                pagination: {
+                    page: parseInt(page),
+                    limit: parseInt(limit),
+                    total,
+                    pages: Math.ceil(total / parseInt(limit))
+                }
+            });
+
+        } catch (error) {
+            logger.error('Error loading error report', {
+                instanceId,
+                error: error.message
+            });
+
+            res.status(500).json({
+                success: false,
+                error: error.message
+            });
+        }
+    });
+
+    /**
+     * Helper: Get human-readable error description
+     */
+    static getErrorCodeDescription(errorCode) {
+        const descriptions = {
+            'OPTED_OUT': 'Recipient has opted out of SMS messages',
+            'INVALID_NUMBER': 'Invalid phone number format',
+            'INSUFFICIENT_CREDIT': 'Insufficient API credits',
+            'BLOCKED_SPAM': 'Number blocked for spam',
+            'RATE_LIMIT': 'API rate limit exceeded',
+            'INVALID_CREDENTIALS': 'Invalid API credentials',
+            'API_TIMEOUT': 'API request timeout',
+            'NETWORK_ERROR': 'Network connectivity issue',
+            'BAD_REQUEST': 'Invalid request data',
+            'SERVER_ERROR': 'API server error',
+            'RECIPIENTS_ERROR': 'Recipient error from API',
+            'VALIDATION_ERROR': 'Message validation failed',
+            'SEND_FAILED': 'Generic send failure',
+            'MISSING_MOBILE': 'No mobile number provided',
+            'INVALID_FORMAT': 'Invalid mobile number format',
+            'JOB_CREATION_FAILED': 'Failed to create SMS job'
+        };
+        
+        return descriptions[errorCode] || 'Unknown error';
+    }
+
+    /**
+     * Get error analysis and trends
+     * GET /eloqua/action/report/:instanceId/analysis
+     */
+    static getErrorAnalysis = asyncHandler(async (req, res) => {
+        const { instanceId } = req.params;
+
+        logger.info('Loading error analysis', { instanceId });
+
+        try {
+            // Get error trends over time (last 30 days)
+            const thirtyDaysAgo = new Date();
+            thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
+
+            const errorTrends = await SmsLog.aggregate([
+                {
+                    $match: {
+                        instanceId,
+                        status: 'failed',
+                        createdAt: { $gte: thirtyDaysAgo }
+                    }
+                },
+                {
+                    $group: {
+                        _id: {
+                            date: { $dateToString: { format: '%Y-%m-%d', date: '$createdAt' } },
+                            errorCode: '$errorCode'
+                        },
+                        count: { $sum: 1 }
+                    }
+                },
+                { $sort: { '_id.date': 1 } }
+            ]);
+
+            // Get most affected contacts
+            const affectedContacts = await SmsLog.aggregate([
+                {
+                    $match: {
+                        instanceId,
+                        status: 'failed'
+                    }
+                },
+                {
+                    $group: {
+                        _id: {
+                            contactId: '$contactId',
+                            emailAddress: '$emailAddress'
+                        },
+                        errorCount: { $sum: 1 },
+                        errors: {
+                            $push: {
+                                errorCode: '$errorCode',
+                                errorMessage: '$errorMessage',
+                                createdAt: '$createdAt'
+                            }
+                        }
+                    }
+                },
+                { $sort: { errorCount: -1 } },
+                { $limit: 10 }
+            ]);
+
+            // Get error patterns
+            const errorPatterns = await SmsLog.aggregate([
+                {
+                    $match: {
+                        instanceId,
+                        status: 'failed'
+                    }
+                },
+                {
+                    $group: {
+                        _id: '$errorCode',
+                        count: { $sum: 1 },
+                        avgRetryAttempts: { $avg: '$errorDetails.attempts' },
+                        samples: {
+                            $push: {
+                                contactId: '$contactId',
+                                errorMessage: '$errorMessage',
+                                createdAt: '$createdAt'
+                            }
+                        }
+                    }
+                },
+                {
+                    $project: {
+                        errorCode: '$_id',
+                        count: 1,
+                        avgRetryAttempts: 1,
+                        samples: { $slice: ['$samples', 3] }
+                    }
+                },
+                { $sort: { count: -1 } }
+            ]);
+
+            res.json({
+                success: true,
+                analysis: {
+                    trends: errorTrends,
+                    affectedContacts,
+                    patterns: errorPatterns
+                }
+            });
+
+        } catch (error) {
+            logger.error('Error loading error analysis', {
+                instanceId,
+                error: error.message
+            });
+
+            res.status(500).json({
+                success: false,
+                error: error.message
+            });
         }
     });
 
