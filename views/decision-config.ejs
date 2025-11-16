@@ -322,7 +322,7 @@
                 <strong>Evaluation Period</strong>
             </label>
             <select v-model.number="instance.evaluation_period" 
-                    style="width:100%; text-align:left;" 
+                    style="width:100%; text-align:left; height: 40px;" 
                     class="form-control" 
                     required>
                 <option :value="-1">Anytime (check all previous SMS)</option>
@@ -344,7 +344,7 @@
 
         <div class="form-group">
           <label for="text_type">Response Type</label>
-          <select v-model="instance.text_type" class="form-control" id="text_type" required>
+          <select v-model="instance.text_type" style="width:100%; text-align:left; height: 40px;" class="form-control" id="text_type" required>
             <option value="Anything">Any Response</option>
             <option value="Keyword">Specific Keyword(s)</option>
           </select>
