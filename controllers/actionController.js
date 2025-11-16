@@ -1162,339 +1162,110 @@ class ActionController {
         }
     }
 
-    /**
-     * Queue SMS jobs from enriched items
-     * FIXED: Creates SmsLog records for ALL contacts (including queueing errors)
-     */
-    static async queueSmsJobs(instance, consumer, enrichedItems, executionId, campaignTitle = null) {
-        logger.info('Queueing SMS jobs', {
-            instanceId: instance.instanceId,
-            itemCount: enrichedItems.length,
-            campaignTitle: campaignTitle || instance.assetName
-        });
+/**
+ * Queue SMS jobs from enriched items
+ * COMPLETE: Error logging + 1-minute deduplication
+ */
+static async queueSmsJobs(instance, consumer, enrichedItems, executionId, campaignTitle = null) {
+    logger.info('Queueing SMS jobs with deduplication', {
+        instanceId: instance.instanceId,
+        itemCount: enrichedItems.length,
+        campaignTitle: campaignTitle || instance.assetName
+    });
 
-        // DEBUG: Log instance field configuration
-        logger.debug('Instance field configuration', {
-            recipient_field: instance.recipient_field,
-            country_field: instance.country_field,
-            program_coid: instance.program_coid
-        });
+    // DEBUG: Log instance field configuration
+    logger.debug('Instance field configuration', {
+        recipient_field: instance.recipient_field,
+        country_field: instance.country_field,
+        program_coid: instance.program_coid
+    });
 
-        // DEBUG: Log what we received
-        if (enrichedItems && enrichedItems.length > 0) {
-            logger.debug('First item structure', {
-                fields: Object.keys(enrichedItems[0]),
-                sampleValues: {
-                    ContactID: enrichedItems[0].ContactID,
-                    EmailAddress: enrichedItems[0].EmailAddress,
-                    C_MobilePhone: enrichedItems[0].C_MobilePhone,
-                    C_Country: enrichedItems[0].C_Country,
-                    C_FirstName: enrichedItems[0].C_FirstName
-                }
+    // DEBUG: Log what we received
+    if (enrichedItems && enrichedItems.length > 0) {
+        logger.debug('First item structure', {
+            fields: Object.keys(enrichedItems[0]),
+            sampleValues: {
+                ContactID: enrichedItems[0].ContactID,
+                EmailAddress: enrichedItems[0].EmailAddress,
+                C_MobilePhone: enrichedItems[0].C_MobilePhone,
+                C_Country: enrichedItems[0].C_Country,
+                C_FirstName: enrichedItems[0].C_FirstName
+            }
+        });
+    }
+
+    const results = {
+        success: 0,
+        failed: 0,
+        duplicates: 0,  // ✅ Track duplicates
+        errors: []  // Will contain failed items with contactId and emailAddress for Eloqua sync
+    };
+
+    // Check if we have items to process
+    if (!enrichedItems || enrichedItems.length === 0) {
+        logger.warn('No items to process', { instanceId: instance.instanceId });
+        return results;
+    }
+
+    // Parse field names to get the actual field names from Eloqua
+    // Format can be "FieldId__C_FieldName" or just "C_FieldName" or "FieldName"
+    const parseFieldName = (fieldConfig) => {
+        if (!fieldConfig) return null;
+        
+        // Split by __ to handle "FieldId__C_FieldName" format
+        const parts = fieldConfig.split('__');
+        
+        // Return the last part (the actual field name)
+        return parts[parts.length - 1];
+    };
+
+    const recipientFieldName = parseFieldName(instance.recipient_field);
+    const countryFieldName = parseFieldName(instance.country_field);
+
+    const baseUrl = process.env.APP_BASE_URL || 'https://eloqua-integrator.onrender.com';
+
+    logger.debug('Parsed field names for extraction', {
+        recipient_field: instance.recipient_field,
+        recipientFieldName,
+        country_field: instance.country_field,
+        countryFieldName,
+        firstItemHasRecipientField: enrichedItems[0]?.[recipientFieldName] !== undefined,
+        firstItemRecipientValue: enrichedItems[0]?.[recipientFieldName]
+    });
+
+    // Use campaign title or fallback to instance name
+    const finalCampaignTitle = campaignTitle || instance.assetName || 'Unknown Campaign';
+
+    for (let i = 0; i < enrichedItems.length; i++) {
+        const item = enrichedItems[i];
+        
+        try {
+            logger.debug('Processing item for SMS', {
+                index: i + 1,
+                total: enrichedItems.length,
+                contactId: item.ContactID,
+                email: item.EmailAddress,
+                recipientFieldName,
+                recipientValue: item[recipientFieldName],
+                availableFields: Object.keys(item)
             });
-        }
 
-        const results = {
-            success: 0,
-            failed: 0,
-            errors: []  // Will contain failed items with contactId and emailAddress for Eloqua sync
-        };
-
-        // Check if we have items to process
-        if (!enrichedItems || enrichedItems.length === 0) {
-            logger.warn('No items to process', { instanceId: instance.instanceId });
-            return results;
-        }
-
-        // Parse field names to get the actual field names from Eloqua
-        // Format can be "FieldId__C_FieldName" or just "C_FieldName" or "FieldName"
-        const parseFieldName = (fieldConfig) => {
-            if (!fieldConfig) return null;
+            // Extract mobile number using parsed field name
+            const mobileNumber = item[recipientFieldName];
             
-            // Split by __ to handle "FieldId__C_FieldName" format
-            const parts = fieldConfig.split('__');
-            
-            // Return the last part (the actual field name)
-            return parts[parts.length - 1];
-        };
-
-        const recipientFieldName = parseFieldName(instance.recipient_field);
-        const countryFieldName = parseFieldName(instance.country_field);
-
-        const baseUrl = process.env.APP_BASE_URL || 'https://eloqua-integrator.onrender.com';
-
-        logger.debug('Parsed field names for extraction', {
-            recipient_field: instance.recipient_field,
-            recipientFieldName,
-            country_field: instance.country_field,
-            countryFieldName,
-            firstItemHasRecipientField: enrichedItems[0]?.[recipientFieldName] !== undefined,
-            firstItemRecipientValue: enrichedItems[0]?.[recipientFieldName]
-        });
-
-        // Use campaign title or fallback to instance name
-        const finalCampaignTitle = campaignTitle || instance.assetName || 'Unknown Campaign';
-
-        for (let i = 0; i < enrichedItems.length; i++) {
-            const item = enrichedItems[i];
-            
-            try {
-                logger.debug('Processing item for SMS', {
-                    index: i + 1,
-                    total: enrichedItems.length,
+            // ✅ Check if mobile number is missing or empty
+            if (!mobileNumber || (typeof mobileNumber === 'string' && mobileNumber.trim() === '')) {
+                logger.warn('Item has no mobile number', {
                     contactId: item.ContactID,
-                    email: item.EmailAddress,
+                    emailAddress: item.EmailAddress,
                     recipientFieldName,
                     recipientValue: item[recipientFieldName],
                     availableFields: Object.keys(item)
                 });
-
-                // Extract mobile number using parsed field name
-                const mobileNumber = item[recipientFieldName];
-                
-                // ✅ CRITICAL FIX: Check if mobile number is missing or empty
-                if (!mobileNumber || (typeof mobileNumber === 'string' && mobileNumber.trim() === '')) {
-                    logger.warn('Item has no mobile number', {
-                        contactId: item.ContactID,
-                        emailAddress: item.EmailAddress,
-                        recipientFieldName,
-                        recipientValue: item[recipientFieldName],
-                        availableFields: Object.keys(item)
-                    });
-                    
-                    results.failed++;
-                    
-                    // ✅ CRITICAL: Create SmsLog for error (for statistics)
-                    try {
-                        const errorLog = new SmsLog({
-                            installId: instance.installId,
-                            instanceId: instance.instanceId,
-                            executionId: executionId,
-                            contactId: item.ContactID,
-                            emailAddress: item.EmailAddress,
-                            mobileNumber: null,
-                            message: item.message,
-                            senderId: instance.caller_id || 'BurstSMS',
-                            campaignId: instance.assetId,
-                            campaignTitle: finalCampaignTitle,
-                            status: 'failed',
-                            errorMessage: 'No mobile number',
-                            errorCode: 'MISSING_MOBILE',
-                            sentAt: null,
-                            createdAt: new Date()
-                        });
-                        
-                        await errorLog.save();
-                        
-                        logger.debug('Error SMS log created for missing mobile', {
-                            contactId: item.ContactID,
-                            errorCode: 'MISSING_MOBILE'
-                        });
-                    } catch (logError) {
-                        logger.error('Failed to create error SMS log', {
-                            contactId: item.ContactID,
-                            error: logError.message
-                        });
-                    }
-                    
-                    // ✅ Add to errors with contactId, emailAddress for Eloqua sync
-                    results.errors.push({
-                        contactId: item.ContactID,
-                        emailAddress: item.EmailAddress,
-                        error: 'No mobile number',
-                        field: recipientFieldName,
-                        errorCode: 'MISSING_MOBILE',
-                        // ✅ These fields are used by syncResultsToEloqua
-                        sync_status: 'errored',
-                        delivery: 'errored'
-                    });
-                    continue;
-                }
-
-                // Extract country using parsed field name (fallback to default)
-                const country = item[countryFieldName] || consumer.default_country || 'Australia';
-
-                logger.debug('Extracted contact data', {
-                    contactId: item.ContactID,
-                    mobileNumber,
-                    country,
-                    countryFieldName,
-                    countryValue: item[countryFieldName]
-                });
-
-                // Format mobile number (remove spaces, ensure + prefix)
-                let formattedMobile;
-                try {
-                    formattedMobile = ActionController.formatMobileNumber(mobileNumber, country);
-
-                    logger.debug('Formatted mobile number', {
-                        original: mobileNumber,
-                        formatted: formattedMobile,
-                        country
-                    });
-                } catch (formatError) {
-                    logger.error('Error formatting mobile number', {
-                        contactId: item.ContactID,
-                        mobileNumber,
-                        error: formatError.message
-                    });
-                    
-                    results.failed++;
-                    
-                    // ✅ Create SmsLog for format error
-                    try {
-                        const errorLog = new SmsLog({
-                            installId: instance.installId,
-                            instanceId: instance.instanceId,
-                            executionId: executionId,
-                            contactId: item.ContactID,
-                            emailAddress: item.EmailAddress,
-                            mobileNumber: mobileNumber,
-                            message: item.message,
-                            senderId: instance.caller_id || 'BurstSMS',
-                            campaignId: instance.assetId,
-                            campaignTitle: finalCampaignTitle,
-                            status: 'failed',
-                            errorMessage: `Invalid mobile number format: ${formatError.message}`,
-                            errorCode: 'INVALID_FORMAT',
-                            sentAt: null,
-                            createdAt: new Date()
-                        });
-                        
-                        await errorLog.save();
-                        
-                        logger.debug('Error SMS log created for invalid format', {
-                            contactId: item.ContactID,
-                            errorCode: 'INVALID_FORMAT'
-                        });
-                    } catch (logError) {
-                        logger.error('Failed to create error SMS log', {
-                            contactId: item.ContactID,
-                            error: logError.message
-                        });
-                    }
-                    
-                    // ✅ Add to errors array for Eloqua sync
-                    results.errors.push({
-                        contactId: item.ContactID,
-                        emailAddress: item.EmailAddress,
-                        error: `Invalid mobile number format: ${formatError.message}`,
-                        field: recipientFieldName,
-                        errorCode: 'INVALID_FORMAT',
-                        sync_status: 'errored',
-                        delivery: 'errored'
-                    });
-                    continue;
-                }
-
-                // Determine sender ID (might be dynamic from contact field)
-                let senderId = instance.caller_id || 'BurstSMS';
-                if (instance.caller_id && instance.caller_id.startsWith('##')) {
-                    const senderFieldName = parseFieldName(instance.caller_id.replace('##', ''));
-                    senderId = item[senderFieldName] || instance.caller_id;
-                    
-                    logger.debug('Dynamic sender ID resolved', {
-                        original: instance.caller_id,
-                        fieldName: senderFieldName,
-                        resolved: senderId
-                    });
-                }
-
-                const callbackParams = new URLSearchParams({
-                    installId: instance.installId,
-                    instanceId: instance.instanceId,
-                    contactId: item.ContactID,
-                    executionId: executionId,
-                    mobile: formattedMobile
-                }).toString();
-
-                // Build SMS options
-                const smsOptions = {
-                    country: country,
-                    trackedLinkUrl: item.tracked_link_url || null,
-                    messageExpiry: instance.message_expiry === 'YES',
-                    messageValidity: instance.message_validity ? instance.message_validity * 60 : null,
-                    // Webhook URLs with tracking parameters
-                    dlrCallback: `${baseUrl}/webhooks/dlr?${callbackParams}`,
-                    replyCallback: `${baseUrl}/webhooks/reply?${callbackParams}`,
-                    linkHitsCallback: item.tracked_link_url 
-                        ? `${baseUrl}/webhooks/linkhit?${callbackParams}` 
-                        : null
-                };
-
-                logger.debug('SMS options built with webhook parameters', {
-                    contactId: item.ContactID,
-                    mobile: formattedMobile,
-                    webhooks: {
-                        dlr: !!smsOptions.dlrCallback,
-                        reply: !!smsOptions.replyCallback,
-                        linkHits: !!smsOptions.linkHitsCallback
-                    }
-                });
-
-                // Create SMS job
-                const smsJob = new SmsJob({
-                    jobId: `${instance.instanceId}_${item.ContactID}_${Date.now()}_${i}`,
-                    installId: instance.installId,
-                    instanceId: instance.instanceId,
-                    executionId: executionId,
-                    
-                    // Contact details
-                    contactId: item.ContactID,
-                    emailAddress: item.EmailAddress,
-                    mobileNumber: formattedMobile,
-                    
-                    // Message details (already processed with merge fields)
-                    message: item.message,
-                    senderId: senderId,
-                    
-                    // Campaign details
-                    campaignId: instance.assetId,
-                    campaignTitle: finalCampaignTitle,
-                    assetName: instance.assetName,
-                    
-                    // SMS options
-                    smsOptions: smsOptions,
-                    
-                    // Custom object data for logging (if configured)
-                    customObjectData: instance.custom_object_id ? {
-                        customObjectId: instance.custom_object_id,
-                        fields: {
-                            [instance.mobile_field]: formattedMobile,
-                            [instance.email_field]: item.EmailAddress,
-                            [instance.outgoing_field]: item.message,
-                            [instance.notification_field]: 'Pending',
-                            [instance.vn_field]: senderId,
-                            [instance.title_field]: instance.assetName
-                        }
-                    } : null,
-                    
-                    status: 'pending',
-                    scheduledAt: new Date()
-                });
-
-                await smsJob.save();
-
-                logger.debug('SMS job created', {
-                    jobId: smsJob.jobId,
-                    contactId: item.ContactID,
-                    mobile: formattedMobile,
-                    executionId: executionId
-                });
-
-                results.success++;
-
-            } catch (error) {
-                logger.error('Error creating SMS job', {
-                    instanceId: instance.instanceId,
-                    contactId: item.ContactID,
-                    error: error.message,
-                    stack: error.stack
-                });
                 
                 results.failed++;
                 
-                // ✅ Create SmsLog for job creation error
+                // Create SmsLog for error (for statistics)
                 try {
                     const errorLog = new SmsLog({
                         installId: instance.installId,
@@ -1502,23 +1273,23 @@ class ActionController {
                         executionId: executionId,
                         contactId: item.ContactID,
                         emailAddress: item.EmailAddress,
-                        mobileNumber: item[recipientFieldName],
+                        mobileNumber: null,
                         message: item.message,
                         senderId: instance.caller_id || 'BurstSMS',
                         campaignId: instance.assetId,
                         campaignTitle: finalCampaignTitle,
                         status: 'failed',
-                        errorMessage: error.message,
-                        errorCode: 'JOB_CREATION_FAILED',
+                        errorMessage: 'No mobile number',
+                        errorCode: 'MISSING_MOBILE',
                         sentAt: null,
                         createdAt: new Date()
                     });
                     
                     await errorLog.save();
                     
-                    logger.debug('Error SMS log created for job creation failure', {
+                    logger.debug('Error SMS log created for missing mobile', {
                         contactId: item.ContactID,
-                        errorCode: 'JOB_CREATION_FAILED'
+                        errorCode: 'MISSING_MOBILE'
                     });
                 } catch (logError) {
                     logger.error('Failed to create error SMS log', {
@@ -1527,29 +1298,277 @@ class ActionController {
                     });
                 }
                 
-                // ✅ Add to errors array for Eloqua sync
+                // Add to errors with contactId, emailAddress for Eloqua sync
                 results.errors.push({
                     contactId: item.ContactID,
                     emailAddress: item.EmailAddress,
-                    error: error.message,
-                    errorCode: 'JOB_CREATION_FAILED',
+                    error: 'No mobile number',
+                    field: recipientFieldName,
+                    errorCode: 'MISSING_MOBILE',
                     sync_status: 'errored',
                     delivery: 'errored'
                 });
+                continue;
             }
+
+            // Extract country using parsed field name (fallback to default)
+            const country = item[countryFieldName] || consumer.default_country || 'Australia';
+
+            logger.debug('Extracted contact data', {
+                contactId: item.ContactID,
+                mobileNumber,
+                country,
+                countryFieldName,
+                countryValue: item[countryFieldName]
+            });
+
+            // Format mobile number
+            let formattedMobile;
+            try {
+                formattedMobile = ActionController.formatMobileNumber(mobileNumber, country);
+
+                logger.debug('Formatted mobile number', {
+                    original: mobileNumber,
+                    formatted: formattedMobile,
+                    country
+                });
+            } catch (formatError) {
+                logger.error('Error formatting mobile number', {
+                    contactId: item.ContactID,
+                    mobileNumber,
+                    error: formatError.message
+                });
+                
+                results.failed++;
+                
+                // Create SmsLog for format error
+                try {
+                    const errorLog = new SmsLog({
+                        installId: instance.installId,
+                        instanceId: instance.instanceId,
+                        executionId: executionId,
+                        contactId: item.ContactID,
+                        emailAddress: item.EmailAddress,
+                        mobileNumber: mobileNumber,
+                        message: item.message,
+                        senderId: instance.caller_id || 'BurstSMS',
+                        campaignId: instance.assetId,
+                        campaignTitle: finalCampaignTitle,
+                        status: 'failed',
+                        errorMessage: `Invalid mobile number format: ${formatError.message}`,
+                        errorCode: 'INVALID_FORMAT',
+                        sentAt: null,
+                        createdAt: new Date()
+                    });
+                    
+                    await errorLog.save();
+                    
+                    logger.debug('Error SMS log created for invalid format', {
+                        contactId: item.ContactID,
+                        errorCode: 'INVALID_FORMAT'
+                    });
+                } catch (logError) {
+                    logger.error('Failed to create error SMS log', {
+                        contactId: item.ContactID,
+                        error: logError.message
+                    });
+                }
+                
+                // Add to errors array for Eloqua sync
+                results.errors.push({
+                    contactId: item.ContactID,
+                    emailAddress: item.EmailAddress,
+                    error: `Invalid mobile number format: ${formatError.message}`,
+                    field: recipientFieldName,
+                    errorCode: 'INVALID_FORMAT',
+                    sync_status: 'errored',
+                    delivery: 'errored'
+                });
+                continue;
+            }
+
+            // ✅ DEDUPLICATION CHECK: Within 1 minute
+            const isDuplicate = await SmsJob.isDuplicateWithinMinute(
+                formattedMobile,
+                item.message,
+                instance.instanceId
+            );
+
+            if (isDuplicate) {
+                logger.warn('Duplicate SMS within 1 minute - skipping', {
+                    contactId: item.ContactID,
+                    mobile: formattedMobile,
+                    messagePreview: item.message.substring(0, 50)
+                });
+
+                results.duplicates++;
+                continue; // Skip this contact - don't create job or log error
+            }
+
+            // Determine sender ID (might be dynamic from contact field)
+            let senderId = instance.caller_id || 'BurstSMS';
+            if (instance.caller_id && instance.caller_id.startsWith('##')) {
+                const senderFieldName = parseFieldName(instance.caller_id.replace('##', ''));
+                senderId = item[senderFieldName] || instance.caller_id;
+                
+                logger.debug('Dynamic sender ID resolved', {
+                    original: instance.caller_id,
+                    fieldName: senderFieldName,
+                    resolved: senderId
+                });
+            }
+
+            const callbackParams = new URLSearchParams({
+                installId: instance.installId,
+                instanceId: instance.instanceId,
+                contactId: item.ContactID,
+                executionId: executionId,
+                mobile: formattedMobile
+            }).toString();
+
+            // Build SMS options
+            const smsOptions = {
+                country: country,
+                trackedLinkUrl: item.tracked_link_url || null,
+                messageExpiry: instance.message_expiry === 'YES',
+                messageValidity: instance.message_validity ? instance.message_validity * 60 : null,
+                // Webhook URLs with tracking parameters
+                dlrCallback: `${baseUrl}/webhooks/dlr?${callbackParams}`,
+                replyCallback: `${baseUrl}/webhooks/reply?${callbackParams}`,
+                linkHitsCallback: item.tracked_link_url 
+                    ? `${baseUrl}/webhooks/linkhit?${callbackParams}` 
+                    : null
+            };
+
+            logger.debug('SMS options built with webhook parameters', {
+                contactId: item.ContactID,
+                mobile: formattedMobile,
+                webhooks: {
+                    dlr: !!smsOptions.dlrCallback,
+                    reply: !!smsOptions.replyCallback,
+                    linkHits: !!smsOptions.linkHitsCallback
+                }
+            });
+
+            // Create SMS job
+            const smsJob = new SmsJob({
+                jobId: `${instance.instanceId}_${item.ContactID}_${Date.now()}_${i}`,
+                installId: instance.installId,
+                instanceId: instance.instanceId,
+                executionId: executionId,
+                
+                // Contact details
+                contactId: item.ContactID,
+                emailAddress: item.EmailAddress,
+                mobileNumber: formattedMobile,
+                
+                // Message details (already processed with merge fields)
+                message: item.message,
+                senderId: senderId,
+                
+                // Campaign details
+                campaignId: instance.assetId,
+                campaignTitle: finalCampaignTitle,
+                assetName: instance.assetName,
+                
+                // SMS options
+                smsOptions: smsOptions,
+                
+                // Custom object data for logging (if configured)
+                customObjectData: instance.custom_object_id ? {
+                    customObjectId: instance.custom_object_id,
+                    fields: {
+                        [instance.mobile_field]: formattedMobile,
+                        [instance.email_field]: item.EmailAddress,
+                        [instance.outgoing_field]: item.message,
+                        [instance.notification_field]: 'Pending',
+                        [instance.vn_field]: senderId,
+                        [instance.title_field]: instance.assetName
+                    }
+                } : null,
+                
+                status: 'pending',
+                scheduledAt: new Date()
+            });
+
+            await smsJob.save();
+
+            logger.debug('SMS job created', {
+                jobId: smsJob.jobId,
+                contactId: item.ContactID,
+                mobile: formattedMobile,
+                executionId: executionId
+            });
+
+            results.success++;
+
+        } catch (error) {
+            logger.error('Error creating SMS job', {
+                instanceId: instance.instanceId,
+                contactId: item.ContactID,
+                error: error.message,
+                stack: error.stack
+            });
+            
+            results.failed++;
+            
+            // Create SmsLog for job creation error
+            try {
+                const errorLog = new SmsLog({
+                    installId: instance.installId,
+                    instanceId: instance.instanceId,
+                    executionId: executionId,
+                    contactId: item.ContactID,
+                    emailAddress: item.EmailAddress,
+                    mobileNumber: item[recipientFieldName],
+                    message: item.message,
+                    senderId: instance.caller_id || 'BurstSMS',
+                    campaignId: instance.assetId,
+                    campaignTitle: finalCampaignTitle,
+                    status: 'failed',
+                    errorMessage: error.message,
+                    errorCode: 'JOB_CREATION_FAILED',
+                    sentAt: null,
+                    createdAt: new Date()
+                });
+                
+                await errorLog.save();
+                
+                logger.debug('Error SMS log created for job creation failure', {
+                    contactId: item.ContactID,
+                    errorCode: 'JOB_CREATION_FAILED'
+                });
+            } catch (logError) {
+                logger.error('Failed to create error SMS log', {
+                    contactId: item.ContactID,
+                    error: logError.message
+                });
+            }
+            
+            // Add to errors array for Eloqua sync
+            results.errors.push({
+                contactId: item.ContactID,
+                emailAddress: item.EmailAddress,
+                error: error.message,
+                errorCode: 'JOB_CREATION_FAILED',
+                sync_status: 'errored',
+                delivery: 'errored'
+            });
         }
-
-        logger.info('SMS job queueing completed', {
-            instanceId: instance.instanceId,
-            total: enrichedItems.length,
-            success: results.success,
-            failed: results.failed,
-            errors: results.errors.length,
-            campaignTitle: finalCampaignTitle
-        });
-
-        return results;
     }
+
+    logger.info('SMS job queueing completed', {
+        instanceId: instance.instanceId,
+        total: enrichedItems.length,
+        success: results.success,
+        failed: results.failed,
+        duplicates: results.duplicates,  // ✅ Log duplicates
+        errors: results.errors.length,
+        campaignTitle: finalCampaignTitle
+    });
+
+    return results;
+}
 
     /**
      * Mark action as complete and sync to Eloqua

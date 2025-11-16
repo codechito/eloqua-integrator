@@ -188,4 +188,22 @@ SmsJobSchema.methods.resetForRetry = async function() {
     return await this.save();
 };
 
+/**
+ * Check if duplicate SMS within last minute
+ * Simple: same number + same message + same instance
+ */
+SmsJobSchema.statics.isDuplicateWithinMinute = async function(mobileNumber, message, instanceId) {
+    const oneMinuteAgo = new Date(Date.now() - 60000); // 60 seconds
+    
+    const duplicate = await this.findOne({
+        mobileNumber: mobileNumber,
+        message: message,
+        instanceId: instanceId,
+        createdAt: { $gte: oneMinuteAgo },
+        status: { $in: ['pending', 'processing', 'sent'] }
+    });
+    
+    return !!duplicate;
+};
+
 module.exports = mongoose.model('SmsJob', SmsJobSchema);
