@@ -25,8 +25,7 @@ const SmsLogSchema = new mongoose.Schema({
     },
     mobileNumber: {
         type: String,
-        required: true,
-        trim: true,
+        required: false,  // ✅ CHANGED: Allow null for errors
         index: true
     },
     
@@ -37,7 +36,6 @@ const SmsLogSchema = new mongoose.Schema({
     },
     messageId: {
         type: String,
-        unique: true,
         sparse: true,
         index: true
     },
