@@ -924,6 +924,7 @@ class ActionController {
 
     /**
      * Process notify asynchronously (creates SMS jobs)
+     * FIXED: Immediately syncs queueing errors to Eloqua
      */
     static async processNotifyAsync(instanceId, installId, siteId, assetId, executionId, executionData) {
         try {
@@ -933,7 +934,7 @@ class ActionController {
                 recordCount: executionData.items?.length || 0
             });
 
-            // Get instance configuration
+            // Get instance and consumer...
             const instance = await ActionInstance.findOne({
                 instanceId,
                 installId,
@@ -945,7 +946,6 @@ class ActionController {
                 return;
             }
 
-            // Get consumer configuration
             const consumer = await Consumer.findOne({ installId })
                 .select('+transmitsms_api_key +transmitsms_api_secret');
 
@@ -960,48 +960,26 @@ class ActionController {
                 return;
             }
 
-            // ============================================
-            // FETCH CAMPAIGN NAME FROM ELOQUA
-            // ============================================
-            let campaignTitle = instance.assetName || 'Unknown Campaign';
-            
-            if (assetId) {
-                try {
-                    const eloquaService = new EloquaService(installId, siteId);
-                    await eloquaService.initialize();
-                    
-                    const campaign = await eloquaService.getCampaign(assetId);
-                    
-                    if (campaign && campaign.name) {
-                        campaignTitle = campaign.name;
-                        
-                        // Update instance with campaign name if not set
-                        if (!instance.assetName || instance.assetName !== campaign.name) {
-                            instance.assetName = campaign.name;
-                            instance.campaignStatus = campaign.currentStatus;
-                            await instance.save();
-                            
-                            logger.info('Instance updated with campaign details', {
-                                instanceId,
-                                campaignName: campaign.name,
-                                campaignStatus: campaign.currentStatus
-                            });
-                        }
-                    }
-                } catch (campaignError) {
-                    logger.warn('Could not fetch campaign name from Eloqua', {
-                        assetId,
-                        error: campaignError.message
-                    });
-                    // Continue with default name
-                }
+            // Fetch campaign title
+            let campaignTitle = instance.assetName;
+            try {
+                const eloquaService = new EloquaService(consumer.installId, instance.SiteId);
+                await eloquaService.initialize();
+                
+                const campaign = await eloquaService.getCampaign(assetId);
+                campaignTitle = campaign.name;
+                
+                logger.info('Processing with campaign name', {
+                    instanceId,
+                    assetId,
+                    campaignTitle
+                });
+            } catch (campaignError) {
+                logger.warn('Could not fetch campaign name', {
+                    assetId,
+                    error: campaignError.message
+                });
             }
-
-            logger.info('Processing with campaign name', {
-                instanceId,
-                assetId,
-                campaignTitle
-            });
 
             // Enrich items with processed message and tracked links
             const enrichedItems = ActionController.enrichItems(
@@ -1015,12 +993,13 @@ class ActionController {
                 sampleMessage: enrichedItems[0]?.message
             });
 
-            // Queue SMS jobs (returns {success, failed, errors} object, NOT array)
+            // Queue SMS jobs (returns {success, failed, errors} object)
             const queueResults = await ActionController.queueSmsJobs(
                 instance,
                 consumer,
                 enrichedItems,
-                executionId
+                executionId,
+                campaignTitle
             );
 
             // Update instance statistics
@@ -1038,6 +1017,42 @@ class ActionController {
                 errorCount: queueResults.errors?.length || 0
             });
 
+            // ✅ CRITICAL FIX: If there are queueing errors, sync them immediately to Eloqua
+            if (queueResults.errors && queueResults.errors.length > 0) {
+                logger.info('🔥 Queueing errors detected - syncing immediately to Eloqua', {
+                    instanceId,
+                    executionId,
+                    errorCount: queueResults.errors.length,
+                    sampleError: queueResults.errors[0]
+                });
+
+                try {
+                    // Sync errors immediately (don't wait for worker)
+                    await ActionController.syncQueuingErrorsToEloqua(
+                        consumer,
+                        instance,
+                        executionId,
+                        queueResults.errors
+                    );
+
+                    logger.info('✅ Queueing errors synced to Eloqua successfully', {
+                        instanceId,
+                        executionId,
+                        errorCount: queueResults.errors.length
+                    });
+
+                } catch (syncError) {
+                    logger.error('❌ Failed to sync queueing errors to Eloqua', {
+                        instanceId,
+                        executionId,
+                        errorCount: queueResults.errors.length,
+                        error: syncError.message,
+                        stack: syncError.stack
+                    });
+                    // Don't throw - jobs are queued, just error sync failed
+                }
+            }
+
             // Log any errors
             if (queueResults.errors && queueResults.errors.length > 0) {
                 logger.warn('Some jobs failed to queue', {
@@ -1048,14 +1063,6 @@ class ActionController {
                 });
             }
 
-            // Return summary (for logging purposes)
-            return {
-                success: true,
-                totalRecords: enrichedItems.length,
-                successCount: queueResults.success,
-                failCount: queueResults.failed
-            };
-
         } catch (error) {
             logger.error('Async notify processing error', {
                 instanceId,
@@ -1063,13 +1070,95 @@ class ActionController {
                 error: error.message,
                 stack: error.stack
             });
-            
-            // Don't throw - we already returned 204 to Eloqua
-            // Just log the error
-            return {
-                success: false,
-                error: error.message
+        }
+    }
+
+    /**
+     * Sync queueing errors immediately to Eloqua
+     * These are contacts that failed before job creation (no mobile number, etc)
+     */
+    static async syncQueuingErrorsToEloqua(consumer, instance, executionId, errors) {
+        try {
+            logger.info('📤 Syncing queueing errors to Eloqua', {
+                instanceId: instance.instanceId,
+                executionId,
+                errorCount: errors.length
+            });
+
+            const eloquaService = new EloquaService(consumer.installId, instance.SiteId);
+            await eloquaService.initialize();
+
+            // Prepare error messages for Eloqua sync
+            const erroredContacts = errors.map(error => ({
+                contactId: error.contactId,
+                emailAddress: error.emailAddress,
+                sync_status: 'errored',
+                delivery: 'errored'
+            }));
+
+            // Create bulk import for errored contacts
+            const instanceIdNoDashes = instance.instanceId.replace(/-/g, '');
+
+            const importDefinition = {
+                name: `SMS_Action_${instanceIdNoDashes}_errored_${Date.now()}`,
+                fields: {
+                    ContactID: '{{Contact.Id}}',
+                    EmailAddress: '{{Contact.Field(C_EmailAddress)}}'
+                },
+                identifierFieldName: 'EmailAddress',
+                isSyncTriggeredOnImport: false,
+                dataRetentionDuration: 'P7D',
+                isUpdatingMultipleMatchedRecords: false,
+                syncActions: [
+                    {
+                        destination: `{{ActionInstance(${instanceIdNoDashes})}}`,
+                        action: "setStatus",
+                        status: "errored"
+                    }
+                ]
             };
+
+            logger.debug('Creating import definition for errors', {
+                name: importDefinition.name,
+                errorCount: erroredContacts.length,
+                destination: importDefinition.syncActions[0].destination
+            });
+
+            const importDef = await eloquaService.createBulkImport('contacts', importDefinition);
+
+            // Upload error contact data
+            const contactData = erroredContacts.map(contact => ({
+                ContactID: contact.contactId,
+                EmailAddress: contact.emailAddress
+            }));
+
+            await eloquaService.uploadBulkImportData(importDef.uri, contactData);
+
+            // Sync the import
+            const sync = await eloquaService.syncBulkImport(importDef.uri);
+
+            logger.info('📊 Queueing errors bulk sync started', {
+                syncUri: sync.uri,
+                errorCount: erroredContacts.length
+            });
+
+            // Wait for sync completion
+            await ActionController.waitForSyncCompletion(eloquaService, sync.uri);
+
+            logger.info('✅ Queueing errors synced to Eloqua successfully', {
+                instanceId: instance.instanceId,
+                executionId,
+                errorCount: erroredContacts.length
+            });
+
+        } catch (error) {
+            logger.error('❌ Error syncing queueing errors to Eloqua', {
+                instanceId: instance.instanceId,
+                executionId,
+                error: error.message,
+                stack: error.stack
+            });
+            throw error;
         }
     }
 
