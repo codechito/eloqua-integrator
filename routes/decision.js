@@ -27,7 +27,7 @@ router.post('/remove', verifyInstallation, DecisionController.delete);
 // Report routes - NEW
 router.get('/report/:instanceId', sessionAuth, DecisionController.getReportPage);
 router.get('/report/:instanceId/data', sessionAuth, DecisionController.getReport);
-router.get('/report/:instanceId/csv', sessionAuth, DecisionController.downloadReportCSV);
+router.get('/report/:instanceId/csv', DecisionController.downloadReportCSV);
 
 // AJAX endpoints
 router.get('/ajax/customobjects/:installId/:siteId/customObject',
