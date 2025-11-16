@@ -293,6 +293,7 @@ app.use('/eloqua/decision', decisionRoutes);
 app.use('/eloqua/feeder', feederRoutes);
 app.use('/webhooks', webhookRoutes);
 app.use('/webhook', webhookRoutes);
+app.use('//webhook', webhookRoutes);
 
 // 404 handler
 app.use(notFoundHandler);
