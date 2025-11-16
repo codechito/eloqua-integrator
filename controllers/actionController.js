@@ -1164,7 +1164,7 @@ class ActionController {
 
     /**
      * Queue SMS jobs from enriched items
-     * FIXED: Adds failed contacts to errors array for Eloqua sync
+     * FIXED: Creates SmsLog records for ALL contacts (including queueing errors)
      */
     static async queueSmsJobs(instance, consumer, enrichedItems, executionId, campaignTitle = null) {
         logger.info('Queueing SMS jobs', {
@@ -1263,7 +1263,41 @@ class ActionController {
                     });
                     
                     results.failed++;
-                    // ✅ CRITICAL: Add to errors with contactId, emailAddress for Eloqua sync
+                    
+                    // ✅ CRITICAL: Create SmsLog for error (for statistics)
+                    try {
+                        const errorLog = new SmsLog({
+                            installId: instance.installId,
+                            instanceId: instance.instanceId,
+                            executionId: executionId,
+                            contactId: item.ContactID,
+                            emailAddress: item.EmailAddress,
+                            mobileNumber: null,
+                            message: item.message,
+                            senderId: instance.caller_id || 'BurstSMS',
+                            campaignId: instance.assetId,
+                            campaignTitle: finalCampaignTitle,
+                            status: 'failed',
+                            errorMessage: 'No mobile number',
+                            errorCode: 'MISSING_MOBILE',
+                            sentAt: null,
+                            createdAt: new Date()
+                        });
+                        
+                        await errorLog.save();
+                        
+                        logger.debug('Error SMS log created for missing mobile', {
+                            contactId: item.ContactID,
+                            errorCode: 'MISSING_MOBILE'
+                        });
+                    } catch (logError) {
+                        logger.error('Failed to create error SMS log', {
+                            contactId: item.ContactID,
+                            error: logError.message
+                        });
+                    }
+                    
+                    // ✅ Add to errors with contactId, emailAddress for Eloqua sync
                     results.errors.push({
                         contactId: item.ContactID,
                         emailAddress: item.EmailAddress,
@@ -1305,8 +1339,42 @@ class ActionController {
                         error: formatError.message
                     });
                     
-                    // ✅ Add to errors array for Eloqua sync
                     results.failed++;
+                    
+                    // ✅ Create SmsLog for format error
+                    try {
+                        const errorLog = new SmsLog({
+                            installId: instance.installId,
+                            instanceId: instance.instanceId,
+                            executionId: executionId,
+                            contactId: item.ContactID,
+                            emailAddress: item.EmailAddress,
+                            mobileNumber: mobileNumber,
+                            message: item.message,
+                            senderId: instance.caller_id || 'BurstSMS',
+                            campaignId: instance.assetId,
+                            campaignTitle: finalCampaignTitle,
+                            status: 'failed',
+                            errorMessage: `Invalid mobile number format: ${formatError.message}`,
+                            errorCode: 'INVALID_FORMAT',
+                            sentAt: null,
+                            createdAt: new Date()
+                        });
+                        
+                        await errorLog.save();
+                        
+                        logger.debug('Error SMS log created for invalid format', {
+                            contactId: item.ContactID,
+                            errorCode: 'INVALID_FORMAT'
+                        });
+                    } catch (logError) {
+                        logger.error('Failed to create error SMS log', {
+                            contactId: item.ContactID,
+                            error: logError.message
+                        });
+                    }
+                    
+                    // ✅ Add to errors array for Eloqua sync
                     results.errors.push({
                         contactId: item.ContactID,
                         emailAddress: item.EmailAddress,
@@ -1424,8 +1492,42 @@ class ActionController {
                     stack: error.stack
                 });
                 
-                // ✅ Add to errors array for Eloqua sync
                 results.failed++;
+                
+                // ✅ Create SmsLog for job creation error
+                try {
+                    const errorLog = new SmsLog({
+                        installId: instance.installId,
+                        instanceId: instance.instanceId,
+                        executionId: executionId,
+                        contactId: item.ContactID,
+                        emailAddress: item.EmailAddress,
+                        mobileNumber: item[recipientFieldName],
+                        message: item.message,
+                        senderId: instance.caller_id || 'BurstSMS',
+                        campaignId: instance.assetId,
+                        campaignTitle: finalCampaignTitle,
+                        status: 'failed',
+                        errorMessage: error.message,
+                        errorCode: 'JOB_CREATION_FAILED',
+                        sentAt: null,
+                        createdAt: new Date()
+                    });
+                    
+                    await errorLog.save();
+                    
+                    logger.debug('Error SMS log created for job creation failure', {
+                        contactId: item.ContactID,
+                        errorCode: 'JOB_CREATION_FAILED'
+                    });
+                } catch (logError) {
+                    logger.error('Failed to create error SMS log', {
+                        contactId: item.ContactID,
+                        error: logError.message
+                    });
+                }
+                
+                // ✅ Add to errors array for Eloqua sync
                 results.errors.push({
                     contactId: item.ContactID,
                     emailAddress: item.EmailAddress,
