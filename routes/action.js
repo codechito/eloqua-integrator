@@ -30,7 +30,7 @@ router.get('/worker/health', ActionController.getWorkerHealth);
 
 // Report routes - NEW
 router.get('/report/:instanceId', sessionAuth, ActionController.getReportPage);
-router.get('/report/:instanceId/data', sessionAuth, ActionController.getReport);
+router.get('/report/:instanceId/data', verifyInstallation, ActionController.getReport);
 router.get('/report/:instanceId/csv', ActionController.downloadReportCSV);
 router.get('/report/:instanceId/errors', sessionAuth,  ActionController.getErrorReport);
 router.get('/report/:instanceId/analysis', sessionAuth,  ActionController.getErrorAnalysis);
