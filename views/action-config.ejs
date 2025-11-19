@@ -203,7 +203,7 @@
       }
 
       .btn-success:hover {
-        background-color: #218838;
+        background: #218838;
         border-color: #1e7e34;
       }
 
@@ -304,6 +304,17 @@
       .label-with-checkbox .checkbox-wrapper label {
         font-weight: normal;
         font-size: 12px;
+      }
+
+      /* ✅ NEW: Highlight focused input indicator */
+      .merge-focus-indicator {
+        font-size: 10px;
+        color: #28a745;
+        font-weight: bold;
+        margin-left: 10px;
+        padding: 2px 6px;
+        background: #d4edda;
+        border-radius: 3px;
       }
 
       .test-sms-section {
@@ -440,7 +451,6 @@
         background: #218838;
       }
 
-      /* Summary Chart Styles - ADDED */
       .report-section {
         background: #fff;
         border: 1px solid #dee2e6;
@@ -574,7 +584,11 @@
         <div class="full-width">
           <div class="form-group">
             <div class="label-with-checkbox">
-              <label>Message</label>
+              <label>
+                Message
+                <!-- ✅ NEW: Show which field is focused -->
+                <span v-if="focusedField === 'message'" class="merge-focus-indicator">← Inserting here</span>
+              </label>
               <div class="checkbox-wrapper">
                 <label>Merge</label>
                 <input type="checkbox" v-model="showMerge">
@@ -627,7 +641,9 @@
               ref="messageTextarea"
               v-model="instance.message" 
               class="form-control" 
-              rows="5" 
+              rows="5"
+              @focus="focusedField = 'message'"
+              @blur="handleBlur"
               placeholder="Enter your text message here, you can send up to 4 joined messages of 153 characters each.
 
 Standardised opt out message can be removed if not legally required. Please see your local SPAM compliance rules on use.
@@ -642,13 +658,21 @@ Opt-out reply STOP"></textarea>
         <!-- Tracked Link (Full Width) -->
         <div class="full-width">
           <div class="form-group">
-            <label for="tracked_link">Tracked Link</label>
-            <input type="text" 
-                  class="form-control" 
-                  v-model="instance.tracked_link"
-                  placeholder="Enter URL to track (will be shortened automatically)"/>
+            <label for="tracked_link">
+              Tracked Link URL
+              <!-- ✅ NEW: Show which field is focused -->
+              <span v-if="focusedField === 'tracked_link'" class="merge-focus-indicator">← Inserting here</span>
+            </label>
+            <input 
+              ref="trackedLinkInput"
+              type="text" 
+              class="form-control" 
+              v-model="instance.tracked_link"
+              @focus="focusedField = 'tracked_link'"
+              @blur="handleBlur"
+              placeholder="Enter URL to track (will be shortened automatically)"/>
             <p style="font-size: 11px; color: #666; margin-top: 5px;">
-                <i>Add [tracked-link] to your message above. The URL you enter here will be automatically shortened and inserted.</i>
+                <i>Add [tracked-link] to your message above. The URL you enter here will be automatically shortened and inserted. You can use merge fields like [C_OrderNumber] in this URL.</i>
             </p>
           </div>
         </div>
@@ -781,7 +805,7 @@ Opt-out reply STOP"></textarea>
           </div>
         </div>
         
-        <!-- SMS Summary Chart - ADDED -->
+        <!-- SMS Summary Chart -->
         <div class="report-section">
           <h5>📊 SMS Send Summary</h5>
 
@@ -827,8 +851,6 @@ Opt-out reply STOP"></textarea>
             </button>
           </div>
         </div>
-
-        
 
         <!-- Bottom Status (for SAVE action) -->
         <div v-if="status.success || status.error" 
@@ -902,6 +924,9 @@ Opt-out reply STOP"></textarea>
           selectedCDOField: '',
           cdoMergeFields: [],
           
+          // ✅ NEW: Track which field is focused
+          focusedField: null, // 'message' or 'tracked_link'
+          
           // CDO info display
           cdoName: null,
           cdoConfig: {
@@ -917,7 +942,7 @@ Opt-out reply STOP"></textarea>
           messageStatus: {},
           testingSms: false,
           
-          // Report summary data - ADDED
+          // Report summary data
           reportStats: {
             sent: { count: 0, cost: 0 },
             delivered: { count: 0, cost: 0 },
@@ -948,7 +973,6 @@ Opt-out reply STOP"></textarea>
             window.open(url, 'ActionReport', 'width=1400,height=900,scrollbars=yes,resizable=yes');
           },
 
-          // ADDED: Load report summary
           loadReport: function() {
             var vm = this;
             vm.loadingReport = true;
@@ -957,9 +981,7 @@ Opt-out reply STOP"></textarea>
               params: {
                 page: 1,
                 limit: 1,
-                status: 'all',
-                installId: this.consumer.installId,  // ADDED
-                siteId: this.consumer.SiteId          // ADDED
+                status: 'all'
               }
             })
             .then(function(response) {
@@ -970,6 +992,18 @@ Opt-out reply STOP"></textarea>
               console.error('Error loading report:', error);
               vm.loadingReport = false;
             });
+          },
+
+          // ✅ NEW: Handle blur with delay to prevent losing focus tracking too fast
+          handleBlur: function() {
+            var vm = this;
+            setTimeout(function() {
+              // Only clear if no other input is focused
+              if (document.activeElement.tagName !== 'INPUT' && 
+                  document.activeElement.tagName !== 'TEXTAREA') {
+                vm.focusedField = null;
+              }
+            }, 100);
           },
 
           clearStatus: function() {
@@ -983,28 +1017,54 @@ Opt-out reply STOP"></textarea>
             vm.messageStatus = {};
           },
           
+          // ✅ ENHANCED: Insert merge field based on focused element
           insertMerge: function(value) {
             if (!value) return;
             
-            var textarea = this.$refs.messageTextarea;
-            if (!textarea) {
-              console.error('Message textarea not found');
-              return;
+            var vm = this;
+            var targetElement = null;
+            
+            // ✅ Determine which element to insert into based on focus
+            if (this.focusedField === 'tracked_link') {
+              targetElement = this.$refs.trackedLinkInput;
+              
+              if (targetElement) {
+                var startPos = targetElement.selectionStart || 0;
+                var endPos = targetElement.selectionEnd || 0;
+                var currentText = this.instance.tracked_link || '';
+                
+                this.instance.tracked_link = currentText.substring(0, startPos) + value + currentText.substring(endPos);
+                
+                this.$nextTick(function() {
+                  targetElement.focus();
+                  var newPos = startPos + value.length;
+                  targetElement.setSelectionRange(newPos, newPos);
+                });
+                
+                console.log('Inserted into tracked link:', value);
+              }
+            } else {
+              // Default to message textarea
+              targetElement = this.$refs.messageTextarea;
+              
+              if (targetElement) {
+                var startPos = targetElement.selectionStart || 0;
+                var endPos = targetElement.selectionEnd || 0;
+                var currentText = this.instance.message || '';
+                
+                this.instance.message = currentText.substring(0, startPos) + value + currentText.substring(endPos);
+                
+                this.$nextTick(function() {
+                  targetElement.focus();
+                  var newPos = startPos + value.length;
+                  targetElement.setSelectionRange(newPos, newPos);
+                });
+                
+                console.log('Inserted into message:', value);
+              }
             }
             
-            var startPos = textarea.selectionStart || 0;
-            var endPos = textarea.selectionEnd || 0;
-            var currentText = this.instance.message || '';
-            
-            this.instance.message = currentText.substring(0, startPos) + value + currentText.substring(endPos);
-            
-            var vm = this;
-            this.$nextTick(function() {
-              textarea.focus();
-              var newPos = startPos + value.length;
-              textarea.setSelectionRange(newPos, newPos);
-            });
-            
+            // Reset dropdowns
             this.selectedContactField = '';
             this.selectedCDOField = '';
           },
@@ -1187,7 +1247,6 @@ Opt-out reply STOP"></textarea>
                 .then(function(response){
                   vm.messageStatus = { success: 'Configuration successfully updated' };
                   vm.saving = false;
-                  // Reload report after save
                   vm.loadReport();
                 })
                 .catch(function (error) {
@@ -1216,7 +1275,7 @@ Opt-out reply STOP"></textarea>
           
           this.getProgramFields();
           this.loadCdoInfo();
-          this.loadReport(); // ADDED: Load report on mount
+          this.loadReport();
         }
       });
     </script>
