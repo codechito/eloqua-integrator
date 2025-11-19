@@ -999,7 +999,14 @@ Opt-out reply STOP"></textarea>
               }
             })
             .then(function(response) {
-              vm.reportStats = response.data.stats;
+             // vm.reportStats = response.data.stats;
+              vm.reportStats = {
+                sent: response.data.stats.sent || { count: 0, cost: 0 },
+                delivered: response.data.stats.delivered || { count: 0, cost: 0 },
+                bounced: response.data.stats.bounced || { count: 0, cost: 0 },  // ✅ Default if missing
+                failed: response.data.stats.failed || { count: 0, cost: 0 },
+                pending: response.data.stats.pending || { count: 0, cost: 0 }
+              };
               vm.loadingReport = false;
             })
             .catch(function(error) {
