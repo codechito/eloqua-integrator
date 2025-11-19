@@ -12,7 +12,7 @@
             background: #f5f5f5;
         }
         .container {
-            max-width: 1600px;
+            max-width: 1400px;
             margin: 0 auto;
             background: white;
             padding: 30px;
@@ -85,6 +85,7 @@
         tr:hover { 
             background: #f8f9fa; 
         }
+        /* ✅ UPDATED: Clickable status badges */
         .status-badge { 
             padding: 4px 10px; 
             border-radius: 12px; 
@@ -92,6 +93,19 @@
             font-weight: bold;
             text-transform: uppercase;
             letter-spacing: 0.5px;
+            display: inline-block;
+            transition: all 0.2s;
+        }
+        .status-badge.clickable {
+            cursor: pointer;
+        }
+        .status-badge.clickable:hover {
+            transform: translateY(-1px);
+            box-shadow: 0 2px 4px rgba(0,0,0,0.2);
+        }
+        .status-badge.clickable::after {
+            content: ' 🔍';
+            font-size: 10px;
         }
         .status-sent { background: #cfe2ff; color: #084298; }
         .status-delivered { background: #d1e7dd; color: #0f5132; }
@@ -99,46 +113,7 @@
         .status-failed { background: #f8d7da; color: #842029; }
         .status-pending { background: #fff3cd; color: #997404; }
         
-        /* ✅ NEW: Error display styles */
-        .error-code {
-            display: inline-block;
-            padding: 2px 6px;
-            background: #fff3cd;
-            border: 1px solid #ffc107;
-            border-radius: 3px;
-            font-size: 10px;
-            font-weight: bold;
-            color: #997404;
-            font-family: monospace;
-        }
-        
-        .error-message {
-            color: #dc3545;
-            font-size: 12px;
-            max-width: 250px;
-            overflow: hidden;
-            text-overflow: ellipsis;
-            white-space: nowrap;
-            cursor: help;
-        }
-        
-        .error-details-btn {
-            padding: 2px 8px;
-            font-size: 11px;
-            background: #f8d7da;
-            border: 1px solid #dc3545;
-            border-radius: 3px;
-            cursor: pointer;
-            color: #842029;
-            transition: all 0.2s;
-        }
-        
-        .error-details-btn:hover {
-            background: #dc3545;
-            color: white;
-        }
-        
-        /* ✅ NEW: Modal for error details */
+        /* Error modal styles */
         .error-modal {
             position: fixed;
             top: 0;
@@ -150,6 +125,12 @@
             justify-content: center;
             align-items: center;
             z-index: 1000;
+            animation: fadeIn 0.2s;
+        }
+        
+        @keyframes fadeIn {
+            from { opacity: 0; }
+            to { opacity: 1; }
         }
         
         .error-modal-content {
@@ -160,6 +141,18 @@
             max-height: 80vh;
             overflow-y: auto;
             box-shadow: 0 4px 20px rgba(0,0,0,0.3);
+            animation: slideIn 0.3s;
+        }
+        
+        @keyframes slideIn {
+            from { 
+                transform: translateY(-50px);
+                opacity: 0;
+            }
+            to { 
+                transform: translateY(0);
+                opacity: 1;
+            }
         }
         
         .error-modal-header {
@@ -174,6 +167,7 @@
         .error-modal-header h3 {
             margin: 0;
             color: #dc3545;
+            font-size: 20px;
         }
         
         .error-modal-close {
@@ -184,6 +178,7 @@
             border-radius: 4px;
             cursor: pointer;
             font-weight: bold;
+            transition: background 0.2s;
         }
         
         .error-modal-close:hover {
@@ -215,9 +210,23 @@
         .error-detail-code {
             font-family: monospace;
             background: #fff3cd;
-            padding: 2px 6px;
+            padding: 4px 8px;
             border-radius: 3px;
             font-size: 13px;
+            font-weight: bold;
+            color: #997404;
+        }
+        
+        .error-icon {
+            width: 50px;
+            height: 50px;
+            background: #f8d7da;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 24px;
+            margin: 0 auto 15px;
         }
         
         .btn { 
@@ -284,7 +293,7 @@
             border-radius: 4px;
         }
         .message-preview {
-            max-width: 250px;
+            max-width: 300px;
             overflow: hidden;
             text-overflow: ellipsis;
             white-space: nowrap;
@@ -357,7 +366,7 @@
             <div style="margin-top: 10px;">No SMS logs found</div>
         </div>
 
-        <!-- ✅ UPDATED: Table with Error Details column -->
+        <!-- ✅ UPDATED: Table without separate error column -->
         <div v-else style="overflow-x: auto;">
             <table>
                 <thead>
@@ -367,7 +376,6 @@
                         <th>Mobile</th>
                         <th>Message</th>
                         <th>Status</th>
-                        <th>Error Details</th>
                         <th>Sent At</th>
                         <th>Cost</th>
                         <th>Message ID</th>
@@ -383,27 +391,14 @@
                                 {{ log.message }}
                             </div>
                         </td>
+                        <!-- ✅ UPDATED: Clickable status badge for failed/bounced -->
                         <td>
-                            <span :class="'status-badge status-' + log.status">
+                            <span 
+                                :class="['status-badge', 'status-' + log.status, (log.status === 'failed' || log.status === 'bounced') && (log.errorMessage || log.errorCode) ? 'clickable' : '']"
+                                @click="(log.status === 'failed' || log.status === 'bounced') && (log.errorMessage || log.errorCode) ? showErrorDetails(log) : null"
+                                :title="(log.status === 'failed' || log.status === 'bounced') && (log.errorMessage || log.errorCode) ? 'Click to view error details' : ''">
                                 {{ log.status }}
                             </span>
-                        </td>
-                        <!-- ✅ NEW: Error Details Column -->
-                        <td>
-                            <div v-if="log.status === 'failed' || log.status === 'bounced'">
-                                <div v-if="log.errorCode" class="error-code">{{ log.errorCode }}</div>
-                                <div v-if="log.errorMessage" class="error-message" :title="log.errorMessage">
-                                    {{ log.errorMessage }}
-                                </div>
-                                <button 
-                                    v-if="log.errorMessage || log.errorDetails" 
-                                    @click="showErrorDetails(log)" 
-                                    class="error-details-btn"
-                                    style="margin-top: 5px;">
-                                    View Details
-                                </button>
-                            </div>
-                            <span v-else style="color: #999;">-</span>
                         </td>
                         <td>{{ formatDate(log.sentAt || log.bouncedAt) }}</td>
                         <td>${{ (log.cost || 0).toFixed(4) }}</td>
@@ -426,12 +421,20 @@
             </button>
         </div>
 
-        <!-- ✅ NEW: Error Details Modal -->
+        <!-- ✅ Error Details Modal -->
         <div v-if="selectedError" class="error-modal" @click.self="selectedError = null">
             <div class="error-modal-content">
                 <div class="error-modal-header">
-                    <h3>❌ Error Details</h3>
+                    <h3>
+                        <span v-if="selectedError.status === 'bounced'">⚠️ Bounced SMS</span>
+                        <span v-else>❌ Failed SMS</span>
+                    </h3>
                     <button @click="selectedError = null" class="error-modal-close">✕ Close</button>
+                </div>
+
+                <div class="error-icon">
+                    <span v-if="selectedError.status === 'bounced'">⚠️</span>
+                    <span v-else>❌</span>
                 </div>
 
                 <div class="error-detail-row">
@@ -473,20 +476,24 @@
                 <div class="error-detail-row" v-if="selectedError.errorDetails">
                     <div class="error-detail-label">Additional Details</div>
                     <div class="error-detail-value">
-                        <pre style="white-space: pre-wrap; font-size: 12px; background: #f8f9fa; padding: 10px; border-radius: 4px;">{{ formatJSON(selectedError.errorDetails) }}</pre>
+                        <pre style="white-space: pre-wrap; font-size: 12px; background: #f8f9fa; padding: 10px; border-radius: 4px; margin: 0;">{{ formatJSON(selectedError.errorDetails) }}</pre>
                     </div>
                 </div>
 
                 <div class="error-detail-row" v-if="selectedError.transmitSmsError">
                     <div class="error-detail-label">TransmitSMS Response</div>
                     <div class="error-detail-value">
-                        <pre style="white-space: pre-wrap; font-size: 12px; background: #f8f9fa; padding: 10px; border-radius: 4px;">{{ formatJSON(selectedError.transmitSmsError) }}</pre>
+                        <pre style="white-space: pre-wrap; font-size: 12px; background: #f8f9fa; padding: 10px; border-radius: 4px; margin: 0;">{{ formatJSON(selectedError.transmitSmsError) }}</pre>
                     </div>
                 </div>
 
                 <div class="error-detail-row">
                     <div class="error-detail-label">Timestamp</div>
                     <div class="error-detail-value">{{ formatDate(selectedError.createdAt) }}</div>
+                </div>
+
+                <div style="text-align: center; margin-top: 20px; padding-top: 20px; border-top: 1px solid #dee2e6;">
+                    <button @click="selectedError = null" class="btn btn-primary">Close</button>
                 </div>
             </div>
         </div>
@@ -516,7 +523,7 @@
                 page: 1,
                 statusFilter: 'all',
                 loading: true,
-                selectedError: null  // ✅ NEW: For error modal
+                selectedError: null
             },
             methods: {
                 async loadReport() {
@@ -533,7 +540,7 @@
                         });
 
                         this.instance = response.data.instance;
-                        this.logs = response.data.logs;
+                        this.logs = response.data.logs || [];
                         
                         this.stats = {
                             sent: response.data.stats.sent || { count: 0, cost: 0 },
@@ -573,11 +580,11 @@
                     const date = new Date(dateString);
                     return date.toLocaleString();
                 },
-                // ✅ NEW: Show error details modal
+                // Show error details modal
                 showErrorDetails(log) {
                     this.selectedError = log;
                 },
-                // ✅ NEW: Format JSON for display
+                // Format JSON for display
                 formatJSON(obj) {
                     if (typeof obj === 'string') {
                         try {
@@ -592,7 +599,7 @@
             mounted() {
                 this.loadReport();
                 
-                // ✅ Close modal on ESC key
+                // Close modal on ESC key
                 document.addEventListener('keydown', (e) => {
                     if (e.key === 'Escape' && this.selectedError) {
                         this.selectedError = null;
