@@ -23,9 +23,10 @@
             margin-bottom: 20px;
             color: #333;
         }
+        /* ✅ UPDATED: Support 5 cards */
         .stats-grid { 
             display: grid; 
-            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); 
+            grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); 
             gap: 15px; 
             margin-bottom: 30px; 
         }
@@ -59,6 +60,8 @@
         }
         .stat-card.sent { border-left: 4px solid #007bff; }
         .stat-card.delivered { border-left: 4px solid #28a745; }
+        /* ✅ NEW: Bounced styling */
+        .stat-card.bounced { border-left: 4px solid #fd7e14; }
         .stat-card.failed { border-left: 4px solid #dc3545; }
         .stat-card.pending { border-left: 4px solid #ffc107; }
         
@@ -94,6 +97,8 @@
         }
         .status-sent { background: #cfe2ff; color: #084298; }
         .status-delivered { background: #d1e7dd; color: #0f5132; }
+        /* ✅ NEW: Bounced badge styling */
+        .status-bounced { background: #ffe5cc; color: #cc6600; }
         .status-failed { background: #f8d7da; color: #842029; }
         .status-pending { background: #fff3cd; color: #997404; }
         
@@ -177,7 +182,7 @@
             <strong>Instance ID:</strong> {{ instanceId }}
         </div>
 
-        <!-- Stats Cards -->
+        <!-- ✅ UPDATED: Stats Cards - Now 5 cards -->
         <div class="stats-grid">
             <div class="stat-card sent">
                 <div class="stat-label">Sent</div>
@@ -189,24 +194,31 @@
                 <div class="stat-number">{{ stats.delivered.count }}</div>
                 <div class="stat-sublabel">${{ stats.delivered.cost.toFixed(2) }}</div>
             </div>
+            <!-- ✅ NEW: Bounced Card -->
+            <div class="stat-card bounced">
+                <div class="stat-label">Bounced</div>
+                <div class="stat-number">{{ stats.bounced.count }}</div>
+                <div class="stat-sublabel">${{ stats.bounced.cost.toFixed(2) }}</div>
+            </div>
             <div class="stat-card failed">
                 <div class="stat-label">Failed</div>
                 <div class="stat-number">{{ stats.failed.count }}</div>
-                <div class="stat-sublabel">{{ stats.failed.cost.toFixed(2) }} cost</div>
+                <div class="stat-sublabel">${{ stats.failed.cost.toFixed(2) }}</div>
             </div>
             <div class="stat-card pending">
                 <div class="stat-label">Pending</div>
                 <div class="stat-number">{{ stats.pending.count }}</div>
-                <div class="stat-sublabel">{{ stats.pending.cost.toFixed(2) }} cost</div>
+                <div class="stat-sublabel">-</div>
             </div>
         </div>
 
-        <!-- Filter and Download -->
+        <!-- ✅ UPDATED: Filter and Download with bounced option -->
         <div class="filter-bar">
             <select v-model="statusFilter" @change="loadReport" class="form-control" style="width: 200px;">
                 <option value="all">All Status</option>
                 <option value="sent">Sent</option>
                 <option value="delivered">Delivered</option>
+                <option value="bounced">Bounced</option>
                 <option value="failed">Failed</option>
                 <option value="pending">Pending</option>
             </select>
@@ -258,7 +270,7 @@
                                 {{ log.status }}
                             </span>
                         </td>
-                        <td>{{ formatDate(log.sentAt) }}</td>
+                        <td>{{ formatDate(log.sentAt || log.bouncedAt) }}</td>
                         <td>${{ (log.cost || 0).toFixed(4) }}</td>
                         <td style="font-family: monospace; font-size: 11px;">{{ log.messageId }}</td>
                     </tr>
@@ -293,9 +305,11 @@
                 instanceId: instanceId,
                 instance: {},
                 logs: [],
+                // ✅ UPDATED: Stats with bounced
                 stats: {
                     sent: { count: 0, cost: 0 },
                     delivered: { count: 0, cost: 0 },
+                    bounced: { count: 0, cost: 0 },  // ✅ NEW
                     failed: { count: 0, cost: 0 },
                     pending: { count: 0, cost: 0 }
                 },
@@ -313,18 +327,36 @@
                                 page: this.page,
                                 limit: 100,
                                 status: this.statusFilter,
-                                installId: installId,  // ADDED
-                                siteId: siteId          // ADDED
+                                installId: installId,
+                                siteId: siteId
                             }
                         });
 
                         this.instance = response.data.instance;
                         this.logs = response.data.logs;
-                        this.stats = response.data.stats;
+                        
+                        // ✅ UPDATED: Safe access with defaults for bounced
+                        this.stats = {
+                            sent: response.data.stats.sent || { count: 0, cost: 0 },
+                            delivered: response.data.stats.delivered || { count: 0, cost: 0 },
+                            bounced: response.data.stats.bounced || { count: 0, cost: 0 },  // ✅ Safe default
+                            failed: response.data.stats.failed || { count: 0, cost: 0 },
+                            pending: response.data.stats.pending || { count: 0, cost: 0 }
+                        };
+                        
                         this.pagination = response.data.pagination;
                     } catch (error) {
                         console.error('Error loading report:', error);
                         alert('Failed to load report: ' + (error.response?.data?.error || error.message));
+                        
+                        // ✅ Set defaults on error
+                        this.stats = {
+                            sent: { count: 0, cost: 0 },
+                            delivered: { count: 0, cost: 0 },
+                            bounced: { count: 0, cost: 0 },
+                            failed: { count: 0, cost: 0 },
+                            pending: { count: 0, cost: 0 }
+                        };
                     } finally {
                         this.loading = false;
                     }
@@ -336,7 +368,7 @@
                     }
                 },
                 downloadCSV() {
-                    window.location.href = `/eloqua/action/report/${instanceId}/csv?status=${this.statusFilter}`;
+                    window.location.href = `/eloqua/action/report/${instanceId}/csv?status=${this.statusFilter}&installId=${installId}&siteId=${siteId}`;
                 },
                 formatDate(dateString) {
                     if (!dateString) return '-';
