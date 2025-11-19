@@ -306,7 +306,6 @@
         font-size: 12px;
       }
 
-      /* ✅ NEW: Highlight focused input indicator */
       .merge-focus-indicator {
         font-size: 10px;
         color: #28a745;
@@ -586,8 +585,7 @@
             <div class="label-with-checkbox">
               <label>
                 Message
-                <!-- ✅ NEW: Show which field is focused -->
-                <span v-if="focusedField === 'message'" class="merge-focus-indicator">← Inserting here</span>
+                <span v-if="lastFocusedField === 'message'" class="merge-focus-indicator">← Inserting here</span>
               </label>
               <div class="checkbox-wrapper">
                 <label>Merge</label>
@@ -642,8 +640,7 @@
               v-model="instance.message" 
               class="form-control" 
               rows="5"
-              @focus="focusedField = 'message'"
-              @blur="handleBlur"
+              @focus="handleFocus('message')"
               placeholder="Enter your text message here, you can send up to 4 joined messages of 153 characters each.
 
 Standardised opt out message can be removed if not legally required. Please see your local SPAM compliance rules on use.
@@ -660,16 +657,14 @@ Opt-out reply STOP"></textarea>
           <div class="form-group">
             <label for="tracked_link">
               Tracked Link URL
-              <!-- ✅ NEW: Show which field is focused -->
-              <span v-if="focusedField === 'tracked_link'" class="merge-focus-indicator">← Inserting here</span>
+              <span v-if="lastFocusedField === 'tracked_link'" class="merge-focus-indicator">← Inserting here</span>
             </label>
             <input 
               ref="trackedLinkInput"
               type="text" 
               class="form-control" 
               v-model="instance.tracked_link"
-              @focus="focusedField = 'tracked_link'"
-              @blur="handleBlur"
+              @focus="handleFocus('tracked_link')"
               placeholder="Enter URL to track (will be shortened automatically)"/>
             <p style="font-size: 11px; color: #666; margin-top: 5px;">
                 <i>Add [tracked-link] to your message above. The URL you enter here will be automatically shortened and inserted. You can use merge fields like [C_OrderNumber] in this URL.</i>
@@ -924,8 +919,8 @@ Opt-out reply STOP"></textarea>
           selectedCDOField: '',
           cdoMergeFields: [],
           
-          // ✅ NEW: Track which field is focused
-          focusedField: null, // 'message' or 'tracked_link'
+          // ✅ CHANGED: Track last focused field (never clears)
+          lastFocusedField: 'message', // Default to message
           
           // CDO info display
           cdoName: null,
@@ -982,8 +977,8 @@ Opt-out reply STOP"></textarea>
                 page: 1,
                 limit: 1,
                 status: 'all',
-                installId: this.consumer.installId,  // ✅ ADDED
-                siteId: this.consumer.SiteId          // ✅ ADDED
+                installId: this.consumer.installId,
+                siteId: this.consumer.SiteId
               }
             })
             .then(function(response) {
@@ -996,16 +991,10 @@ Opt-out reply STOP"></textarea>
             });
           },
 
-          // ✅ NEW: Handle blur with delay to prevent losing focus tracking too fast
-          handleBlur: function() {
-            var vm = this;
-            setTimeout(function() {
-              // Only clear if no other input is focused
-              if (document.activeElement.tagName !== 'INPUT' && 
-                  document.activeElement.tagName !== 'TEXTAREA') {
-                vm.focusedField = null;
-              }
-            }, 100);
+          // ✅ NEW: Remember which field was focused
+          handleFocus: function(fieldName) {
+            this.lastFocusedField = fieldName;
+            console.log('Focused on:', fieldName);
           },
 
           clearStatus: function() {
@@ -1019,15 +1008,17 @@ Opt-out reply STOP"></textarea>
             vm.messageStatus = {};
           },
           
-          // ✅ ENHANCED: Insert merge field based on focused element
+          // ✅ UPDATED: Use lastFocusedField instead of focusedField
           insertMerge: function(value) {
             if (!value) return;
             
             var vm = this;
             var targetElement = null;
             
-            // ✅ Determine which element to insert into based on focus
-            if (this.focusedField === 'tracked_link') {
+            console.log('Inserting merge field:', value, 'into:', this.lastFocusedField);
+            
+            // ✅ Use lastFocusedField to determine where to insert
+            if (this.lastFocusedField === 'tracked_link') {
               targetElement = this.$refs.trackedLinkInput;
               
               if (targetElement) {
@@ -1043,7 +1034,7 @@ Opt-out reply STOP"></textarea>
                   targetElement.setSelectionRange(newPos, newPos);
                 });
                 
-                console.log('Inserted into tracked link:', value);
+                console.log('✓ Inserted into tracked link:', value);
               }
             } else {
               // Default to message textarea
@@ -1062,7 +1053,7 @@ Opt-out reply STOP"></textarea>
                   targetElement.setSelectionRange(newPos, newPos);
                 });
                 
-                console.log('Inserted into message:', value);
+                console.log('✓ Inserted into message:', value);
               }
             }
             
