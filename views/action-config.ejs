@@ -1186,7 +1186,6 @@ Opt-out reply STOP"></textarea>
               axios.post(location.pathname + location.search, {"instance": vm.instance})
                 .then(function(response){
                   vm.messageStatus = { success: 'Configuration successfully updated' };
-                  window.scrollTo({ top: 0, behavior: 'smooth' });
                   vm.saving = false;
                   // Reload report after save
                   vm.loadReport();
@@ -1196,7 +1195,6 @@ Opt-out reply STOP"></textarea>
                     error: error.response?.data?.message || 'Failed to update instance!',
                     description: error.response?.data?.description || ''
                   };
-                  window.scrollTo({ top: 0, behavior: 'smooth' });
                   vm.saving = false;
                 });
             }
@@ -1205,7 +1203,6 @@ Opt-out reply STOP"></textarea>
                 error: 'Message is required',
                 description: 'Please enter a message before saving'
               };
-              window.scrollTo({ top: 0, behavior: 'smooth' });
             }
           }
         },
