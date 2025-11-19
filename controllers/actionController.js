@@ -2231,10 +2231,9 @@ static async queueSmsJobs(instance, consumer, enrichedItems, executionId, campai
         }
     }
 
-    // controllers/actionController.js - ADD this method
     /**
      * Get action report data (JSON)
-     * ENHANCED: Include error code breakdown and full error details
+     * ENHANCED: Include error code breakdown, full error details, and separate bounced from failed
      * GET /eloqua/action/report/:instanceId/data
      */
     static getReport = asyncHandler(async (req, res) => {
@@ -2257,7 +2256,7 @@ static async queueSmsJobs(instance, consumer, enrichedItems, executionId, campai
             if (status !== 'all') {
                 query.status = status;
             }
-            if (errorCode !== 'all' && status === 'failed') {
+            if (errorCode !== 'all' && (status === 'failed' || status === 'bounced')) {
                 query.errorCode = errorCode;
             }
 
@@ -2269,9 +2268,9 @@ static async queueSmsJobs(instance, consumer, enrichedItems, executionId, campai
                 .sort({ createdAt: -1 })
                 .limit(parseInt(limit))
                 .skip((parseInt(page) - 1) * parseInt(limit))
-                .select('contactId emailAddress mobileNumber message messageId status sentAt deliveredAt errorMessage errorCode errorDetails cost campaignTitle transmitSmsError');
+                .select('contactId emailAddress mobileNumber message messageId status sentAt deliveredAt bouncedAt errorMessage errorCode errorDetails cost campaignTitle transmitSmsError');
 
-            // Get overall statistics
+            // ✅ UPDATED: Get overall statistics with bounced separate
             const stats = await SmsLog.aggregate([
                 { $match: { instanceId } },
                 {
@@ -2283,10 +2282,12 @@ static async queueSmsJobs(instance, consumer, enrichedItems, executionId, campai
                 }
             ]);
 
+            // ✅ UPDATED: Include bounced in stats map
             const statsMap = {
                 pending: { count: 0, cost: 0 },
                 sent: { count: 0, cost: 0 },
                 delivered: { count: 0, cost: 0 },
+                bounced: { count: 0, cost: 0 },  // ✅ NEW
                 failed: { count: 0, cost: 0 }
             };
 
@@ -2299,31 +2300,64 @@ static async queueSmsJobs(instance, consumer, enrichedItems, executionId, campai
                 }
             });
 
-            // ✅ Get error code breakdown
+            // ✅ UPDATED: Get error code breakdown for both failed AND bounced
             const errorStats = await SmsLog.aggregate([
-                { $match: { instanceId, status: 'failed' } },
+                { 
+                    $match: { 
+                        instanceId, 
+                        status: { $in: ['failed', 'bounced'] }  // ✅ Include both
+                    } 
+                },
                 {
                     $group: {
-                        _id: '$errorCode',
+                        _id: {
+                            status: '$status',      // ✅ Group by status too
+                            errorCode: '$errorCode'
+                        },
                         count: { $sum: 1 }
                     }
                 },
                 { $sort: { count: -1 } }
             ]);
 
-            const errorBreakdown = {};
+            const errorBreakdown = {
+                failed: {},
+                bounced: {}
+            };
+
             errorStats.forEach(stat => {
-                errorBreakdown[stat._id || 'UNKNOWN'] = stat.count;
+                const status = stat._id.status || 'failed';
+                const errorCode = stat._id.errorCode || 'UNKNOWN';
+                
+                if (!errorBreakdown[status]) {
+                    errorBreakdown[status] = {};
+                }
+                
+                errorBreakdown[status][errorCode] = stat.count;
             });
 
-            // ✅ Get top errors with details
-            const topErrors = await SmsLog.find({ 
+            // ✅ UPDATED: Get top errors with details (both failed and bounced)
+            const topFailedErrors = await SmsLog.find({ 
                 instanceId, 
                 status: 'failed' 
             })
                 .sort({ createdAt: -1 })
                 .limit(5)
                 .select('errorCode errorMessage contactId emailAddress createdAt errorDetails');
+
+            const topBouncedErrors = await SmsLog.find({ 
+                instanceId, 
+                status: 'bounced' 
+            })
+                .sort({ createdAt: -1 })
+                .limit(5)
+                .select('errorCode errorMessage contactId emailAddress bouncedAt createdAt errorDetails');
+
+            // ✅ Combine top errors
+            const topErrors = {
+                failed: topFailedErrors,
+                bounced: topBouncedErrors
+            };
 
             res.json({
                 success: true,
@@ -2333,9 +2367,9 @@ static async queueSmsJobs(instance, consumer, enrichedItems, executionId, campai
                     message: instance.message
                 },
                 logs,
-                stats: statsMap,
-                errorBreakdown,      // ✅ NEW: Error types count
-                topErrors,           // ✅ NEW: Recent errors with details
+                stats: statsMap,           // ✅ Now includes bounced
+                errorBreakdown,            // ✅ Separated by status
+                topErrors,                 // ✅ Separated by status
                 pagination: {
                     page: parseInt(page),
                     limit: parseInt(limit),
@@ -2358,10 +2392,17 @@ static async queueSmsJobs(instance, consumer, enrichedItems, executionId, campai
                     pending: { count: 0, cost: 0 },
                     sent: { count: 0, cost: 0 },
                     delivered: { count: 0, cost: 0 },
+                    bounced: { count: 0, cost: 0 },  // ✅ NEW
                     failed: { count: 0, cost: 0 }
                 },
-                errorBreakdown: {},
-                topErrors: []
+                errorBreakdown: {
+                    failed: {},
+                    bounced: {}
+                },
+                topErrors: {
+                    failed: [],
+                    bounced: []
+                }
             });
         }
     });

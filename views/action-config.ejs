@@ -467,9 +467,11 @@
         padding-bottom: 8px;
       }
 
+      /* ✅ UPDATED: Support 5 cards */
       .report-stats {
         display: flex;
         justify-content: space-around;
+        gap: 10px;
         margin-bottom: 15px;
         padding: 15px;
         background: #f8f9fa;
@@ -479,17 +481,20 @@
       .stat-card {
         text-align: center;
         flex: 1;
+        min-width: 80px;
       }
 
+      /* ✅ UPDATED: Smaller font for 5 cards */
       .stat-card .stat-number {
-        font-size: 32px;
+        font-size: 28px;
         font-weight: bold;
         color: #007bff;
         display: block;
       }
 
+      /* ✅ UPDATED: Smaller label for 5 cards */
       .stat-card .stat-label {
-        font-size: 12px;
+        font-size: 11px;
         color: #6c757d;
         text-transform: uppercase;
         margin-top: 5px;
@@ -502,6 +507,11 @@
 
       .stat-card.delivered .stat-number {
         color: #28a745;
+      }
+
+      /* ✅ NEW: Bounced color (orange) */
+      .stat-card.bounced .stat-number {
+        color: #fd7e14;
       }
 
       .stat-card.failed .stat-number {
@@ -800,7 +810,7 @@ Opt-out reply STOP"></textarea>
           </div>
         </div>
         
-        <!-- SMS Summary Chart -->
+        <!-- ✅ UPDATED: SMS Summary Chart with 5 cards -->
         <div class="report-section">
           <h5>📊 SMS Send Summary</h5>
 
@@ -810,7 +820,7 @@ Opt-out reply STOP"></textarea>
             <p>Loading statistics...</p>
           </div>
 
-          <!-- Statistics Cards -->
+          <!-- ✅ UPDATED: Statistics Cards - Now 5 cards -->
           <div v-else class="report-stats">
             <div class="stat-card sent">
               <span class="stat-number">{{ reportStats.sent.count }}</span>
@@ -822,9 +832,16 @@ Opt-out reply STOP"></textarea>
               <span class="stat-label">Delivered</span>
               <span class="stat-label" style="font-size: 10px; color: #999;">${{ reportStats.delivered.cost.toFixed(2) }}</span>
             </div>
+            <!-- ✅ NEW: Bounced Card -->
+            <div class="stat-card bounced">
+              <span class="stat-number">{{ reportStats.bounced.count }}</span>
+              <span class="stat-label">Bounced</span>
+              <span class="stat-label" style="font-size: 10px; color: #999;">${{ reportStats.bounced.cost.toFixed(2) }}</span>
+            </div>
             <div class="stat-card failed">
               <span class="stat-number">{{ reportStats.failed.count }}</span>
               <span class="stat-label">Failed</span>
+              <span class="stat-label" style="font-size: 10px; color: #999;">${{ reportStats.failed.cost.toFixed(2) }}</span>
             </div>
             <div class="stat-card pending">
               <span class="stat-number">{{ reportStats.pending.count }}</span>
@@ -919,8 +936,7 @@ Opt-out reply STOP"></textarea>
           selectedCDOField: '',
           cdoMergeFields: [],
           
-          // ✅ CHANGED: Track last focused field (never clears)
-          lastFocusedField: 'message', // Default to message
+          lastFocusedField: 'message',
           
           // CDO info display
           cdoName: null,
@@ -937,10 +953,11 @@ Opt-out reply STOP"></textarea>
           messageStatus: {},
           testingSms: false,
           
-          // Report summary data
+          // ✅ UPDATED: Report summary data with bounced
           reportStats: {
             sent: { count: 0, cost: 0 },
             delivered: { count: 0, cost: 0 },
+            bounced: { count: 0, cost: 0 },  // ✅ NEW
             failed: { count: 0, cost: 0 },
             pending: { count: 0, cost: 0 }
           },
@@ -991,7 +1008,6 @@ Opt-out reply STOP"></textarea>
             });
           },
 
-          // ✅ NEW: Remember which field was focused
           handleFocus: function(fieldName) {
             this.lastFocusedField = fieldName;
             console.log('Focused on:', fieldName);
@@ -1008,7 +1024,6 @@ Opt-out reply STOP"></textarea>
             vm.messageStatus = {};
           },
           
-          // ✅ UPDATED: Use lastFocusedField instead of focusedField
           insertMerge: function(value) {
             if (!value) return;
             
@@ -1017,7 +1032,6 @@ Opt-out reply STOP"></textarea>
             
             console.log('Inserting merge field:', value, 'into:', this.lastFocusedField);
             
-            // ✅ Use lastFocusedField to determine where to insert
             if (this.lastFocusedField === 'tracked_link') {
               targetElement = this.$refs.trackedLinkInput;
               
@@ -1037,7 +1051,6 @@ Opt-out reply STOP"></textarea>
                 console.log('✓ Inserted into tracked link:', value);
               }
             } else {
-              // Default to message textarea
               targetElement = this.$refs.messageTextarea;
               
               if (targetElement) {
@@ -1057,7 +1070,6 @@ Opt-out reply STOP"></textarea>
               }
             }
             
-            // Reset dropdowns
             this.selectedContactField = '';
             this.selectedCDOField = '';
           },
