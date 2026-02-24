@@ -3006,7 +3006,6 @@ static async queueSmsJobs(instance, consumer, enrichedItems, executionId, campai
                 'Retry Attempts',      // ✅ NEW
                 'Sent At',
                 'Delivered At',
-                'Cost',
                 'Campaign Title',
                 'Created At'
             ].join(','));
@@ -3029,7 +3028,6 @@ static async queueSmsJobs(instance, consumer, enrichedItems, executionId, campai
                     attempts,                                           // ✅ NEW
                     log.sentAt ? log.sentAt.toISOString() : '',
                     log.deliveredAt ? log.deliveredAt.toISOString() : '',
-                    log.cost || 0,
                     `"${(log.campaignTitle || '').replace(/"/g, '""')}"`,
                     log.createdAt ? log.createdAt.toISOString() : ''
                 ].join(','));

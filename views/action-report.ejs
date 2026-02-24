@@ -314,22 +314,18 @@
             <div class="stat-card sent">
                 <div class="stat-label">Sent</div>
                 <div class="stat-number">{{ stats.sent.count }}</div>
-                <div class="stat-sublabel">${{ stats.sent.cost.toFixed(2) }}</div>
             </div>
             <div class="stat-card delivered">
                 <div class="stat-label">Delivered</div>
                 <div class="stat-number">{{ stats.delivered.count }}</div>
-                <div class="stat-sublabel">${{ stats.delivered.cost.toFixed(2) }}</div>
             </div>
             <div class="stat-card bounced">
                 <div class="stat-label">Bounced</div>
                 <div class="stat-number">{{ stats.bounced.count }}</div>
-                <div class="stat-sublabel">${{ stats.bounced.cost.toFixed(2) }}</div>
             </div>
             <div class="stat-card failed">
                 <div class="stat-label">Failed</div>
                 <div class="stat-number">{{ stats.failed.count }}</div>
-                <div class="stat-sublabel">${{ stats.failed.cost.toFixed(2) }}</div>
             </div>
             <div class="stat-card pending">
                 <div class="stat-label">Pending</div>
@@ -377,7 +373,6 @@
                         <th>Message</th>
                         <th>Status</th>
                         <th>Sent At</th>
-                        <th>Cost</th>
                         <th>Message ID</th>
                     </tr>
                 </thead>
@@ -401,7 +396,6 @@
                             </span>
                         </td>
                         <td>{{ formatDate(log.sentAt || log.bouncedAt) }}</td>
-                        <td>${{ (log.cost || 0).toFixed(4) }}</td>
                         <td style="font-family: monospace; font-size: 11px;">{{ log.messageId || '-' }}</td>
                     </tr>
                 </tbody>
