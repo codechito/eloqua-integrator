@@ -640,6 +640,7 @@
                     <option value="all">All</option>
                     <option value="first">First</option>
                     <option value="last">Last</option>
+                    <option value="id">Same ID</option>
                   </select>
                 </div>
               </div>
@@ -740,7 +741,6 @@ Opt-out reply STOP"></textarea>
               <div><strong>Message ID:</strong> {{ messageStatus.details.messageId }}</div>
               <div><strong>Sent to:</strong> {{ messageStatus.details.to }}</div>
               <div><strong>Length:</strong> {{ messageStatus.details.messageLength }} characters</div>
-              <div v-if="messageStatus.details.cost"><strong>Cost:</strong> ${{ messageStatus.details.cost }}</div>
               <div v-if="messageStatus.details.hasTrackedLink"><strong>Tracked Link:</strong> Yes</div>
             </div>
           </div>
@@ -825,23 +825,19 @@ Opt-out reply STOP"></textarea>
             <div class="stat-card sent">
               <span class="stat-number">{{ reportStats.sent.count }}</span>
               <span class="stat-label">Sent</span>
-              <span class="stat-label" style="font-size: 10px; color: #999;">${{ reportStats.sent.cost.toFixed(2) }}</span>
             </div>
             <div class="stat-card delivered">
               <span class="stat-number">{{ reportStats.delivered.count }}</span>
               <span class="stat-label">Delivered</span>
-              <span class="stat-label" style="font-size: 10px; color: #999;">${{ reportStats.delivered.cost.toFixed(2) }}</span>
             </div>
             <!-- ✅ NEW: Bounced Card -->
             <div class="stat-card bounced">
               <span class="stat-number">{{ reportStats.bounced.count }}</span>
               <span class="stat-label">Bounced</span>
-              <span class="stat-label" style="font-size: 10px; color: #999;">${{ reportStats.bounced.cost.toFixed(2) }}</span>
             </div>
             <div class="stat-card failed">
               <span class="stat-number">{{ reportStats.failed.count }}</span>
               <span class="stat-label">Failed</span>
-              <span class="stat-label" style="font-size: 10px; color: #999;">${{ reportStats.failed.cost.toFixed(2) }}</span>
             </div>
             <div class="stat-card pending">
               <span class="stat-number">{{ reportStats.pending.count }}</span>
