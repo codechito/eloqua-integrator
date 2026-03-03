@@ -1,8 +1,9 @@
 const { Consumer, ActionInstance, SmsJob, SmsLog } = require('../models');
 const { EloquaService, TransmitSmsService } = require('../services');
-const { 
-    logger, 
-    formatPhoneNumber, 
+const { parsePhoneNumber } = require('libphonenumber-js');
+const {
+    logger,
+    formatPhoneNumber,
     generateId,
     replaceMergeFields,
     extractMergeFields
@@ -1311,8 +1312,8 @@ static async queueSmsJobs(instance, consumer, enrichedItems, executionId, campai
                 continue;
             }
 
-            // Extract country using parsed field name (fallback to default)
-            const country = item[countryFieldName] || consumer.default_country || 'Australia';
+            // Extract country using parsed field name (no hardcoded fallback)
+            const country = item[countryFieldName] || consumer.default_country;
 
             logger.debug('Extracted contact data', {
                 contactId: item.ContactID,
@@ -1640,77 +1641,78 @@ static async queueSmsJobs(instance, consumer, enrichedItems, executionId, campai
     }
 
     /**
-     * Format mobile number
-     * SIMPLE: Just clean up formatting (remove spaces, hyphens, parentheses)
-     * Remove leading 0 if present and add country code
-     * No + prefix added
+     * Format mobile number using libphonenumber-js.
+     * Returns digits-only E.164 (no + prefix) to match TransmitSMS API expectations.
+     * Throws if country is missing and number has no international prefix, or if invalid.
      */
     static formatMobileNumber(mobileNumber, country) {
         if (!mobileNumber) return null;
 
-        // Remove all spaces, hyphens, and parentheses
-        let cleaned = mobileNumber.replace(/[\s\-\(\)]/g, '');
+        const cleaned = mobileNumber.replace(/[\s\-\(\)\.]/g, '');
 
-        // Remove + if present
+        let phoneNumber;
         if (cleaned.startsWith('+')) {
-            cleaned = cleaned.substring(1);
+            phoneNumber = parsePhoneNumber(cleaned);
+        } else {
+            const regionCode = ActionController.getRegionCode(country);
+            if (!regionCode) {
+                throw new Error('Country is required when phone number has no international prefix');
+            }
+            phoneNumber = parsePhoneNumber(cleaned, regionCode);
         }
 
-        // If starts with 0, remove it and add country code
-        if (cleaned.startsWith('0')) {
-            const countryCode = ActionController.getCountryCode(country);
-            // Get just the digits from country code (remove +)
-            const countryDigits = countryCode.replace('+', '');
-            cleaned = countryDigits + cleaned.substring(1);
+        if (!phoneNumber || !phoneNumber.isValid()) {
+            throw new Error('Phone number is not valid');
         }
 
-        return cleaned;
+        // Strip leading + to match current TransmitSMS API format
+        return phoneNumber.number.replace('+', '');
     }
 
     /**
-     * Get country calling code from country name
+     * Resolve country name or alpha-2 code to ISO 3166-1 alpha-2 region code.
+     * Returns null for unrecognised values (no default fallback).
      */
-    static getCountryCode(country) {
+    static getRegionCode(country) {
+        if (!country) return null;
         const normalized = country.toUpperCase().trim();
-        
-        const countryCodes = {
-            'AUSTRALIA': '+61',
-            'AU': '+61',
-            'PHILIPPINES': '+63',
-            'PH': '+63',
-            'UNITED STATES': '+1',
-            'USA': '+1',
-            'US': '+1',
-            'UNITED KINGDOM': '+44',
-            'UK': '+44',
-            'GB': '+44',
-            'NEW ZEALAND': '+64',
-            'NZ': '+64',
-            'SINGAPORE': '+65',
-            'SG': '+65',
-            'INDIA': '+91',
-            'IN': '+91',
-            'MALAYSIA': '+60',
-            'MY': '+60',
-            'THAILAND': '+66',
-            'TH': '+66',
-            'INDONESIA': '+62',
-            'ID': '+62',
-            'VIETNAM': '+84',
-            'VN': '+84',
-            'CHINA': '+86',
-            'CN': '+86',
-            'JAPAN': '+81',
-            'JP': '+81',
-            'SOUTH KOREA': '+82',
-            'KR': '+82',
-            'HONG KONG': '+852',
-            'HK': '+852',
-            'CANADA': '+1',
-            'CA': '+1'
+        const regionCodes = {
+            'AUSTRALIA': 'AU',
+            'AU': 'AU',
+            'PHILIPPINES': 'PH',
+            'PH': 'PH',
+            'UNITED STATES': 'US',
+            'USA': 'US',
+            'US': 'US',
+            'UNITED KINGDOM': 'GB',
+            'UK': 'GB',
+            'GB': 'GB',
+            'NEW ZEALAND': 'NZ',
+            'NZ': 'NZ',
+            'SINGAPORE': 'SG',
+            'SG': 'SG',
+            'INDIA': 'IN',
+            'IN': 'IN',
+            'MALAYSIA': 'MY',
+            'MY': 'MY',
+            'THAILAND': 'TH',
+            'TH': 'TH',
+            'INDONESIA': 'ID',
+            'ID': 'ID',
+            'VIETNAM': 'VN',
+            'VN': 'VN',
+            'CHINA': 'CN',
+            'CN': 'CN',
+            'JAPAN': 'JP',
+            'JP': 'JP',
+            'SOUTH KOREA': 'KR',
+            'KR': 'KR',
+            'HONG KONG': 'HK',
+            'HK': 'HK',
+            'CANADA': 'CA',
+            'CA': 'CA',
         };
-
-        return countryCodes[normalized] || '+61'; // Default Australia
+        return regionCodes[normalized] || null;
     }
 
     /**
