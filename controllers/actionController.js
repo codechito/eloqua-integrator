@@ -830,8 +830,7 @@ class ActionController {
                 executionId,
                 contacts: executionData.items.map(item => ({
                     contactId: item.ContactID,
-                    email: item.EmailAddress,
-                    mobile: item.C_MobilePhone || item.MobilePhone || item[Object.keys(item).find(k => k.toLowerCase().includes('mobile'))] || null
+                    email: item.EmailAddress
                 }))
             });
         }
@@ -1004,6 +1003,19 @@ class ActionController {
             logger.info('Items enriched with message data', {
                 itemCount: enrichedItems.length,
                 sampleMessage: enrichedItems[0]?.message
+            });
+
+            // Log all contacts with accurate mobile numbers using the configured recipient field
+            const recipientField = instance.recipient_field?.split('__').pop();
+            logger.info('Action notify contacts with mobile', {
+                instanceId,
+                executionId,
+                recipientField,
+                contacts: enrichedItems.map(item => ({
+                    contactId: item.ContactID,
+                    email: item.EmailAddress,
+                    mobile: recipientField ? (item[recipientField] || null) : null
+                }))
             });
 
             // Queue SMS jobs (returns {success, failed, errors} object)
