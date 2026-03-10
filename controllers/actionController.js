@@ -815,14 +815,26 @@ class ActionController {
         
         const executionData = req.body;
 
-        logger.info('Action notify received', { 
-            instanceId, 
+        logger.info('Action notify received', {
+            instanceId,
             installId,
             assetId,
             executionId,
             recordCount: executionData.items?.length || 0,
             hasMore: executionData.hasMore
         });
+
+        if (executionData.items?.length > 0) {
+            logger.info('Action notify contacts received', {
+                instanceId,
+                executionId,
+                contacts: executionData.items.map(item => ({
+                    contactId: item.ContactID,
+                    email: item.EmailAddress,
+                    mobile: item.C_MobilePhone || item.MobilePhone || item[Object.keys(item).find(k => k.toLowerCase().includes('mobile'))] || null
+                }))
+            });
+        }
 
         // Process asynchronously
         ActionController.processNotifyAsync(
@@ -1241,14 +1253,12 @@ static async queueSmsJobs(instance, consumer, enrichedItems, executionId, campai
         const item = enrichedItems[i];
         
         try {
-            logger.debug('Processing item for SMS', {
+            logger.info('Processing item for SMS', {
                 index: i + 1,
                 total: enrichedItems.length,
                 contactId: item.ContactID,
                 email: item.EmailAddress,
-                recipientFieldName,
-                recipientValue: item[recipientFieldName],
-                availableFields: Object.keys(item)
+                mobile: item[recipientFieldName] || null
             });
 
             // Extract mobile number using parsed field name
