@@ -103,7 +103,7 @@ const SmsLogSchema = new mongoose.Schema({
     },
     decisionStatus: {
         type: String,
-        enum: ['pending', 'yes', 'no'],
+        enum: ['pending', 'processing', 'yes', 'no'],
         default: 'pending'
     },
     decisionProcessedAt: Date,

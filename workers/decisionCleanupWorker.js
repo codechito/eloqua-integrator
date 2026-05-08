@@ -116,15 +116,25 @@ class DecisionCleanupWorker {
 
             const now = new Date();
 
-            // Find all pending decisions that have passed their deadline
-            // LIMIT to 30 recipients per run
-            const expiredLogs = await SmsLog.find({
-                decisionStatus: 'pending',
-                decisionDeadline: { $lt: now },
-                decisionInstanceId: { $ne: null, $exists: true }
-            })
-            .sort({ decisionDeadline: 1 }) // Process oldest first
-            .limit(this.config.batchSize);
+            // Reset any logs stuck in 'processing' for over 5 minutes (crash/restart recovery)
+            await this.recoverStaleDecisions(now);
+
+            // Atomically claim expired logs to prevent duplicate processing across instances.
+            // Each findOneAndUpdate is atomic — only one instance can claim each log.
+            const expiredLogs = [];
+            for (let i = 0; i < this.config.batchSize; i++) {
+                const log = await SmsLog.findOneAndUpdate(
+                    {
+                        decisionStatus: 'pending',
+                        decisionDeadline: { $lt: now },
+                        decisionInstanceId: { $ne: null, $exists: true }
+                    },
+                    { $set: { decisionStatus: 'processing' } },
+                    { new: true, sort: { decisionDeadline: 1 } }
+                );
+                if (!log) break;
+                expiredLogs.push(log);
+            }
 
             if (expiredLogs.length === 0) {
                 logger.debug('No expired decision evaluations found');
@@ -492,6 +502,21 @@ class DecisionCleanupWorker {
     }
 
     /**
+     * Reset SmsLogs stuck in 'processing' for over 5 minutes back to 'pending'.
+     * Handles crashes or restarts where a log was claimed but never evaluated.
+     */
+    async recoverStaleDecisions(now) {
+        const staleThreshold = new Date(now - 5 * 60 * 1000);
+        const result = await SmsLog.updateMany(
+            { decisionStatus: 'processing', updatedAt: { $lt: staleThreshold } },
+            { $set: { decisionStatus: 'pending' } }
+        );
+        if (result.modifiedCount > 0) {
+            logger.warn('Recovered stale decision logs', { count: result.modifiedCount });
+        }
+    }
+
+    /**
      * Get current decision statistics
      */
     async getDecisionStats() {
@@ -516,11 +541,11 @@ class DecisionCleanupWorker {
             // Count waiting for response (pending and not expired)
             const waitingForResponse = await SmsLog.countDocuments({
                 decisionInstanceId: { $ne: null },
-                decisionStatus: 'pending',
+                decisionStatus: { $in: ['pending', 'processing'] },
                 decisionDeadline: { $gte: now }
             });
 
-            // Count waiting for cleanup (pending and expired)
+            // Count waiting for cleanup (pending and expired, not yet claimed)
             const waitingForCleanup = await SmsLog.countDocuments({
                 decisionInstanceId: { $ne: null },
                 decisionStatus: 'pending',

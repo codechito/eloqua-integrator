@@ -21,7 +21,8 @@ class SmsWorker {
             totalFailed: 0,
             lastPollAt: null,
             currentBatchSize: 0,
-            rateLimitDelays: 0  // ✅ NEW: Track rate limit delays
+            rateLimitDelays: 0,
+            totalRecovered: 0
         };
     }
 
@@ -45,7 +46,8 @@ class SmsWorker {
             lastPollAt: this.stats.lastPollAt,
             currentBatchSize: this.stats.currentBatchSize,
             activeExecutions: this.executionBatches.size,
-            rateLimitDelays: this.stats.rateLimitDelays,  // ✅ NEW
+            rateLimitDelays: this.stats.rateLimitDelays,
+            totalRecovered: this.stats.totalRecovered,
             pollInterval: this.pollInterval,
             batchSize: this.batchSize
         };
@@ -109,6 +111,7 @@ class SmsWorker {
         while (this.isRunning) {
             try {
                 this.stats.lastPollAt = new Date();
+                await this.recoverStaleJobs();
                 await this.processPendingJobs();
             } catch (error) {
                 logger.error('Error in worker poll cycle', {
@@ -123,16 +126,39 @@ class SmsWorker {
     }
 
     /**
+     * Reset jobs stuck in 'processing' for over 5 minutes back to 'pending'.
+     * Handles crashes or mid-deploy restarts where a job was claimed but never completed.
+     */
+    async recoverStaleJobs() {
+        const staleThreshold = new Date(Date.now() - 5 * 60 * 1000);
+        const result = await SmsJob.updateMany(
+            { status: 'processing', processingStartedAt: { $lt: staleThreshold } },
+            { $set: { status: 'pending' } }
+        );
+        if (result.modifiedCount > 0) {
+            logger.warn('Recovered stale SMS jobs', { count: result.modifiedCount });
+            this.stats.totalRecovered += result.modifiedCount;
+        }
+    }
+
+    /**
      * Process pending SMS jobs
      */
     async processPendingJobs() {
         try {
-            const jobs = await SmsJob.find({
-                status: 'pending',
-                scheduledAt: { $lte: new Date() }
-            })
-            .sort({ scheduledAt: 1 })
-            .limit(this.batchSize);
+            // Atomically claim jobs using findOneAndUpdate to prevent duplicate processing
+            // across multiple server instances (autoscaling). Each claim is a single atomic
+            // operation — only one instance can claim each job.
+            const jobs = [];
+            for (let i = 0; i < this.batchSize; i++) {
+                const job = await SmsJob.findOneAndUpdate(
+                    { status: 'pending', scheduledAt: { $lte: new Date() } },
+                    { $set: { status: 'processing', processingStartedAt: new Date() } },
+                    { new: true, sort: { scheduledAt: 1 } }
+                );
+                if (!job) break;
+                jobs.push(job);
+            }
 
             if (jobs.length === 0) {
                 logger.debug('No pending SMS jobs found');
@@ -357,12 +383,14 @@ class SmsWorker {
      */
     async checkAndCompleteExecution(executionKey, sampleJob) {
         try {
-            // Check if there are any more pending jobs for this execution
+            // Check if there are any more pending OR in-flight (processing) jobs for this
+            // execution. With multiple instances, 'processing' jobs on another instance
+            // must also complete before we sync to Eloqua.
             const pendingCount = await SmsJob.countDocuments({
                 installId: sampleJob.installId,
                 instanceId: sampleJob.instanceId,
                 executionId: sampleJob.executionId,
-                status: 'pending'
+                status: { $in: ['pending', 'processing'] }
             });
 
             if (pendingCount === 0) {
