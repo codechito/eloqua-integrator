@@ -369,73 +369,52 @@ class ActionController {
 
         const countries = require('../data/countries.json');
 
-        // Get sender IDs
-        let sender_ids = {
-            'Virtual Number': [],
-            'Business Name': [],
-            'Mobile Number': []
-        };
+        // Initialize a single EloquaService instance (reused across all calls)
+        const eloquaService = new EloquaService(installId, siteId);
+        await eloquaService.initialize();
 
-        if (consumer.transmitsms_api_key && consumer.transmitsms_api_secret) {
-            try {
-                const transmitSmsService = new TransmitSmsService(
-                    consumer.transmitsms_api_key,
-                    consumer.transmitsms_api_secret
-                );
-                
-                sender_ids = await transmitSmsService.getSenderIds();
-            } catch (error) {
-                logger.warn('Could not fetch sender IDs', { error: error.message });
-            }
-        }
-
-        // Get custom objects
-        let custom_objects = { elements: [] };
-        try {
-            const eloquaService = new EloquaService(installId, siteId);
-            await eloquaService.initialize();
-            custom_objects = await eloquaService.getCustomObjects('', 100);
-        } catch (error) {
-            logger.warn('Could not fetch custom objects', { error: error.message });
-        }
-
-        // Get contact fields using Bulk API (has proper internalName)
-        let merge_fields = [];
-        try {
-            const eloquaService = new EloquaService(installId, siteId);
-            await eloquaService.initialize();
-            
-            const contactFieldsResponse = await eloquaService.getContactFields(1000);
-            merge_fields = contactFieldsResponse.items || [];
-
-            // **CRITICAL: Validate that fields have internalName**
-            merge_fields = merge_fields.filter(field => {
-                if (!field.internalName) {
-                    logger.warn('Contact field missing internalName', { 
-                        fieldId: field.id, 
-                        fieldName: field.name 
-                    });
-                    return false;
+        // Run all external API calls in parallel
+        const [sender_ids, custom_objects, contactFieldsResponse] = await Promise.all([
+            // TransmitSMS sender IDs
+            (async () => {
+                if (!consumer.transmitsms_api_key || !consumer.transmitsms_api_secret) {
+                    return { 'Virtual Number': [], 'Business Name': [], 'Mobile Number': [] };
                 }
-                return true;
-            });
+                try {
+                    const transmitSmsService = new TransmitSmsService(
+                        consumer.transmitsms_api_key,
+                        consumer.transmitsms_api_secret
+                    );
+                    return await transmitSmsService.getSenderIds();
+                } catch (error) {
+                    logger.warn('Could not fetch sender IDs', { error: error.message });
+                    return { 'Virtual Number': [], 'Business Name': [], 'Mobile Number': [] };
+                }
+            })(),
 
-            logger.info('Contact fields loaded and validated', {
-                count: merge_fields.length,
-                sampleField: merge_fields[0] ? {
-                    id: merge_fields[0].id,
-                    name: merge_fields[0].name,
-                    internalName: merge_fields[0].internalName
-                } : null
-            });
+            // Eloqua custom objects
+            eloquaService.getCustomObjects('', 100).catch(error => {
+                logger.warn('Could not fetch custom objects', { error: error.message });
+                return { elements: [] };
+            }),
 
-        } catch (error) {
-            logger.error('Failed to fetch contact fields', { 
-                error: error.message,
-                stack: error.stack
-            });
-            
-            // Fallback fields
+            // Eloqua contact fields
+            eloquaService.getContactFields(1000).catch(error => {
+                logger.error('Failed to fetch contact fields', { error: error.message });
+                return { items: [] };
+            })
+        ]);
+
+        // Validate contact fields have internalName
+        let merge_fields = (contactFieldsResponse.items || []).filter(field => {
+            if (!field.internalName) {
+                logger.warn('Contact field missing internalName', { fieldId: field.id, fieldName: field.name });
+                return false;
+            }
+            return true;
+        });
+
+        if (merge_fields.length === 0) {
             merge_fields = [
                 { id: 'EmailAddress', name: 'Email Address', internalName: 'EmailAddress', dataType: 'string' },
                 { id: 'FirstName', name: 'First Name', internalName: 'FirstName', dataType: 'string' },
@@ -445,57 +424,30 @@ class ActionController {
             ];
         }
 
-        // If Program, get CDO fields
+        logger.info('Contact fields loaded and validated', { count: merge_fields.length });
+
+        // If CDO is configured, fetch its fields (sequential — depends on instance config)
         let fields = merge_fields;
-        
+
         if (instance.program_coid) {
             try {
-                const eloquaService = new EloquaService(installId, siteId);
-                await eloquaService.initialize();
                 const programCDO = await eloquaService.getCustomObject(instance.program_coid);
-                
                 if (programCDO.fields) {
                     fields = programCDO.fields.filter(field => {
                         if (!field.internalName) {
-                            logger.warn('CDO field missing internalName', { 
-                                fieldId: field.id, 
-                                fieldName: field.name 
-                            });
+                            logger.warn('CDO field missing internalName', { fieldId: field.id, fieldName: field.name });
                             return false;
                         }
                         return true;
                     });
-
-                    logger.info('Program CDO fields loaded', {
-                        program_coid: instance.program_coid,
-                        fieldCount: fields.length,
-                        sampleField: fields[0]
-                    });
+                    logger.info('Program CDO fields loaded', { program_coid: instance.program_coid, fieldCount: fields.length });
                 }
-
             } catch (error) {
-                logger.warn('Could not fetch program CDO fields', { 
-                    error: error.message,
-                    program_coid: instance.program_coid
-                });
+                logger.warn('Could not fetch program CDO fields', { error: error.message, program_coid: instance.program_coid });
             }
         }
 
-        // **CRITICAL LOG: Check what we're sending to frontend**
-        logger.info('Fields being sent to frontend', {
-            fieldCount: fields.length,
-            firstField: fields[0] ? {
-                id: fields[0].id,
-                name: fields[0].name,
-                internalName: fields[0].internalName,
-                hasInternalName: !!fields[0].internalName
-            } : null,
-            secondField: fields[1] ? {
-                id: fields[1].id,
-                name: fields[1].name,
-                internalName: fields[1].internalName
-            } : null
-        });
+        logger.info('Fields being sent to frontend', { fieldCount: fields.length });
 
         res.render('action-config', {
             consumer: consumer.toObject(),
