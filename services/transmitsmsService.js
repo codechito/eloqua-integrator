@@ -69,14 +69,31 @@ class TransmitSmsService {
 
             return response.data;
         } catch (error) {
-            const errorMessage = error.response?.data?.error?.description || error.message;
             const statusCode = error.response?.status;
+            const responseData = error.response?.data;
+            const errorData = responseData?.error;
+
+            let errorMessage = error.message;
+            if (typeof errorData === 'string') {
+                errorMessage = errorData;
+            } else if (typeof errorData?.description === 'string') {
+                errorMessage = errorData.description;
+            } else if (errorData?.code) {
+                errorMessage = errorData.code;
+            } else if (errorData) {
+                errorMessage = JSON.stringify(errorData);
+            }
+
+            const optouts = responseData?.recipients?.optouts || responseData?.optouts || [];
+            const fails   = responseData?.recipients?.fails   || responseData?.fails   || [];
+            if (optouts.length) errorMessage += ` — ${optouts.length} number(s) opted out`;
+            if (fails.length && !optouts.length) errorMessage += ` — ${fails.length} recipient(s) failed`;
 
             logger.error(`TransmitSMS API Error: ${endpoint} ${method}`, {
                 status: statusCode,
                 error: errorMessage,
                 requestData: data,
-                responseData: error.response?.data
+                responseData
             });
 
             throw new Error(`TransmitSMS API Error (${statusCode}): ${errorMessage}`);
