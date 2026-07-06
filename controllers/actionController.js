@@ -1,6 +1,7 @@
 const { Consumer, ActionInstance, SmsJob, SmsLog } = require('../models');
 const { EloquaService, TransmitSmsService } = require('../services');
 const { parsePhoneNumber } = require('libphonenumber-js');
+const moment = require('moment');
 const {
     logger,
     formatPhoneNumber,
@@ -703,19 +704,21 @@ class ActionController {
             recordDefinition["Id"] = `{{CustomObject[${instance.program_coid}].Id}}`;
         }
 
-        // Extract merge fields from message [FieldName]
+        // Extract merge fields from message [FieldName] or [FieldName|DateFormat]
         const templatedFields = instance.message ? instance.message.match(/\[([^\]]+)\]/g) : null;
         if (templatedFields) {
             templatedFields.forEach(function(field) {
-                const fieldName = field.replace(/[\[\]]/g, '');
-                
+                const inner = field.replace(/[\[\]]/g, '');
+                // Strip optional |DateFormat suffix to get the actual field name
+                const fieldName = inner.includes('|') ? inner.split('|')[0] : inner;
+
                 // Skip special fields
                 if (fieldName.indexOf("tracked-link") !== -1 || fieldName.indexOf("unsub-reply-link") !== -1) {
                     return;
                 }
 
                 const cleanFieldName = fieldName.replace("C_", "");
-                
+
                 if (!recordDefinition[cleanFieldName]) {
                     if (instance.program_coid) {
                         recordDefinition[cleanFieldName] = `{{CustomObject[${instance.program_coid}].Contact.Field(${fieldName})}}`;
@@ -726,13 +729,14 @@ class ActionController {
             });
         }
 
-        // Extract merge fields from tracked link URL [FieldName]
+        // Extract merge fields from tracked link URL [FieldName] or [FieldName|DateFormat]
         const trackedLinkFields = instance.tracked_link ? instance.tracked_link.match(/\[([^\]]+)\]/g) : null;
         if (trackedLinkFields) {
             trackedLinkFields.forEach(function(field) {
-                const fieldName = field.replace(/[\[\]]/g, '');
+                const inner = field.replace(/[\[\]]/g, '');
+                const fieldName = inner.includes('|') ? inner.split('|')[0] : inner;
                 const cleanFieldName = fieldName.replace("C_", "");
-                
+
                 if (!recordDefinition[cleanFieldName]) {
                     if (instance.program_coid) {
                         recordDefinition[cleanFieldName] = `{{CustomObject[${instance.program_coid}].Contact.Field(${fieldName})}}`;
@@ -820,12 +824,16 @@ class ActionController {
 
         return items.map(item => {
             // Process message - replace merge fields
+            // Supports [FieldName] and [FieldName|DD/MM/YYYY] for date formatting
             let processedMessage = instance.message;
             const mergeFields = instance.message ? instance.message.match(/\[([^\]]+)\]/g) : null;
 
             if (mergeFields) {
                 for (const field of mergeFields) {
-                    const fieldName = field.replace(/[\[\]]/g, '');
+                    const inner = field.replace(/[\[\]]/g, '');
+                    const pipeIdx = inner.indexOf('|');
+                    const fieldName = pipeIdx === -1 ? inner : inner.substring(0, pipeIdx);
+                    const dateFormat = pipeIdx === -1 ? null : inner.substring(pipeIdx + 1);
 
                     // Skip special fields
                     if (fieldName === 'tracked-link' || fieldName === 'unsub-reply-link') {
@@ -833,10 +841,12 @@ class ActionController {
                     }
 
                     // Item has fields like: C_FirstName, C_MobilePhone, etc.
-                    const fieldValue = item[fieldName] || item[fieldName.replace('C_', '')] || '';
+                    const rawValue = item[fieldName] || item[fieldName.replace('C_', '')] || '';
+                    const fieldValue = ActionController.formatMergeValue(rawValue, dateFormat);
 
                     logger.debug('Replaced merge field in message', {
                         field: fieldName,
+                        dateFormat: dateFormat || null,
                         value: fieldValue
                     });
 
@@ -845,10 +855,11 @@ class ActionController {
             }
 
             // Process tracked link URL if exists
+            // Also supports [FieldName|DateFormat] in tracked link URLs
             let processedTrackedLink = null;
             if (instance.tracked_link) {
                 processedTrackedLink = instance.tracked_link;
-                
+
                 logger.debug('Processing tracked link', {
                     originalUrl: instance.tracked_link,
                     hasMergeFields: /\[([^\]]+)\]/.test(instance.tracked_link)
@@ -858,12 +869,17 @@ class ActionController {
 
                 if (linkMergeFields) {
                     for (const field of linkMergeFields) {
-                        const fieldName = field.replace(/[\[\]]/g, '');
-                        const fieldValue = item[fieldName] || item[fieldName.replace('C_', '')] || '';
+                        const inner = field.replace(/[\[\]]/g, '');
+                        const pipeIdx = inner.indexOf('|');
+                        const fieldName = pipeIdx === -1 ? inner : inner.substring(0, pipeIdx);
+                        const dateFormat = pipeIdx === -1 ? null : inner.substring(pipeIdx + 1);
+                        const rawValue = item[fieldName] || item[fieldName.replace('C_', '')] || '';
+                        const fieldValue = ActionController.formatMergeValue(rawValue, dateFormat);
                         processedTrackedLink = processedTrackedLink.replace(field, fieldValue);
-                        
+
                         logger.debug('Replaced merge field in tracked link', {
                             field: fieldName,
+                            dateFormat: dateFormat || null,
                             value: fieldValue
                         });
                     }
@@ -1633,6 +1649,24 @@ static async queueSmsJobs(instance, consumer, enrichedItems, executionId, campai
             });
             throw error;
         }
+    }
+
+    /**
+     * Format a merge field value, applying a date format if specified and value is a UNIX timestamp.
+     * Eloqua sends date fields as UNIX seconds (e.g. 1777449600).
+     * Syntax: [FieldName|DD/MM/YYYY] — any moment.js format string is accepted.
+     * If no format or value is not a UNIX timestamp, returns raw value unchanged.
+     */
+    static formatMergeValue(rawValue, dateFormat) {
+        if (!dateFormat || rawValue === '' || rawValue === null || rawValue === undefined) {
+            return rawValue;
+        }
+        const num = Number(rawValue);
+        // UNIX seconds range: 1990-01-01 to 2100-01-01
+        if (!isNaN(num) && num > 631152000 && num < 4102444800) {
+            return moment.unix(num).format(dateFormat);
+        }
+        return rawValue;
     }
 
     /**

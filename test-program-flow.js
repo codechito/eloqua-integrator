@@ -673,6 +673,118 @@ section('TEST 17: worker results.errored — Id present for program jobs');
 })();
 
 // ---------------------------------------------------------------------------
+// TEST 18: formatMergeValue — UNIX timestamp formatted with date format
+// ---------------------------------------------------------------------------
+section('TEST 18: formatMergeValue — formats UNIX timestamp');
+
+(() => {
+    // 1777449600 seconds = 29 Apr 2026 UTC
+    const result = ActionController.formatMergeValue('1777449600', 'DD/MM/YYYY');
+    assert(typeof result === 'string', 'formatMergeValue: returns string');
+    // Accept both UTC and local interpretations — just check format shape DD/MM/YYYY
+    assert(/^\d{2}\/\d{2}\/\d{4}$/.test(result), `formatMergeValue: result "${result}" matches DD/MM/YYYY pattern`);
+})();
+
+// ---------------------------------------------------------------------------
+// TEST 19: formatMergeValue — non-timestamp value returned unchanged
+// ---------------------------------------------------------------------------
+section('TEST 19: formatMergeValue — non-timestamp untouched');
+
+(() => {
+    assertEqual(ActionController.formatMergeValue('John', 'DD/MM/YYYY'), 'John',
+        'formatMergeValue: non-numeric string returned as-is');
+    assertEqual(ActionController.formatMergeValue('Hello World', null), 'Hello World',
+        'formatMergeValue: no format returns raw value');
+    assertEqual(ActionController.formatMergeValue('', 'DD/MM/YYYY'), '',
+        'formatMergeValue: empty string returned unchanged');
+})();
+
+// ---------------------------------------------------------------------------
+// TEST 20: formatMergeValue — D MMM YYYY format
+// ---------------------------------------------------------------------------
+section('TEST 20: formatMergeValue — D MMM YYYY format');
+
+(() => {
+    const result = ActionController.formatMergeValue('1777449600', 'D MMM YYYY');
+    assert(/^\d{1,2} [A-Za-z]{3} \d{4}$/.test(result), `formatMergeValue: result "${result}" matches D MMM YYYY pattern`);
+})();
+
+// ---------------------------------------------------------------------------
+// TEST 21: enrichItems — [Field|DD/MM/YYYY] replaced with formatted date
+// ---------------------------------------------------------------------------
+section('TEST 21: enrichItems — date merge field formatted correctly');
+
+(() => {
+    const instance = {
+        instanceId: 'inst-21',
+        program_coid: null,
+        recipient_field: 'MobilePhone',
+        country_field: 'Country',
+        message: 'Your semester starts [SemesterStart|DD/MM/YYYY]. Enrol now.',
+        tracked_link: null
+    };
+    const consumer = { default_country: 'AU' };
+    const items = [{
+        ContactID: 'c1',
+        EmailAddress: 'a@example.com',
+        SemesterStart: '1777449600'  // 29 Apr 2026 UTC
+    }];
+
+    const enriched = ActionController.enrichItems(items, instance, consumer);
+    assert(!enriched[0].message.includes('1777449600'), 'enrichItems: UNIX timestamp not in output message');
+    assert(!enriched[0].message.includes('|DD/MM/YYYY'), 'enrichItems: format spec not in output message');
+    assert(/\d{2}\/\d{2}\/\d{4}/.test(enriched[0].message), `enrichItems: formatted date in message: "${enriched[0].message}"`);
+})();
+
+// ---------------------------------------------------------------------------
+// TEST 22: enrichItems — [Field] without format returns raw value unchanged
+// ---------------------------------------------------------------------------
+section('TEST 22: enrichItems — plain merge field unchanged');
+
+(() => {
+    const instance = {
+        instanceId: 'inst-22',
+        program_coid: null,
+        recipient_field: 'MobilePhone',
+        country_field: 'Country',
+        message: 'Hi [FirstName], welcome.',
+        tracked_link: null
+    };
+    const consumer = { default_country: 'AU' };
+    const items = [{ ContactID: 'c1', EmailAddress: 'a@example.com', FirstName: 'Kartika' }];
+
+    const enriched = ActionController.enrichItems(items, instance, consumer);
+    assert(enriched[0].message.includes('Kartika'), 'enrichItems: plain merge field replaced correctly');
+    assert(!enriched[0].message.includes('[FirstName]'), 'enrichItems: bracket token removed');
+})();
+
+// ---------------------------------------------------------------------------
+// TEST 23: buildRecordDefinition — [Field|DateFormat] maps to correct Eloqua template
+// ---------------------------------------------------------------------------
+section('TEST 23: buildRecordDefinition — date format syntax uses field name only');
+
+(async () => {
+    const instance = {
+        instanceId: 'inst-23',
+        program_coid: null,
+        recipient_field: '1001__C_MobilePhone',
+        country_field: 'Country',
+        country_setting: 'cc',
+        caller_id: null,
+        message: 'Semester starts [SemesterStart|DD/MM/YYYY] — enrol now.',
+        tracked_link: null,
+        custom_object_id: null
+    };
+
+    const rd = await ActionController.buildRecordDefinition(instance);
+
+    assert('SemesterStart' in rd, 'buildRecordDefinition: SemesterStart key present (format stripped)');
+    assertEqual(rd.SemesterStart, '{{Contact.Field(SemesterStart)}}',
+        'buildRecordDefinition: SemesterStart uses Contact.Field template');
+    assert(!Object.keys(rd).some(k => k.includes('|')), 'buildRecordDefinition: no pipe chars in any key');
+})();
+
+// ---------------------------------------------------------------------------
 // Summary
 // ---------------------------------------------------------------------------
 process.on('exit', () => {
