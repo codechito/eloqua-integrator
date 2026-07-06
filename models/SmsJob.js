@@ -34,6 +34,11 @@ const SmsJobSchema = new mongoose.Schema({
     emailAddress: {
         type: String
     },
+
+    // Program CDO record ID (populated only for Program canvas flows)
+    eloquaRecordId: {
+        type: String
+    },
     
     // SMS details
     mobileNumber: {

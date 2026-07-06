@@ -61,7 +61,8 @@ class ActionController {
             await ActionController.uploadContactData(
                 eloquaService,
                 importDef.uri,
-                allMessages
+                allMessages,
+                instance.program_coid || null
             );
 
             logger.info('Contact data uploaded', {
@@ -101,19 +102,18 @@ class ActionController {
      * Create bulk import definition for contacts
      */
     static async createBulkImportDefinition(eloquaService, instance, type) {
-        const fields = {
-            ContactID: '{{Contact.Id}}',
-            EmailAddress: '{{Contact.Field(C_EmailAddress)}}'
-        };
-
-        // If using program CDO, add Id field
-        if (instance.program_coid) {
-            fields.Id = '{{CustomObject.Id}}';
-        }
+        // For program CDO imports, only use the CDO record Id as the identifier.
+        // Contact field templates ({{Contact.Id}} etc.) are invalid in the CDO import endpoint.
+        const fields = instance.program_coid
+            ? { Id: `{{CustomObject[${instance.program_coid}].Id}}` }
+            : {
+                ContactID: '{{Contact.Id}}',
+                EmailAddress: '{{Contact.Field(C_EmailAddress)}}'
+            };
 
         // Remove dashes from instanceId for Eloqua
         const instanceIdNoDashes = instance.instanceId.replace(/-/g, '');
-        
+
         // Get execution ID from first message
         const executionId = instance.lastExecutedAt ? Date.now() : 'default';
 
@@ -148,19 +148,17 @@ class ActionController {
     /**
      * Upload contact data to bulk import
      */
-    static async uploadContactData(eloquaService, importUri, messages) {
+    static async uploadContactData(eloquaService, importUri, messages, program_coid = null) {
+        // For program CDO imports the definition only has Id — only send that field.
+        // For contact imports send ContactID + EmailAddress.
         const contactData = messages.map(msg => {
-            const data = {
+            if (program_coid) {
+                return { Id: msg.Id };
+            }
+            return {
                 ContactID: msg.contactId,
                 EmailAddress: msg.emailAddress
             };
-
-            // If using program CDO, add Id
-            if (msg.Id) {
-                data.Id = msg.Id;
-            }
-
-            return data;
         });
 
         logger.debug('Uploading contact data', {
@@ -629,8 +627,8 @@ class ActionController {
 
         // ALWAYS include ContactID and EmailAddress (required!)
         if (instance.program_coid) {
-            recordDefinition.ContactID = "{{CustomObject.Contact.Id}}";
-            recordDefinition.EmailAddress = "{{CustomObject.Contact.Field(C_EmailAddress)}}";
+            recordDefinition.ContactID = `{{CustomObject[${instance.program_coid}].Contact.Id}}`;
+            recordDefinition.EmailAddress = `{{CustomObject[${instance.program_coid}].Contact.Field(C_EmailAddress)}}`;
         } else {
             recordDefinition.ContactID = "{{Contact.Id}}";
             recordDefinition.EmailAddress = "{{Contact.Field(C_EmailAddress)}}";
@@ -702,7 +700,7 @@ class ActionController {
 
         // Add Id field if using program CDO
         if (instance.program_coid) {
-            recordDefinition["Id"] = "{{CustomObject.Id}}";
+            recordDefinition["Id"] = `{{CustomObject[${instance.program_coid}].Id}}`;
         }
 
         // Extract merge fields from message [FieldName]
@@ -924,25 +922,27 @@ class ActionController {
                 return;
             }
 
-            // Fetch campaign title
+            // Fetch campaign title (only for Campaign flows — programs use a different asset type)
             let campaignTitle = instance.assetName;
-            try {
-                const eloquaService = new EloquaService(consumer.installId, instance.SiteId);
-                await eloquaService.initialize();
-                
-                const campaign = await eloquaService.getCampaign(assetId);
-                campaignTitle = campaign.name;
-                
-                logger.info('Processing with campaign name', {
-                    instanceId,
-                    assetId,
-                    campaignTitle
-                });
-            } catch (campaignError) {
-                logger.warn('Could not fetch campaign name', {
-                    assetId,
-                    error: campaignError.message
-                });
+            if (instance.entity_type !== 'Program') {
+                try {
+                    const eloquaService = new EloquaService(consumer.installId, instance.SiteId);
+                    await eloquaService.initialize();
+
+                    const campaign = await eloquaService.getCampaign(assetId);
+                    campaignTitle = campaign.name;
+
+                    logger.info('Processing with campaign name', {
+                        instanceId,
+                        assetId,
+                        campaignTitle
+                    });
+                } catch (campaignError) {
+                    logger.warn('Could not fetch campaign name', {
+                        assetId,
+                        error: campaignError.message
+                    });
+                }
             }
 
             // Enrich items with processed message and tracked links
@@ -1065,24 +1065,32 @@ class ActionController {
             const eloquaService = new EloquaService(consumer.installId, instance.SiteId);
             await eloquaService.initialize();
 
+            // Create bulk import for errored contacts
+            const instanceIdNoDashes = instance.instanceId.replace(/-/g, '');
+            const isProgram = !!instance.program_coid;
+
             // Prepare error messages for Eloqua sync
             const erroredContacts = errors.map(error => ({
                 contactId: error.contactId,
                 emailAddress: error.emailAddress,
+                ...(isProgram ? { Id: error.Id } : {}),
                 sync_status: 'errored',
                 delivery: 'errored'
             }));
 
-            // Create bulk import for errored contacts
-            const instanceIdNoDashes = instance.instanceId.replace(/-/g, '');
+            // For program CDO imports, only use the CDO record Id (matching the working old code pattern).
+            // Contact field templates are invalid in the CDO import endpoint.
+            const errorFields = isProgram
+                ? { Id: `{{CustomObject[${instance.program_coid}].Id}}` }
+                : {
+                    ContactID: '{{Contact.Id}}',
+                    EmailAddress: '{{Contact.Field(C_EmailAddress)}}'
+                };
 
             const importDefinition = {
                 name: `SMS_Action_${instanceIdNoDashes}_errored_${Date.now()}`,
-                fields: {
-                    ContactID: '{{Contact.Id}}',
-                    EmailAddress: '{{Contact.Field(C_EmailAddress)}}'
-                },
-                identifierFieldName: 'EmailAddress',
+                fields: errorFields,
+                identifierFieldName: isProgram ? 'Id' : 'EmailAddress',
                 isSyncTriggeredOnImport: false,
                 dataRetentionDuration: 'P7D',
                 isUpdatingMultipleMatchedRecords: false,
@@ -1098,16 +1106,23 @@ class ActionController {
             logger.debug('Creating import definition for errors', {
                 name: importDefinition.name,
                 errorCount: erroredContacts.length,
-                destination: importDefinition.syncActions[0].destination
+                destination: importDefinition.syncActions[0].destination,
+                isProgram
             });
 
-            const importDef = await eloquaService.createBulkImport('contacts', importDefinition);
+            const importType = isProgram ? instance.program_coid : 'contacts';
+            const importDef = await eloquaService.createBulkImport(importType, importDefinition);
 
             // Upload error contact data
-            const contactData = erroredContacts.map(contact => ({
-                ContactID: contact.contactId,
-                EmailAddress: contact.emailAddress
-            }));
+            const contactData = erroredContacts.map(contact => {
+                if (isProgram) {
+                    return { Id: contact.Id };
+                }
+                return {
+                    ContactID: contact.contactId,
+                    EmailAddress: contact.emailAddress
+                };
+            });
 
             await eloquaService.uploadBulkImportData(importDef.uri, contactData);
 
@@ -1273,10 +1288,11 @@ static async queueSmsJobs(instance, consumer, enrichedItems, executionId, campai
                     });
                 }
                 
-                // Add to errors with contactId, emailAddress for Eloqua sync
+                // Add to errors with contactId, emailAddress (and Id for program members) for Eloqua sync
                 results.errors.push({
                     contactId: item.ContactID,
                     emailAddress: item.EmailAddress,
+                    ...(instance.program_coid ? { Id: item.Id } : {}),
                     error: 'No mobile number',
                     field: recipientFieldName,
                     errorCode: 'MISSING_MOBILE',
@@ -1353,6 +1369,7 @@ static async queueSmsJobs(instance, consumer, enrichedItems, executionId, campai
                 results.errors.push({
                     contactId: item.ContactID,
                     emailAddress: item.EmailAddress,
+                    ...(instance.program_coid ? { Id: item.Id } : {}),
                     error: `Invalid mobile number format: ${formatError.message}`,
                     field: recipientFieldName,
                     errorCode: 'INVALID_FORMAT',
@@ -1435,6 +1452,9 @@ static async queueSmsJobs(instance, consumer, enrichedItems, executionId, campai
                 contactId: item.ContactID,
                 emailAddress: item.EmailAddress,
                 mobileNumber: formattedMobile,
+
+                // Program CDO record ID (only for Program canvas flows)
+                ...(instance.program_coid ? { eloquaRecordId: item.Id } : {}),
                 
                 // Message details (already processed with merge fields)
                 message: item.message,
@@ -1523,6 +1543,7 @@ static async queueSmsJobs(instance, consumer, enrichedItems, executionId, campai
             results.errors.push({
                 contactId: item.ContactID,
                 emailAddress: item.EmailAddress,
+                ...(instance.program_coid ? { Id: item.Id } : {}),
                 error: error.message,
                 errorCode: 'JOB_CREATION_FAILED',
                 sync_status: 'errored',

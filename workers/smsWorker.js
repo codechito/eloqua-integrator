@@ -262,7 +262,7 @@ class SmsWorker {
                         message_id: result.messageId,
                         caller_id: job.senderId,
                         assetId: job.campaignId,
-                        Id: job.customObjectData?.recordId,
+                        ...(job.eloquaRecordId ? { Id: job.eloquaRecordId } : {}),
                         sync_status: 'sent',
                         delivery: 'sent'
                     });
@@ -275,6 +275,7 @@ class SmsWorker {
                         message: job.message,
                         error: result.error,
                         errorCode: result.errorCode || 'SEND_FAILED',
+                        ...(job.eloquaRecordId ? { Id: job.eloquaRecordId } : {}),
                         sync_status: 'errored',
                         delivery: 'errored'
                     });
@@ -303,6 +304,7 @@ class SmsWorker {
                     phone: job.mobileNumber,
                     error: error.message,
                     errorCode: 'PROCESSING_ERROR',
+                    ...(job.eloquaRecordId ? { Id: job.eloquaRecordId } : {}),
                     sync_status: 'errored',
                     delivery: 'errored'
                 });

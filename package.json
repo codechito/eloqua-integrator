@@ -35,6 +35,7 @@
     "test:reauth": "node test-reauth-flow.js",
     "test:mock": "node test-eloqua-service-mock.js",
     "test:atomic-workers": "node test-atomic-workers.js",
+    "test:program-flow": "node test-program-flow.js",
     "logs": "tail -f logs/*.log"
   },
   "dependencies": {
