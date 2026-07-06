@@ -338,6 +338,7 @@ async function initializeWorker() {
             mode: 'in-process-scheduled',
             schedule: 'Every 10 minutes'
         });
+
         
         // Log worker stats periodically (every 5 minutes)
         setInterval(async () => {

@@ -46,11 +46,17 @@ router.get('/ajax/customobject/:installId/:siteId/:customObjectId',
     FeederController.getCustomObjectFields
 );
 
-// Statistics endpoint
+// Statistics endpoint (link hits feeder)
 router.get('/stats',
     verifyInstallation,
     verifyOAuthToken,
     FeederController.getStats
+);
+
+// Incoming SMS feeder — activity stats (called by configure page)
+router.get('/inbound/stats/:instanceId',
+    verifyInstallation,
+    FeederController.getInboundStats
 );
 
 module.exports = router;

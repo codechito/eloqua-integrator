@@ -17,8 +17,24 @@ const FeederInstanceSchema = new mongoose.Schema({
         required: true
     },
     assetId: String,
-    
-    // Custom Object Mapping (optional for feeder)
+
+    // Feeder type — 'link_hits' (default) or 'incoming_sms'
+    feederType: {
+        type: String,
+        enum: ['link_hits', 'incoming_sms'],
+        default: 'link_hits'
+    },
+
+    // Incoming SMS feeder config
+    sender_id: String,   // virtual number to monitor
+    text_type: {
+        type: String,
+        enum: ['Anything', 'Keyword'],
+        default: 'Anything'
+    },
+    keyword: String,
+
+    // Link Hits feeder — Custom Object Mapping
     custom_object_id: String,
     mobile_field: String,
     email_field: String,
@@ -27,11 +43,11 @@ const FeederInstanceSchema = new mongoose.Schema({
     originalurl_field: String,
     link_hits_field: String,
     vn_field: String,
-    
+
     // Configuration status
     requiresConfiguration: {
         type: Boolean,
-        default: false // Feeder can work without configuration
+        default: false
     },
     
     // Status

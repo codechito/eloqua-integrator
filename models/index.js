@@ -6,7 +6,6 @@ const SmsLog = require('./SmsLog');
 const SmsJob = require('./SmsJob');
 const SmsReply = require('./SmsReply');
 const LinkHit = require('./LinkHit');
-
 module.exports = {
     Consumer,
     ActionInstance,

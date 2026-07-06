@@ -5,406 +5,657 @@
     <meta http-equiv="X-UA-Compatible" content="IE=edge">
     <meta name="viewport" content="width=device-width, initial-scale=1">
 
-    <title>Incoming SMS Feeder Configuration</title>
+    <title>Configure Incoming SMS Feeder</title>
 
     <link href="/eloqua-service/assets/css/bootstrap.min.css" rel="stylesheet">
-    <link rel="stylesheet" href="https://code.jquery.com/ui/1.12.1/themes/base/jquery-ui.css">
     <link href="/eloqua-service/assets/css/main.css" rel="stylesheet">
     <style type="text/css">
-      #custom-merge-fields-list li:hover {background-color: #bdf;}
-      .form-group span {
-        text-align: left;
+      @keyframes spin {
+        0% { transform: rotate(0deg); }
+        100% { transform: rotate(360deg); }
+      }
+
+      .spinner {
+        border: 3px solid #f3f3f3;
+        border-top: 3px solid #4CAF50;
+        border-radius: 50%;
+        width: 30px;
+        height: 30px;
+        animation: spin 1s linear infinite;
+        display: inline-block;
+        margin-right: 10px;
+      }
+
+      .spinner-sm {
+        width: 16px;
+        height: 16px;
+        border-width: 2px;
+        margin-right: 5px;
+        vertical-align: middle;
+      }
+
+      body {
+        font-family: Arial, sans-serif;
+        padding: 0;
+        margin: 0;
+      }
+
+      .container {
+        max-width: 700px;
+        margin: 40px auto;
+        padding: 30px;
+        background: #fff;
+      }
+
+      h4 {
+        font-size: 20px;
+        font-weight: bold;
+        text-align: center;
+        margin-bottom: 30px;
+      }
+
+      h4 img {
+        vertical-align: middle;
+        margin-right: 10px;
+      }
+
+      .form-group {
+        margin-bottom: 20px;
+      }
+
+      .form-group label {
         display: block;
+        font-weight: bold;
+        margin-bottom: 8px;
+        font-size: 14px;
+      }
+
+      .form-control {
+        width: 100%;
+        padding: 10px;
+        border: 1px solid #ddd;
+        border-radius: 4px;
+        font-size: 14px;
+        box-sizing: border-box;
+        height: 40px;
+      }
+
+      .form-control:focus {
+        outline: none;
+        border-color: #007bff;
+      }
+
+      .help-text {
         font-size: 12px;
-        font-style: italic;
+        color: #666;
+        margin-top: 5px;
+        line-height: 1.4;
+      }
+
+      .btn {
+        padding: 12px 30px;
+        background: #007bff;
+        color: white;
+        border: none;
+        border-radius: 4px;
+        cursor: pointer;
+        font-size: 14px;
+        font-weight: bold;
+        width: 100%;
         margin-top: 10px;
       }
-      .ui-widget {
-          font-family: "Helvetica Neue",Helvetica,Arial,sans-serif;
-          font-size: 12px;
-          padding: 0px;
-        }
-        .ui-widget #dialog {
-          padding: 10px 0px;
-        }
-        .ui-widget input, .ui-widget select, .ui-widget textarea, .ui-widget button {
-          font-family: "Helvetica Neue",Helvetica,Arial,sans-serif;
-          font-size: 12px;
-        }
-        .ui-dialog .ui-dialog-titlebar-close {
-          background-image: url("data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAYAAAAf8/9hAAAACXBIWXMAAAsTAAALEwEAmpwYAAAAGXRFWHRTb2Z0d2FyZQBBZG9iZSBJbWFnZVJlYWR5ccllPAAAANBJREFUeNpiYKAQMMMYrq6uCcrKyv1AfPHevXsvsCkGqjEAyi8HYkagmgsgMUaYZiA1H6ruAxA77t69+wK6ZiC1H4gFoEKJQDULmKCceCS1IAX7oRpwaYbrYYFyCtEUwAxxhPLRNX+A6oF4AY8tH5AMZMDmRUYC/kQHGOHDiC2kcRiCNXCZKE0H1PMCRYGIRzO+aAQbAguDflwKoDY5IrkG5qJ+5EBciM+fOAxZCM9MoIwBzCAPoSZHokcVVM0LoJqdQKYGEDeC8gEDNQBAgAEARFVtDaumXRoAAAAASUVORK5CYII=");
-          background-color: transparent;
-          border: 0px;
-          background-repeat: no-repeat;
-          background-position: center;
-        }
-        button.ui-dialog-titlebar-close:focus {
-          outline: none;
-        }
-        .loading {
-          pointer-events: none;
-          opacity: 0.6;
-        }
+
+      .btn:hover {
+        background: #0056b3;
+      }
+
+      .btn:disabled {
+        background: #ccc;
+        cursor: not-allowed;
+      }
+
+      .btn-default {
+        background: #fff;
+        color: #333;
+        border: 1px solid #ccc;
+        width: auto;
+        padding: 8px 20px;
+        font-size: 13px;
+      }
+
+      .btn-default:hover {
+        background: #e6e6e6;
+      }
+
+      .alert {
+        padding: 12px 15px;
+        border-radius: 4px;
+        margin-bottom: 20px;
+        font-size: 14px;
+      }
+
+      .alert-success {
+        background: #d4edda;
+        border: 1px solid #c3e6cb;
+        color: #155724;
+      }
+
+      .alert-danger {
+        background: #f8d7da;
+        border: 1px solid #f5c6cb;
+        color: #721c24;
+      }
+
+      .alert.fade {
+        opacity: 0;
+        transition: opacity 0.5s ease-in-out;
+      }
+
+      .alert.fade.in {
+        opacity: 1;
+      }
+
+      .info-box {
+        background: #e7f3ff;
+        border-left: 4px solid #007bff;
+        padding: 15px;
+        margin-bottom: 20px;
+        border-radius: 4px;
+      }
+
+      .info-box p {
+        margin: 0;
+        font-size: 13px;
+        line-height: 1.6;
+        color: #004085;
+      }
+
+      .info-box strong {
+        display: block;
+        margin-bottom: 5px;
+      }
+
+      .section-divider {
+        border-top: 2px solid #dee2e6;
+        margin: 30px 0;
+      }
+
+      .cdo-mapping-box {
+        background: #f8f9fa;
+        border: 1px solid #dee2e6;
+        border-radius: 4px;
+        padding: 15px;
+        margin-bottom: 20px;
+      }
+
+      .cdo-mapping-box h5 {
+        margin: 0 0 15px 0;
+        font-size: 15px;
+        font-weight: bold;
+        color: #495057;
+        border-bottom: 2px solid #dee2e6;
+        padding-bottom: 8px;
+      }
+
+      .cdo-field-row {
+        display: flex;
+        justify-content: space-between;
+        padding: 8px 0;
+        border-bottom: 1px solid #e9ecef;
+        font-size: 13px;
+      }
+
+      .cdo-field-row:last-child {
+        border-bottom: none;
+      }
+
+      .cdo-field-label {
+        font-weight: 600;
+        color: #6c757d;
+        flex: 0 0 40%;
+      }
+
+      .cdo-field-value {
+        color: #212529;
+        flex: 1;
+        text-align: right;
+        font-family: 'Courier New', monospace;
+      }
+
+      .cdo-no-config {
+        text-align: center;
+        color: #6c757d;
+        font-style: italic;
+        padding: 10px;
+      }
+
+      .cdo-name {
+        background: #007bff;
+        color: white;
+        padding: 8px 12px;
+        border-radius: 4px;
+        margin-bottom: 15px;
+        font-size: 13px;
+        font-weight: bold;
+      }
+
+      .report-section {
+        background: #fff;
+        border: 1px solid #dee2e6;
+        border-radius: 4px;
+        padding: 15px;
+        margin-bottom: 15px;
+      }
+
+      .report-section h5 {
+        margin: 0 0 15px 0;
+        font-size: 15px;
+        font-weight: bold;
+        color: #495057;
+        border-bottom: 2px solid #dee2e6;
+        padding-bottom: 8px;
+      }
+
+      .report-stats {
+        display: flex;
+        justify-content: space-around;
+        margin-bottom: 15px;
+        padding: 15px;
+        background: #f8f9fa;
+        border-radius: 4px;
+      }
+
+      .stat-card {
+        text-align: center;
+        flex: 1;
+      }
+
+      .stat-card .stat-number {
+        font-size: 32px;
+        font-weight: bold;
+        color: #007bff;
+        display: block;
+      }
+
+      .stat-card .stat-label {
+        font-size: 12px;
+        color: #6c757d;
+        text-transform: uppercase;
+        margin-top: 5px;
+        display: block;
+      }
+
+      .stat-card.success .stat-number { color: #28a745; }
+      .stat-card.warning .stat-number { color: #ffc107; }
+
+      .loading-spinner {
+        text-align: center;
+        padding: 20px;
+        color: #6c757d;
+      }
+
+      .report-actions {
+        text-align: center;
+        padding-top: 10px;
+        border-top: 1px solid #dee2e6;
+      }
+
+      .number-status {
+        display: inline-block;
+        padding: 2px 8px;
+        border-radius: 12px;
+        font-size: 11px;
+        font-weight: bold;
+        margin-left: 8px;
+        vertical-align: middle;
+      }
+
+      .number-status.configured {
+        background: #d4edda;
+        color: #155724;
+      }
+
+      .number-status.not-configured {
+        background: #fff3cd;
+        color: #856404;
+      }
     </style>
   </head>
   <body>
-  <div class="disabler"></div>
-  <div class="container" style="width: 600px; margin-left: 120px;">
-  <center>
-      <form method="post" id="feederForm">
-        <br/>
-        <br/>
-        <br/>
-        <h4 style="font-size: 20px; font-weight: bold; text-align: center;">
-          <img src="/eloqua-service/assets/images/eloqua-form-icon-inbound.png" onerror="this.style.display='none'">&nbsp;Incoming SMS Contacts
+    <div class="container" id="incomingsmsfeeder">
+      <form method="post">
+        <h4>
+          <img src="/eloqua-service/assets/images/eloqua-form-icon-inbound.png" width="24" height="24" onerror="this.style.display='none'">
+          Incoming SMS Feeder
         </h4>
-        <br/>
-        
-        <div id="statusMessage"></div>
-        
-        <div class="row">
-          <div class="col-md-6" style="display: inline-block;width: 280px;vertical-align: top;margin-left: -10px;">
-            <div class="form-group">
-              <label for="sender_id" style="float: left;">Virtual Number</label><br>
-              <select style="width: 275px;" name="sender_id" id="sender_id" class="form-control">
-                <option value="">Select a number</option>
-                <% if (sender_ids && sender_ids['Virtual Number']) { %>
-                  <% for(var i=0; i < sender_ids["Virtual Number"].length; i++) { %>
-                    <option value="<%= sender_ids['Virtual Number'][i] %>" 
-                      <% if(instance && instance.senderIds && instance.senderIds.indexOf(sender_ids['Virtual Number'][i]) !== -1){ %> 
-                        selected="selected" 
-                      <% } %>>
-                      <%= sender_ids["Virtual Number"][i] %>
-                    </option>
-                  <% } %>
-                <% } %>
-              </select>
-              <span>Select the virtual number to monitor for incoming SMS</span>
-           </div>
+
+        <div v-if="status.success || status.error"
+             v-bind:class="{ 'alert-success': status.success, 'alert-danger': status.error, 'in': fade }"
+             class="alert fade"
+             role="alert">
+          {{ status.success || status.error }}
+        </div>
+
+        <div class="info-box">
+          <p>
+            <strong>How this works</strong>
+            Select a virtual number to monitor. When someone texts that number, they will be
+            fed into the next step of your campaign. Optionally filter by a keyword so only
+            messages containing that word qualify.
+          </p>
+        </div>
+
+        <!-- Virtual Number -->
+        <div class="form-group">
+          <label for="sender_id">Virtual Number</label>
+          <select v-model="instance.sender_id" class="form-control" id="sender_id" required>
+            <option value="">-- Select a virtual number --</option>
+            <% if (sender_ids && sender_ids['Virtual Number'] && sender_ids['Virtual Number'].length) { %>
+              <% sender_ids['Virtual Number'].forEach(function(num) { %>
+                <option value="<%= num %>"><%= num %></option>
+              <% }); %>
+            <% } %>
+          </select>
+          <div class="help-text">
+            The virtual number to monitor for incoming messages. Saving will automatically
+            configure this number to forward inbound SMS to this feeder.
           </div>
-          <div class="col-md-6" style="width: 280px;float: right;margin-right: -15px;">
-              <div class="form-group">
-                  <label for="text_type" style="float: left;">What type of text are we looking for?</label>
-                  <select style="width: 275px;" name="text_type" id="text_type" class="form-control">
-                      <option value="Anything" <% if(instance && instance.textType == "Anything"){ %> selected="selected" <% } %>>Anything</option>
-                      <option value="Keyword" <% if(instance && instance.textType == "Keyword"){ %> selected="selected" <% } %>>Keyword</option>
-                  </select>
-              </div>
+        </div>
+
+        <!-- Response Type -->
+        <div class="form-group">
+          <label for="text_type">Message Filter</label>
+          <select v-model="instance.text_type" class="form-control" id="text_type" required>
+            <option value="Anything">Any Message</option>
+            <option value="Keyword">Specific Keyword</option>
+          </select>
+          <div class="help-text">
+            Choose whether any inbound message qualifies, or only messages containing a specific keyword.
           </div>
         </div>
-        
-        <div class="row">
-            <div class="col-md-6" style="display: inline-block;width: 280px;vertical-align: top;margin-left: -10px; text-align:left">
-                <div class="form-group">
-                    <label for="custom_object_id">Custom Object</label><br>
-                    <select class="form-control" name="custom_object_id" id="custom_object_id" style="width: 275px;">
-                      <option value="">None</option>
-                      <% if (custom_objects && custom_objects.elements && custom_objects.elements.length){ %>
-                        <% for(var i=0; i < custom_objects.elements.length; i++) { %>
-                          <option value="<%= custom_objects.elements[i].id %>" 
-                            <% if(instance && instance.customObjectId == custom_objects.elements[i].id ){ %> 
-                              selected="selected" 
-                            <% } %>>
-                            <%= custom_objects.elements[i].name %>
-                          </option>
-                        <% } %>
-                      <% } %>
-                    </select>
-                    <span>Select custom object to store incoming SMS data</span>
-                 </div>
-            </div>
-            <div class="col-md-6" style="width: 280px;float: right;margin-right: -15px;">
-                <div class="form-group">
-                    <label for="keyword" style="float: left;">Keyword</label>
-                    <input style="width: 275px;" type="text" name="keyword" id="keyword" 
-                      value="<%= instance && instance.keyword ? instance.keyword : '' %>" 
-                      class="form-control" placeholder="e.g., JOIN, STOP"/>
-                    <span>Filter messages containing this keyword (case insensitive)</span>
-                </div>
-            </div>
+
+        <!-- Keyword -->
+        <div class="form-group" v-show="instance.text_type === 'Keyword'">
+          <label for="keyword">Keyword (comma-separated)</label>
+          <input
+            type="text"
+            v-model="instance.keyword"
+            class="form-control"
+            id="keyword"
+            placeholder="e.g., JOIN, REGISTER, YES"
+            v-bind:required="instance.text_type === 'Keyword'">
+          <div class="help-text">
+            Only messages containing one of these words will qualify (case-insensitive).
+            Separate multiple keywords with commas.
+          </div>
         </div>
-        
-        <div class="row">
-            <div class="col-md-6" style="display: inline-block;width: 280px;vertical-align: top;margin-left: 10px;text-align:left;">
-                <div class="form-group">
-                    <label for="mobile_field" style="margin-left: -20px;">Map mobile to:</label><br/>
-                    <input type="text" class="form-control" style="width:200px;display: inline;margin-left: -20px;" 
-                      id="mobile_field" name="mobile_field" 
-                      value="<%= instance && instance.fieldMappings && instance.fieldMappings.mobile ? instance.fieldMappings.mobile : '' %>"/>
-                    <button type="button" class="btn btn-default" style="float: right; font-size: 11px; height:35px;" id="mobileFieldList">Choose</button><br/>
-                </div>
-             </div>
-            <div class="col-md-6" style="width: 280px;float: right;margin-right: -35px; text-align:left;">
-                <div class="form-group">
-                    <label for="email_field" style="margin-left: -20px;">Map email to:</label><br/>
-                    <input type="text" class="form-control" style="width:200px;display: inline;margin-left: -20px;" 
-                      id="email_field" name="email_field" 
-                      value="<%= instance && instance.fieldMappings && instance.fieldMappings.email ? instance.fieldMappings.email : '' %>"/>
-                    <button type="button" class="btn btn-default" style="float: right; font-size: 11px; height:35px;" id="emailFieldList">Choose</button><br/>
-                </div>
+
+        <div class="section-divider"></div>
+
+        <!-- Custom Object Mapping (read-only, configured in App Settings) -->
+        <div class="cdo-mapping-box">
+          <h5>Custom Object Mapping</h5>
+
+          <div v-if="hasCdoConfig">
+            <div class="cdo-name">
+              Custom Object: {{ cdoConfig.name || 'Loading...' }}
             </div>
+
+            <div class="cdo-field-row" v-if="cdoConfig.mobile_field">
+              <span class="cdo-field-label">Mobile Number:</span>
+              <span class="cdo-field-value">{{ cdoConfig.mobile_field }}</span>
+            </div>
+            <div class="cdo-field-row" v-if="cdoConfig.email_field">
+              <span class="cdo-field-label">Email Address:</span>
+              <span class="cdo-field-value">{{ cdoConfig.email_field }}</span>
+            </div>
+            <div class="cdo-field-row" v-if="cdoConfig.response_field">
+              <span class="cdo-field-label">Incoming Message:</span>
+              <span class="cdo-field-value">{{ cdoConfig.response_field }}</span>
+            </div>
+            <div class="cdo-field-row" v-if="cdoConfig.vn_field">
+              <span class="cdo-field-label">Virtual Number:</span>
+              <span class="cdo-field-value">{{ cdoConfig.vn_field }}</span>
+            </div>
+            <div class="cdo-field-row" v-if="cdoConfig.title_field">
+              <span class="cdo-field-label">Campaign Title:</span>
+              <span class="cdo-field-value">{{ cdoConfig.title_field }}</span>
+            </div>
+
+            <div class="help-text" style="margin-top: 15px; padding-top: 10px; border-top: 1px solid #dee2e6;">
+              Inbound message data will be logged to this custom object automatically.
+              To change these mappings go to <strong>Application Settings</strong>.
+            </div>
+          </div>
+
+          <div v-else>
+            <div class="cdo-no-config">No custom object configured</div>
+            <div class="help-text" style="text-align: center; margin-top: 10px;">
+              Inbound messages will be tracked internally but not logged to a custom object.
+              To enable custom object logging, configure it in <strong>Application Settings</strong>.
+            </div>
+          </div>
         </div>
-        
-        <div class="row">
-            <div class="col-md-6" style="display: inline-block;width: 280px;vertical-align: top;margin-left: 10px; text-align:left;">
-              <div class="form-group">
-                  <label for="message_field" style="margin-left: -20px;">Map incoming message to:</label><br/>
-                  <input type="text" class="form-control" style="width:200px;display: inline;margin-left: -20px;" 
-                    id="message_field" name="message_field" 
-                    value="<%= instance && instance.fieldMappings && instance.fieldMappings.message ? instance.fieldMappings.message : '' %>"/>
-                  <button type="button" class="btn btn-default" style="float: right; font-size: 11px; height:35px;" id="messageFieldList">Choose</button><br/>
-              </div>
+
+        <div class="section-divider"></div>
+
+        <!-- Activity Summary -->
+        <div class="report-section">
+          <h5>Activity Summary</h5>
+
+          <div v-if="loadingStats" class="loading-spinner">
+            <div class="spinner"></div>
+            <p>Loading statistics...</p>
+          </div>
+
+          <div v-else class="report-stats">
+            <div class="stat-card success">
+              <span class="stat-number">{{ stats.total }}</span>
+              <span class="stat-label">Total Received</span>
             </div>
-            <div class="col-md-6" style="width: 280px;float: right;margin-right: -35px; text-align:left;">
-                <div class="form-group">
-                    <label for="sender_id_field" style="margin-left: -20px;">Map virtual number to:</label><br/>
-                    <input type="text" class="form-control" style="width:200px; display: inline;margin-left: -20px;" 
-                      id="sender_id_field" name="sender_id_field" 
-                      value="<%= instance && instance.fieldMappings && instance.fieldMappings.senderId ? instance.fieldMappings.senderId : '' %>"/>
-                    <button type="button" class="btn btn-default" style="float: right; font-size: 11px; height:35px;" id="senderIdFieldList">Choose</button><br/>
-                </div>
+            <div class="stat-card">
+              <span class="stat-number">{{ stats.today }}</span>
+              <span class="stat-label">Today</span>
             </div>
+            <div class="stat-card warning">
+              <span class="stat-number">{{ stats.optouts }}</span>
+              <span class="stat-label">Opt-outs</span>
+            </div>
+          </div>
+
+          <div class="report-actions">
+            <button type="button" @click="loadStats" class="btn btn-default" :disabled="loadingStats">
+              <span v-if="loadingStats">
+                <span class="spinner spinner-sm"></span>Refreshing...
+              </span>
+              <span v-else>Refresh</span>
+            </button>
+          </div>
         </div>
-        
-        <div class="row">
-            <div class="col-md-6" style="display: inline-block;width: 280px;vertical-align: top;margin-left: 10px; text-align:left;">
-              <div class="form-group">
-                  <label for="timestamp_field" style="margin-left: -20px;">Map timestamp to:</label><br/>
-                  <input type="text" class="form-control" style="width:200px;display: inline;margin-left: -20px;" 
-                    id="timestamp_field" name="timestamp_field" 
-                    value="<%= instance && instance.fieldMappings && instance.fieldMappings.timestamp ? instance.fieldMappings.timestamp : '' %>"/>
-                  <button type="button" class="btn btn-default" style="float: right; font-size: 11px; height:35px;" id="timestampFieldList">Choose</button><br/>
-              </div>
-            </div>
-            <div class="col-md-6" style="width: 280px;float: right;margin-right: -35px; text-align:left;">
-                <div class="form-group">
-                    <label for="message_id_field" style="margin-left: -20px;">Map message ID to:</label><br/>
-                    <input type="text" class="form-control" style="width:200px; display: inline;margin-left: -20px;" 
-                      id="message_id_field" name="message_id_field" 
-                      value="<%= instance && instance.fieldMappings && instance.fieldMappings.messageId ? instance.fieldMappings.messageId : '' %}"/>
-                    <button type="button" class="btn btn-default" style="float: right; font-size: 11px; height:35px;" id="messageIdFieldList">Choose</button><br/>
-                </div>
-            </div>
+
+        <button
+          id="btnSave"
+          type="button"
+          v-on:click="saveInstance()"
+          class="btn"
+          v-bind:disabled="!isValid || saving">
+          <span v-if="saving">
+            <span class="spinner spinner-sm"></span>SAVING...
+          </span>
+          <span v-else>SAVE CONFIGURATION</span>
+        </button>
+
+        <div v-if="status.success || status.error"
+             v-bind:class="{ 'alert-success': status.success, 'alert-danger': status.error, 'in': fade }"
+             class="alert fade"
+             role="alert"
+             style="margin-top: 20px;">
+          {{ status.success || status.error }}
         </div>
-        
-        <button id="btnSave" type="button" class="btn btn-default">Save Configuration</button>
       </form>
-      </center>
     </div>
-    
-    <script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
-    <script src="https://code.jquery.com/ui/1.12.1/jquery-ui.min.js"></script>
-    <script src="/eloqua-service/assets/js/bootstrap.min.js"></script>
-    
+
+    <script src="https://cdn.jsdelivr.net/npm/vue@2.6.11"></script>
+    <script src="/eloqua-service/assets/js/axios.min.js"></script>
+
     <script type="text/javascript">
-      $(document).ready(function () {
-        var clickSrc = '';
-        var installId = '<%= instance.installId %>';
-        var siteId = '<%= instance.SiteId %>';
-        var instanceId = '<%= instance.instanceId %>';
+      var instance = <%- JSON.stringify(instance) %>;
+      var consumer = <%- JSON.stringify(consumer) %>;
 
-        var customdialog = $("#customdialog").dialog({
-          autoOpen: false,
-          height: 400,
-          width: 240,
-          modal: false
-        });
-
-        $('#btnSave').click(function() {
-          saveConfiguration();
-        });
-
-        $("#text_type").change(function(){
-          if($(this).val() == "Keyword"){
-            $("#keyword").parent().show();
+      var app = new Vue({
+        el: '#incomingsmsfeeder',
+        data: {
+          instance: {
+            sender_id:  instance.sender_id  || '',
+            text_type:  instance.text_type  || 'Anything',
+            keyword:    instance.keyword    || '',
+            instanceId: instance.instanceId || '',
+            installId:  instance.installId  || consumer.installId,
+            SiteId:     instance.SiteId     || consumer.SiteId
+          },
+          consumer: consumer,
+          status: {},
+          fade: false,
+          saving: false,
+          loadingStats: false,
+          stats: { total: 0, today: 0, optouts: 0 },
+          cdoConfig: {
+            name: null,
+            mobile_field:   null,
+            email_field:    null,
+            response_field: null,
+            vn_field:       null,
+            title_field:    null
           }
-          else{
-            $("#keyword").parent().hide();
+        },
+
+        computed: {
+          isValid: function () {
+            if (!this.instance.sender_id) return false;
+            if (this.instance.text_type === 'Keyword' && !this.instance.keyword.trim()) return false;
+            return true;
+          },
+          hasCdoConfig: function () {
+            return !!(
+              this.consumer.actions &&
+              this.consumer.actions.incomingsms &&
+              this.consumer.actions.incomingsms.custom_object_id
+            );
           }
-        });
-        
-        $("#text_type").change();
+        },
 
-        var reloadObjectField = function(id){
-          if(id){
-            $.ajax({
-              url: "/eloqua/action/ajax/customobject/" + installId + "/" + siteId + "/" + id,
-              method: "GET",
-              success: function(objectFields) {
-                $("#custom-merge-fields-list").find('li').empty();
-                
-                if (objectFields.fields) {
-                  for(var i in objectFields.fields) {
-                    $("#custom-merge-fields-list").append(
-                      '<li data-name="' + objectFields.fields[i].name + '" ' + 
-                      'data-dataType="' + objectFields.fields[i].dataType + '" ' + 
-                      'data-internalName="' + objectFields.fields[i].internalName + '" ' +
-                      'data-id="' + objectFields.fields[i].id + '" ' +
-                      'style="display: block; cursor: pointer; padding: 5px;">' +
-                      objectFields.fields[i].name + '</li>'
-                    );
-                  }
-                }
-              },
-              error: function(jqXHR, textStatus) {
-                console.error('Error loading fields:', textStatus);
-                showStatus('error', 'Failed to load custom object fields');
-              }
-            });
-          }
-        };
+        methods: {
+          saveInstance: function () {
+            var vm = this;
 
-        $("#custom_object_id").change(function(){
-          if($(this).val()){
-            reloadObjectField($(this).val());
-            $("#mobile_field").parent().show();
-            $("#email_field").parent().show();
-            $("#message_field").parent().show();
-            $("#sender_id_field").parent().show();
-            $("#timestamp_field").parent().show();
-            $("#message_id_field").parent().show();
-          }
-          else{
-            $("#mobile_field").parent().hide();
-            $("#email_field").parent().hide();
-            $("#message_field").parent().hide();
-            $("#sender_id_field").parent().hide();
-            $("#timestamp_field").parent().hide();
-            $("#message_id_field").parent().hide();
-          }
-        });
-
-        $("#custom_object_id").change();
-
-        // Field chooser buttons
-        $("#mobileFieldList").button().on("click", function() {
-          openFieldChooser("#mobile_field");
-        });
-
-        $("#emailFieldList").button().on("click", function() {
-          openFieldChooser("#email_field");
-        });
-
-        $("#messageFieldList").button().on("click", function() {
-          openFieldChooser("#message_field");
-        });
-
-        $("#senderIdFieldList").button().on("click", function() {
-          openFieldChooser("#sender_id_field");
-        });
-
-        $("#timestampFieldList").button().on("click", function() {
-          openFieldChooser("#timestamp_field");
-        });
-
-        $("#messageIdFieldList").button().on("click", function() {
-          openFieldChooser("#message_id_field");
-        });
-
-        function openFieldChooser(targetField) {
-          if($("#custom_object_id").val()){
-            clickSrc = targetField;
-            customdialog.dialog("open");
-          }
-          else{
-            showStatus('error', 'Please select a custom object first');
-          }
-        }
-
-        $("#custom-field-search").on("keyup click input", function () {
-          if (this.value.length > 0) {
-            $("#custom-merge-fields-list li").hide().filter(function () {
-              return $(this).text().toLowerCase().indexOf($("#custom-field-search").val().toLowerCase()) != -1;
-            }).show();
-          }
-          else {
-            $("#custom-merge-fields-list li").show();
-          }
-        });
-
-        $('#custom-merge-fields-list').delegate('li', 'click', function (e) {
-          var item = $(this);
-          var srcField = $(clickSrc);
-          srcField.val(item.attr("data-internalName"));
-          customdialog.dialog("close");
-        });
-
-        function saveConfiguration() {
-          $('body').addClass('loading');
-          
-          var configData = {
-            instance: {
-              instanceId: instanceId,
-              installId: installId,
-              SiteId: siteId,
-              feederType: 'incoming_sms',
-              senderIds: [$("#sender_id").val()],
-              textType: $("#text_type").val(),
-              keyword: $("#keyword").val(),
-              customObjectId: $("#custom_object_id").val(),
-              fieldMappings: {
-                mobile: $("#mobile_field").val(),
-                email: $("#email_field").val(),
-                message: $("#message_field").val(),
-                senderId: $("#sender_id_field").val(),
-                timestamp: $("#timestamp_field").val(),
-                messageId: $("#message_id_field").val()
-              }
+            if (!this.isValid) {
+              this.showMessage('error', 'Please select a virtual number');
+              return;
             }
-          };
 
-          $.ajax({
-            url: '/eloqua/feeder/configure?instanceId=' + instanceId,
-            method: 'POST',
-            contentType: 'application/json',
-            data: JSON.stringify(configData),
-            success: function(response) {
-              $('body').removeClass('loading');
-              showStatus('success', 'Configuration saved successfully! The virtual number has been configured to forward incoming SMS to this feeder.');
-              
-              $('html, body').animate({ scrollTop: 0 }, 'fast');
-            },
-            error: function(jqXHR, textStatus) {
-              $('body').removeClass('loading');
-              var errorMsg = jqXHR.responseJSON && jqXHR.responseJSON.message 
-                ? jqXHR.responseJSON.message 
-                : 'Failed to save configuration';
-              showStatus('error', errorMsg);
-              
-              $('html, body').animate({ scrollTop: 0 }, 'fast');
-            }
-          });
-        }
+            vm.saving = true;
 
-        function showStatus(type, message) {
-          var alertClass = type === 'success' ? 'alert-success' : 'alert-danger';
-          var html = '<div class="alert ' + alertClass + ' alert-dismissible fade in" role="alert">' +
-            '<button type="button" class="close" data-dismiss="alert" aria-label="Close">' +
-            '<span aria-hidden="true">&times;</span>' +
-            '</button>' +
-            message +
-            '</div>';
-          
-          $('#statusMessage').html(html);
-          
-          setTimeout(function() {
-            $('#statusMessage .alert').fadeOut(300, function() {
-              $(this).remove();
-            });
-          }, 5000);
+            var data = {
+              instance: {
+                instanceId: vm.instance.instanceId,
+                installId:  vm.instance.installId,
+                SiteId:     vm.instance.SiteId,
+                feederType: 'incoming_sms',
+                sender_id:  vm.instance.sender_id,
+                text_type:  vm.instance.text_type,
+                keyword:    vm.instance.text_type === 'Keyword' ? vm.instance.keyword.trim() : null
+              }
+            };
+
+            axios.post(location.pathname + location.search, data)
+              .then(function (response) {
+                vm.showMessage('success', 'Configuration saved. Virtual number is now forwarding inbound SMS to this feeder.');
+                vm.loadStats();
+                setTimeout(function () {
+                  if (window.opener) window.close();
+                }, 2000);
+              })
+              .catch(function (error) {
+                var msg = (error.response && error.response.data && error.response.data.message)
+                  ? error.response.data.message
+                  : 'Failed to save configuration';
+                vm.showMessage('error', msg);
+              })
+              .finally(function () {
+                vm.saving = false;
+              });
+          },
+
+          loadStats: function () {
+            var vm = this;
+
+            if (!vm.instance.instanceId) return;
+
+            vm.loadingStats = true;
+
+            axios.get(
+              '/eloqua/feeder/inbound/stats/' + vm.instance.instanceId,
+              { params: { installId: vm.instance.installId } }
+            )
+              .then(function (response) {
+                vm.stats = response.data.stats || { total: 0, today: 0, optouts: 0 };
+              })
+              .catch(function () {
+                vm.stats = { total: 0, today: 0, optouts: 0 };
+              })
+              .finally(function () {
+                vm.loadingStats = false;
+              });
+          },
+
+          loadCdoDetails: function () {
+            var vm = this;
+
+            if (!this.hasCdoConfig) return;
+
+            var cdoId = this.consumer.actions.incomingsms.custom_object_id;
+            var actions = this.consumer.actions.incomingsms;
+
+            vm.cdoConfig = {
+              name:           'Loading...',
+              mobile_field:   actions.mobile_field   || null,
+              email_field:    actions.email_field    || null,
+              response_field: actions.response_field || null,
+              vn_field:       actions.vn_field       || null,
+              title_field:    actions.title_field    || null
+            };
+
+            axios.get(
+              '/eloqua/action/ajax/customobject/' +
+              vm.consumer.installId + '/' +
+              vm.consumer.SiteId + '/' +
+              cdoId
+            )
+              .then(function (response) {
+                vm.cdoConfig.name = response.data.name || 'Custom Object';
+              })
+              .catch(function () {
+                vm.cdoConfig.name = 'Custom Object (ID: ' + cdoId + ')';
+              });
+          },
+
+          showMessage: function (type, message) {
+            this.status = {};
+            this.status[type] = message;
+            this.fade = true;
+            var vm = this;
+            setTimeout(function () {
+              vm.fade = false;
+              setTimeout(function () { vm.status = {}; }, 500);
+            }, 4000);
+          }
+        },
+
+        mounted: function () {
+          this.loadCdoDetails();
+          this.loadStats();
         }
       });
     </script>
-  </div>
-
-  <div id="customdialog" title="Custom Object Fields">
-      <div>
-          <ul id="custom-merge-fields-list" style="overflow:scroll; height:300px; margin-bottom: 0px; border-bottom: 1px solid #c5c5c5; list-style: none; padding: 0;"></ul>
-          <div style="width: 100%; padding: 5px;">
-             <input type="text" id="custom-field-search" placeholder="Search" style="width: 100%; padding: 5px;">
-          </div>
-      </div>
-  </div>
-
   </body>
 </html>
