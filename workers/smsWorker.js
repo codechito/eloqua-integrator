@@ -6,8 +6,8 @@ const Consumer = require('../models/Consumer');
 class SmsWorker {
     constructor() {
         this.isRunning = false;
-        this.pollInterval = 5000; // 5 seconds
-        this.batchSize = 10; // Process 10 at a time
+        this.pollInterval = 5000; // 5 seconds - only used when queue is empty
+        this.batchSize = 200; // Process 200 at a time
         this.executionBatches = new Map(); // Track executions
         
         // ✅ NEW: TPS rate limiting per consumer
@@ -112,16 +112,18 @@ class SmsWorker {
             try {
                 this.stats.lastPollAt = new Date();
                 await this.recoverStaleJobs();
-                await this.processPendingJobs();
+                const processed = await this.processPendingJobs();
+                // Only sleep when queue is empty — no dead time during active sends
+                if (processed === 0) {
+                    await this.sleep(this.pollInterval);
+                }
             } catch (error) {
                 logger.error('Error in worker poll cycle', {
                     error: error.message,
                     stack: error.stack
                 });
+                await this.sleep(this.pollInterval);
             }
-
-            // Wait before next poll
-            await this.sleep(this.pollInterval);
         }
     }
 
@@ -143,45 +145,62 @@ class SmsWorker {
 
     /**
      * Process pending SMS jobs
+     * Uses bulk claiming (3 DB calls) instead of N sequential findOneAndUpdate calls.
+     * Returns the number of jobs processed so poll() knows whether to sleep.
      */
     async processPendingJobs() {
         try {
-            // Atomically claim jobs using findOneAndUpdate to prevent duplicate processing
-            // across multiple server instances (autoscaling). Each claim is a single atomic
-            // operation — only one instance can claim each job.
-            const jobs = [];
-            for (let i = 0; i < this.batchSize; i++) {
-                const job = await SmsJob.findOneAndUpdate(
-                    { status: 'pending', scheduledAt: { $lte: new Date() } },
-                    { $set: { status: 'processing', processingStartedAt: new Date() } },
-                    { new: true, sort: { scheduledAt: 1 } }
-                );
-                if (!job) break;
-                jobs.push(job);
-            }
+            // Step 1: Find candidate IDs (fast indexed read, no lock)
+            const candidates = await SmsJob.find(
+                { status: 'pending', scheduledAt: { $lte: new Date() } },
+                '_id',
+                { sort: { scheduledAt: 1 }, limit: this.batchSize }
+            ).lean();
 
-            if (jobs.length === 0) {
+            if (candidates.length === 0) {
                 logger.debug('No pending SMS jobs found');
                 this.stats.currentBatchSize = 0;
-                return;
+                return 0;
+            }
+
+            const ids = candidates.map(c => c._id);
+
+            // Step 2: Bulk claim — use a unique timestamp as a claim token so each
+            // server instance only processes jobs it actually claimed
+            const claimToken = new Date();
+            await SmsJob.updateMany(
+                { _id: { $in: ids }, status: 'pending' },
+                { $set: { status: 'processing', processingStartedAt: claimToken } }
+            );
+
+            // Step 3: Fetch only the jobs this instance successfully claimed
+            const jobs = await SmsJob.find({
+                _id: { $in: ids },
+                processingStartedAt: claimToken
+            });
+
+            if (jobs.length === 0) {
+                this.stats.currentBatchSize = 0;
+                return 0;
             }
 
             this.stats.currentBatchSize = jobs.length;
-            logger.info('Found pending SMS jobs', { count: jobs.length });
+            logger.info('Claimed pending SMS jobs', { count: jobs.length });
 
-            // Group jobs by execution
+            // Group jobs by execution and process each group
             const executionGroups = this.groupJobsByExecution(jobs);
-
-            // Process each group
             for (const [executionKey, executionJobs] of executionGroups.entries()) {
                 await this.processExecutionBatch(executionKey, executionJobs);
             }
+
+            return jobs.length;
 
         } catch (error) {
             logger.error('Error processing pending jobs', {
                 error: error.message,
                 stack: error.stack
             });
+            return 0;
         }
     }
 
@@ -205,53 +224,49 @@ class SmsWorker {
     }
 
     /**
-     * Process a batch of jobs from same execution
-     * ENHANCED: TPS rate limiting per consumer
+     * Process a batch of jobs from same execution.
+     * Sends jobs concurrently in chunks of tpsLimit per second, respecting
+     * the per-consumer TransmitSMS TPS governor (10–50+ TPS depending on account).
      */
     async processExecutionBatch(executionKey, jobs) {
-        logger.info('Processing execution batch with TPS rate limiting', {
-            executionKey,
-            jobCount: jobs.length
-        });
-
-        const results = {
-            complete: [],
-            errored: []
-        };
-
-        // ✅ Get consumer for TPS limit
+        // Resolve TPS limit for this consumer
         const firstJob = jobs[0];
-        let tpsLimit = 10; // Default
-        
+        let tpsLimit = 10; // Default / minimum
+
         try {
             const consumer = await Consumer.findOne({ installId: firstJob.installId })
                 .select('tps_limit');
-            
             tpsLimit = consumer?.tps_limit || 10;
-            
-            logger.debug('TPS configuration loaded', {
-                installId: firstJob.installId,
-                tpsLimit,
-                delayBetweenSends: `${(1000 / tpsLimit).toFixed(2)}ms`
-            });
         } catch (error) {
-            logger.warn('Could not load TPS config, using default', {
+            logger.warn('Could not load TPS config, using default 10', {
                 installId: firstJob.installId,
                 error: error.message
             });
         }
 
-        // ✅ Process jobs with TPS rate limiting
-        for (const job of jobs) {
-            try {
-                // ✅ Apply TPS rate limiting BEFORE processing
-                await this.applyTpsRateLimit(job.installId, tpsLimit);
+        logger.info('Processing execution batch', {
+            executionKey,
+            jobCount: jobs.length,
+            tpsLimit,
+            estimatedSeconds: Math.ceil(jobs.length / tpsLimit)
+        });
 
-                const result = await this.processJob(job);
-                
-                // Update stats
+        const results = { complete: [], errored: [] };
+
+        // Process in parallel chunks of tpsLimit.
+        // Each chunk fires all jobs concurrently, then waits for the remainder
+        // of 1 second before the next chunk — this saturates the TPS allowance
+        // without exceeding it.
+        for (let i = 0; i < jobs.length; i += tpsLimit) {
+            const chunk = jobs.slice(i, i + tpsLimit);
+            const chunkStart = Date.now();
+
+            const chunkResults = await Promise.all(chunk.map(job => this.processJob(job)));
+
+            chunkResults.forEach((result, idx) => {
+                const job = chunk[idx];
                 this.stats.totalProcessed++;
-                
+
                 if (result.success) {
                     this.stats.totalSuccess++;
                     results.complete.push({
@@ -279,42 +294,20 @@ class SmsWorker {
                         sync_status: 'errored',
                         delivery: 'errored'
                     });
-                    
-                    logger.debug('Added failed job to errored results', {
-                        jobId: job.jobId,
-                        contactId: job.contactId,
-                        error: result.error,
-                        errorCode: result.errorCode
-                    });
                 }
+            });
 
-            } catch (error) {
-                logger.error('Error processing job', {
-                    jobId: job.jobId,
-                    error: error.message,
-                    stack: error.stack
-                });
-
-                this.stats.totalProcessed++;
-                this.stats.totalFailed++;
-
-                results.errored.push({
-                    contactId: job.contactId,
-                    emailAddress: job.emailAddress,
-                    phone: job.mobileNumber,
-                    error: error.message,
-                    errorCode: 'PROCESSING_ERROR',
-                    ...(job.eloquaRecordId ? { Id: job.eloquaRecordId } : {}),
-                    sync_status: 'errored',
-                    delivery: 'errored'
-                });
+            // Throttle: hold the 1-second window before sending the next chunk
+            if (i + tpsLimit < jobs.length) {
+                const elapsed = Date.now() - chunkStart;
+                if (elapsed < 1000) {
+                    await this.sleep(1000 - elapsed);
+                }
             }
         }
 
-        // Track this execution
+        // Track and check completion
         this.trackExecution(executionKey, jobs[0], results);
-
-        // Check if execution is complete and sync to Eloqua
         await this.checkAndCompleteExecution(executionKey, jobs[0]);
     }
 
@@ -408,31 +401,30 @@ class SmsWorker {
                         duration: Date.now() - execution.startedAt.getTime()
                     });
 
-                    try {
-                        await ActionController.completeActionExecution(
-                            execution.installId,
-                            execution.instanceId,
-                            execution.executionId,
-                            {
-                                complete: execution.complete,
-                                errored: execution.errored
-                            }
-                        );
-
+                    // Fire Eloqua sync in the background — don't block the worker
+                    // so SMS sending continues immediately for the next batch.
+                    ActionController.completeActionExecution(
+                        execution.installId,
+                        execution.instanceId,
+                        execution.executionId,
+                        {
+                            complete: execution.complete,
+                            errored: execution.errored
+                        }
+                    ).then(() => {
                         logger.info('Execution synced and completed successfully', {
                             executionKey,
                             totalProcessed: execution.totalProcessed
                         });
-                    } catch (syncError) {
+                    }).catch(syncError => {
                         logger.error('Failed to sync execution to Eloqua', {
                             executionKey,
                             error: syncError.message,
                             stack: syncError.stack
                         });
-                        return;
-                    }
+                    });
 
-                    // Clean up tracking only if sync was successful
+                    // Clean up tracking immediately — sync runs in background
                     this.executionBatches.delete(executionKey);
                 }
             } else {
