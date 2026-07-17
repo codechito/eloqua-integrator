@@ -984,6 +984,23 @@ class ActionController {
                 sampleMessage: enrichedItems[0]?.message
             });
 
+            // If Eloqua sent 0 items and there are no more pages, complete the execution
+            // immediately so contacts aren't stuck waiting for a callback we'll never send.
+            if (enrichedItems.length === 0 && !executionData.hasMore) {
+                logger.warn('Notify received with 0 items — completing execution immediately', {
+                    instanceId,
+                    executionId
+                });
+                slackNotify(`:warning: *Notify 0 items* — completing execution immediately to unblock contacts`, [
+                    { title: 'instance', value: instanceId },
+                    { title: 'executionId', value: executionId }
+                ]).catch(() => {});
+                await ActionController.completeActionExecution(installId, instanceId, executionId, { complete: [], errored: [] });
+                instance.lastExecutedAt = new Date();
+                await instance.save();
+                return;
+            }
+
             // Post mobile numbers to Slack now that we know the recipient field
             const recipientFieldName = instance.recipient_field?.split('__').pop();
             const firstMobiles = enrichedItems.slice(0, 10)
