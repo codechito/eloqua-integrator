@@ -9,6 +9,7 @@ const {
     replaceMergeFields,
     extractMergeFields
 } = require('../utils');
+const { slackNotify } = require('../utils/slack');
 const { asyncHandler } = require('../middleware');
 
 class ActionController {
@@ -769,14 +770,24 @@ class ActionController {
         
         const executionData = req.body;
 
+        const recordCount = executionData.items?.length || 0;
+
         logger.info('Action notify received', {
             instanceId,
             installId,
             assetId,
             executionId,
-            recordCount: executionData.items?.length || 0,
-            hasMore: executionData.hasMore
+            recordCount,
+            hasMore: executionData.hasMore,
+            rawBody: JSON.stringify(executionData)
         });
+
+        // Post notify receipt to Slack — mobile numbers posted after instance loads in processNotifyAsync
+        slackNotify(`*Notify received* — instance: \`${instanceId}\` | executionId: ${executionId} | contacts: ${recordCount}`, [
+            { title: 'installId', value: installId },
+            { title: 'assetId', value: assetId },
+            { title: 'hasMore', value: String(executionData.hasMore) }
+        ]).catch(() => {});
 
         if (executionData.items?.length > 0) {
             logger.info('Action notify contacts received', {
@@ -973,6 +984,15 @@ class ActionController {
                 sampleMessage: enrichedItems[0]?.message
             });
 
+            // Post mobile numbers to Slack now that we know the recipient field
+            const recipientFieldName = instance.recipient_field?.split('__').pop();
+            const firstMobiles = enrichedItems.slice(0, 10)
+                .map(item => item[recipientFieldName] || '(empty)')
+                .join('\n');
+            slackNotify(`*Notify mobiles* — instance: \`${instanceId}\` | executionId: ${executionId} | total: ${enrichedItems.length}`, [
+                { title: `First ${Math.min(enrichedItems.length, 10)} mobiles (field: ${recipientFieldName})`, value: firstMobiles || '(no items)' }
+            ]).catch(() => {});
+
             // Log all contacts with accurate mobile numbers using the configured recipient field
             const recipientField = instance.recipient_field?.split('__').pop();
             logger.info('Action notify contacts with mobile', {
@@ -1063,6 +1083,9 @@ class ActionController {
                 error: error.message,
                 stack: error.stack
             });
+            slackNotify(`:red_circle: *Notify processing error* — instance: \`${instanceId}\` | executionId: ${executionId}`, [
+                { title: 'Error', value: error.message }
+            ]).catch(() => {});
         }
     }
 
