@@ -3,34 +3,34 @@ const router = express.Router();
 const { WebhookController } = require('../controllers');
 const { verifyWebhookSignature } = require('../middleware');
 
-// Webhook endpoints
-router.post('/dlr',
+// Webhook endpoints - TransmitSMS sends callbacks as GET requests
+router.get('/dlr',
     verifyWebhookSignature,
     WebhookController.handleDeliveryReport
 );
 
-router.post('/reply',
+router.get('/reply',
     verifyWebhookSignature,
     WebhookController.handleSmsReply
 );
 
-router.post('/linkhit',
+router.get('/linkhit',
     verifyWebhookSignature,
     WebhookController.handleLinkHit
 );
 
 // Alternative paths (for flexibility)
-router.post('/delivery',
+router.get('/delivery',
     verifyWebhookSignature,
     WebhookController.handleDeliveryReport
 );
 
-router.post('/sms-reply',
+router.get('/sms-reply',
     verifyWebhookSignature,
     WebhookController.handleSmsReply
 );
 
-router.post('/link-hit',
+router.get('/link-hit',
     verifyWebhookSignature,
     WebhookController.handleLinkHit
 );
