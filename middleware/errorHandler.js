@@ -1,4 +1,5 @@
 const { logger } = require('../utils');
+const { slackNotify } = require('../utils/slack');
 
 /**
  * Global error handler middleware
@@ -14,6 +15,16 @@ function errorHandler(err, req, res, next) {
         body: req.body,
         query: req.query
     });
+
+    // Alert Slack for notify endpoint failures
+    if (req.path.includes('/action/notify')) {
+        const instanceId = req.query.instanceId || '?';
+        const executionId = req.query.ExecutionId || '?';
+        slackNotify(`:red_circle: *Notify error* — instance: \`${instanceId}\` | executionId: ${executionId}`, [
+            { title: 'Error', value: err.message },
+            { title: 'Stack', value: (err.stack || '').split('\n').slice(0, 3).join('\n') }
+        ]).catch(() => {});
+    }
 
     // Mongoose validation error
     if (err.name === 'ValidationError') {
