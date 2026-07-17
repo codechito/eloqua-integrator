@@ -4,33 +4,33 @@ const { WebhookController } = require('../controllers');
 const { verifyWebhookSignature } = require('../middleware');
 
 // Webhook endpoints
-router.get('/dlr', 
+router.post('/dlr',
     verifyWebhookSignature,
     WebhookController.handleDeliveryReport
 );
 
-router.get('/reply', 
+router.post('/reply',
     verifyWebhookSignature,
     WebhookController.handleSmsReply
 );
 
-router.get('/linkhit', 
+router.post('/linkhit',
     verifyWebhookSignature,
     WebhookController.handleLinkHit
 );
 
 // Alternative paths (for flexibility)
-router.get('/delivery', 
+router.post('/delivery',
     verifyWebhookSignature,
     WebhookController.handleDeliveryReport
 );
 
-router.get('/sms-reply', 
+router.post('/sms-reply',
     verifyWebhookSignature,
     WebhookController.handleSmsReply
 );
 
-router.get('/link-hit', 
+router.post('/link-hit',
     verifyWebhookSignature,
     WebhookController.handleLinkHit
 );
