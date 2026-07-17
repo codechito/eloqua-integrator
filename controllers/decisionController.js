@@ -188,20 +188,10 @@ class DecisionController {
             });
         }
 
-        // Validate text_type
-        if (!instanceData.text_type) {
-            return res.status(400).json({
-                success: false,
-                message: 'Text type is required'
-            });
-        }
-
+        // Normalise text_type — default to 'Anything' if missing or unrecognised
         const validTextTypes = ['Anything', 'Keyword'];
-        if (!validTextTypes.includes(instanceData.text_type)) {
-            return res.status(400).json({
-                success: false,
-                message: `Invalid text_type. Must be one of: ${validTextTypes.join(', ')}`
-            });
+        if (!instanceData.text_type || !validTextTypes.includes(instanceData.text_type)) {
+            instanceData.text_type = 'Anything';
         }
 
         if (instanceData.text_type === 'Keyword' && (!instanceData.keyword || !instanceData.keyword.trim())) {
