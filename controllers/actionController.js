@@ -783,10 +783,13 @@ class ActionController {
         });
 
         // Post notify receipt to Slack — mobile numbers posted after instance loads in processNotifyAsync
+        const rawBodyStr = JSON.stringify(executionData);
+        const bodyPreview = rawBodyStr.length > 2000 ? rawBodyStr.slice(0, 2000) + '…' : rawBodyStr;
         slackNotify(`*Notify received* — instance: \`${instanceId}\` | executionId: ${executionId} | contacts: ${recordCount}`, [
             { title: 'installId', value: installId },
             { title: 'assetId', value: assetId },
-            { title: 'hasMore', value: String(executionData.hasMore) }
+            { title: 'hasMore', value: String(executionData.hasMore) },
+            { title: 'Raw body', value: '```' + bodyPreview + '```' }
         ]).catch(() => {});
 
         if (executionData.items?.length > 0) {
