@@ -86,44 +86,12 @@ if (process.env.NODE_ENV === 'development') {
     app.use(morgan('dev'));
 }
 
-// ADD: Raw body capture for notify endpoints (BEFORE body-parser)
-app.use((req, res, next) => {
-    if (req.path.includes('/notify')) {
-        let rawData = '';
-        
-        req.on('data', chunk => {
-            rawData += chunk.toString('utf8');
-        });
-        
-        req.on('end', () => {
-            req.rawBody = rawData;
-            
-            logger.debug('Raw body captured', {
-                path: req.path,
-                method: req.method,
-                contentType: req.headers['content-type'],
-                contentLength: req.headers['content-length'],
-                rawBodyLength: rawData.length,
-                rawBodyPreview: rawData.substring(0, 500),
-                rawBodyFull: rawData.length < 2000 ? rawData : rawData.substring(0, 2000) + '... (truncated)'
-            });
-        });
-    }
-    next();
-});
-
 // Body parsing middleware
-app.use(bodyParser.json({ 
+// verify callback runs before parsing — safe place to capture raw body without consuming the stream
+app.use(bodyParser.json({
     limit: '10mb',
-    verify: (req, res, buf, encoding) => {
-        if (req.path.includes('/notify')) {
-            logger.debug('Body parser JSON verify', {
-                path: req.path,
-                bufferLength: buf.length,
-                bufferPreview: buf.toString('utf8').substring(0, 500),
-                encoding
-            });
-        }
+    verify: (req, res, buf) => {
+        req.rawBody = buf.toString('utf8');
     }
 }));
 
