@@ -490,6 +490,10 @@ class ActionController {
             });
         } else {
             logger.info('Updating existing action instance', { instanceId });
+            // Normalize tracked_link before merge — prevent empty string from wiping a stored URL
+            if (typeof instanceData.tracked_link === 'string') {
+                instanceData.tracked_link = instanceData.tracked_link.trim() || undefined;
+            }
             Object.assign(instance, instanceData);
         }
 
@@ -501,6 +505,14 @@ class ActionController {
         instance.notification_field = undefined;
         instance.outgoing_field = undefined;
         instance.vn_field = undefined;
+
+        // Validate: message uses [tracked-link] placeholder but no URL is configured
+        if (instance.message?.includes('[tracked-link]') && !instance.tracked_link?.trim()) {
+            return res.status(400).json({
+                error: 'Configuration Error',
+                message: 'Your message contains [tracked-link] but no Tracked Link URL is configured. Please enter a URL or remove [tracked-link] from your message.'
+            });
+        }
 
         instance.configureAt = new Date();
         instance.requiresConfiguration = !ActionController.validateConfiguration(instance);
@@ -836,6 +848,18 @@ class ActionController {
             messageHasTrackedLink: instance.message?.includes('[tracked-link]')
         });
 
+        // Alert early if message has [tracked-link] but no URL stored — all jobs will fail in the worker
+        if (instance.message?.includes('[tracked-link]') && !instance.tracked_link?.trim()) {
+            logger.warn('Tracked link misconfiguration detected at enrich time', {
+                instanceId: instance.instanceId,
+                tracked_link: instance.tracked_link
+            });
+            slackNotify(`:red_circle: *Tracked link misconfiguration* — message has [tracked-link] but no URL is stored. All SMS jobs will fail.`, [
+                { title: 'instanceId', value: instance.instanceId || '(unknown)' },
+                { title: 'tracked_link value', value: String(instance.tracked_link) }
+            ]).catch(() => {});
+        }
+
         return items.map(item => {
             // Process message - replace merge fields
             // Supports [FieldName] and [FieldName|DD/MM/YYYY] for date formatting
@@ -871,15 +895,16 @@ class ActionController {
             // Process tracked link URL if exists
             // Also supports [FieldName|DateFormat] in tracked link URLs
             let processedTrackedLink = null;
-            if (instance.tracked_link) {
-                processedTrackedLink = instance.tracked_link;
+            const trimmedTrackedLink = instance.tracked_link?.trim() || null;
+            if (trimmedTrackedLink) {
+                processedTrackedLink = trimmedTrackedLink;
 
                 logger.debug('Processing tracked link', {
-                    originalUrl: instance.tracked_link,
-                    hasMergeFields: /\[([^\]]+)\]/.test(instance.tracked_link)
+                    originalUrl: trimmedTrackedLink,
+                    hasMergeFields: /\[([^\]]+)\]/.test(trimmedTrackedLink)
                 });
 
-                const linkMergeFields = instance.tracked_link.match(/\[([^\]]+)\]/g);
+                const linkMergeFields = trimmedTrackedLink.match(/\[([^\]]+)\]/g);
 
                 if (linkMergeFields) {
                     for (const field of linkMergeFields) {
@@ -889,7 +914,7 @@ class ActionController {
                         const dateFormat = pipeIdx === -1 ? null : inner.substring(pipeIdx + 1);
                         const rawValue = item[fieldName] || item[fieldName.replace('C_', '')] || '';
                         const fieldValue = ActionController.formatMergeValue(rawValue, dateFormat);
-                        processedTrackedLink = processedTrackedLink.replace(field, fieldValue);
+                        processedTrackedLink = processedTrackedLink.replace(field, encodeURIComponent(fieldValue));
 
                         logger.debug('Replaced merge field in tracked link', {
                             field: fieldName,
