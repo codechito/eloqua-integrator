@@ -34,6 +34,7 @@
     "test:token-refresh": "node test-token-refresh.js",
     "test:reauth": "node test-reauth-flow.js",
     "test:mock": "node test-eloqua-service-mock.js",
+    "test:errored-status": "node test-errored-status-sync.js",
     "test:atomic-workers": "node test-atomic-workers.js",
     "test:program-flow": "node test-program-flow.js",
     "logs": "tail -f logs/*.log"
