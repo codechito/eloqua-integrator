@@ -29,70 +29,118 @@ class ActionController {
             const eloquaService = new EloquaService(consumer.installId, consumer.SiteId);
             await eloquaService.initialize();
 
-            // Prepare contact data for both successful and errored messages
-            const allMessages = [
-                ...results.complete.map(msg => ({
-                    ...msg,
-                    sync_status: 'sent',
-                    delivery: 'sent'
-                })),
-                ...results.errored.map(msg => ({
-                    ...msg,
-                    sync_status: 'errored',
-                    delivery: 'errored'
-                }))
-            ];
+            // Two separate imports, because the errored/complete distinction is carried by
+            // the import's syncAction rather than by any field on the record. Sending both
+            // sets in one import meant the whole batch inherited a single status, and that
+            // status was "complete" - so a failed send was reported to Eloqua as success and
+            // flowed on through the campaign as if delivered. See EQ-15.
+            const batches = [
+                {
+                    type: 'complete',
+                    messages: results.complete.map(msg => ({
+                        ...msg,
+                        sync_status: 'sent',
+                        delivery: 'sent'
+                    }))
+                },
+                {
+                    type: 'errored',
+                    messages: results.errored.map(msg => ({
+                        ...msg,
+                        sync_status: 'errored',
+                        delivery: 'errored'
+                    }))
+                }
+            ].filter(batch => batch.messages.length > 0);
 
-            if (allMessages.length === 0) {
+            if (batches.length === 0) {
                 logger.warn('No messages to sync', { instanceId: instance.instanceId });
                 return;
             }
 
-            // Create bulk import definition
-            const importDef = await ActionController.createBulkImportDefinition(
-                eloquaService,
-                instance,
-                'complete'
-            );
-
-            logger.info('Bulk import definition created', {
-                uri: importDef.uri
-            });
-
-            // Upload contact data
-            await ActionController.uploadContactData(
-                eloquaService,
-                importDef.uri,
-                allMessages,
-                instance.program_coid || null
-            );
-
-            logger.info('Contact data uploaded', {
-                uri: importDef.uri,
-                count: allMessages.length
-            });
-
-            // Sync the import
-            const sync = await eloquaService.syncBulkImport(importDef.uri);
-
-            logger.info('Bulk import synced', {
-                syncUri: sync.uri,
-                status: sync.status
-            });
-
-            // Wait for sync to complete
-            await ActionController.waitForSyncCompletion(
-                eloquaService,
-                sync.uri
-            );
+            for (const batch of batches) {
+                await ActionController.syncBatchToEloqua(
+                    eloquaService,
+                    instance,
+                    batch.type,
+                    batch.messages
+                );
+            }
 
             logger.info('Sync completed successfully', {
-                instanceId: instance.instanceId
+                instanceId: instance.instanceId,
+                batches: batches.map(b => `${b.type}:${b.messages.length}`).join(' ')
             });
 
         } catch (error) {
             logger.error('Error syncing results to Eloqua', {
                 instanceId: instance.instanceId,
+                error: error.message,
+                stack: error.stack
+            });
+            throw error;
+        }
+    }
+
+    /**
+     * Define, upload, sync and await one batch of results.
+     *
+     * Extracted so the complete and errored batches run the identical sequence; the only
+     * difference between them is the status carried by the import's syncAction.
+     */
+    static async syncBatchToEloqua(eloquaService, instance, type, messages) {
+        try {
+
+            // Create bulk import definition — the type decides the syncAction status
+            const importDef = await ActionController.createBulkImportDefinition(
+                eloquaService,
+                instance,
+                type
+            );
+
+            logger.info('Bulk import definition created', {
+                uri: importDef.uri,
+                type
+            });
+
+            await ActionController.uploadContactData(
+                eloquaService,
+                importDef.uri,
+                messages,
+                instance.program_coid || null
+            );
+
+            logger.info('Contact data uploaded', {
+                uri: importDef.uri,
+                type,
+                count: messages.length
+            });
+
+            const sync = await eloquaService.syncBulkImport(importDef.uri);
+
+            logger.info('Bulk import synced', {
+                syncUri: sync.uri,
+                type,
+                status: sync.status
+            });
+
+            await ActionController.waitForSyncCompletion(
+                eloquaService,
+                sync.uri
+            );
+
+            logger.info('Batch synced to Eloqua', {
+                instanceId: instance.instanceId,
+                type,
+                count: messages.length
+            });
+
+        } catch (error) {
+            // Rethrown so one failing batch does not silently leave the other unreported.
+            logger.error('Error syncing batch to Eloqua', {
+                instanceId: instance.instanceId,
+                type,
+                count: messages.length,
                 error: error.message,
                 stack: error.stack
             });
@@ -126,12 +174,16 @@ class ActionController {
             isSyncTriggeredOnImport: false,
             dataRetentionDuration: 'P7D',
             isUpdatingMultipleMatchedRecords: false,
-            // CRITICAL: Add syncActions to mark action as complete
+            // Status follows the batch type. This used to be hardcoded to "complete", so
+            // every contact was reported to Eloqua as complete even when its send had
+            // failed - the campaign step showed success for messages that never arrived.
+            // syncQueuingErrorsToEloqua already got this right for validation errors; this
+            // brings post-queue send failures into line. See EQ-15.
             syncActions: [
                 {
                     destination: `{{ActionInstance(${instanceIdNoDashes})}}`,
                     action: "setStatus",
-                    status: "complete"
+                    status: type === 'errored' ? 'errored' : 'complete'
                 }
             ]
         };
